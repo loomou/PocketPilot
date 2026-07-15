@@ -1,0 +1,214 @@
+# PocketPilot — Mobile Claude Code Backend
+
+## Goal
+
+Provide a backend that lets a user control a Claude Code session running on their computer from a mobile client.
+
+## Confirmed Facts
+
+- The mobile frontend is already being developed and is outside the current scope.
+- The work in scope is the backend and the computer-side component it needs to control local Claude Code work.
+- Claude Code SDK should own SDK-supported responsibilities, rather than the backend reimplementing all Claude Code and terminal behavior.
+- This repository currently contains no application source code to extend.
+- The first release serves one user controlling their own single computer. The protocol may remain extensible to more devices later.
+- The computer-side component only needs to support Windows 11 in the first release.
+- Public connectivity is established and operated by the user through ngrok or Tailscale; this project does not build or host a public Relay service.
+- For the first release, the Agent is transport-neutral and serves a standard HTTP and WebSocket API without configuring TLS itself. Selecting, configuring, encrypting, and operating the connection path to the computer is entirely the user's responsibility.
+- The remote control listener defaults to `127.0.0.1` for ngrok-compatible local forwarding. The local configuration page lets the user select a loopback address, a specific network address, or all interfaces and configure its port; the change applies on the next manual Agent start, enabling Tailscale and other connection methods without Agent-specific integration.
+- The user manually configures the mobile-reachable Agent base URL in the local configuration page. Agent-generated pairing QR codes embed that URL and their short-lived pairing data; the Agent does not discover, validate, or manage the user's tunnel or Tailscale address.
+- The Agent uses device-bound authentication: a mobile device receives a rotating refresh credential only after QR-initiated pairing is approved locally on the computer, and uses short-lived access credentials for normal HTTP and WebSocket access.
+- The authentication design must avoid making a copied QR image a source of durable control authority, without forcing routine users through repeated short-lived setup codes.
+- Refresh credentials rotate on use and must be bound to a mobile device key; a detected reuse revokes the affected device session.
+- Access credentials expire after one hour. A device's rotating refresh credential expires after thirty consecutive days without use; an expired device must pair again.
+- Revoking a device or detecting refresh-credential reuse invalidates that device's already issued access credentials immediately and closes all of its active WebSocket connections.
+- The user may pair multiple mobile devices. Each device has its own bound key and credential chain; pairing a new device does not revoke existing devices, and the local configuration page can list and revoke each device independently.
+- A QR-initiated pairing is completed only after the user locally approves a pending device whose displayed name and six-digit verification code match the code shown on the mobile device.
+- Each generated QR code and its pending pairing request are single-use and expire after five minutes. Expiry affects only that unfinished pairing attempt and never an already paired device.
+- All paired devices belong to the same user and have equal control authority. The Agent serializes control operations for each task by arrival order, returns the current state for conflicting later operations, and records the initiating device in audit metadata.
+- Every state-changing mobile request carries a client-generated `operationId`. For twenty-four hours, the Agent deduplicates requests by device and `operationId`, returning the first result instead of executing a retry again.
+- Permission-mode selection is entirely user-controlled from the mobile frontend. The Agent must expose every mode supported by its installed Claude Agent SDK rather than applying a product-level mode allowlist.
+- A requested permission mode that the Agent's installed SDK does not support must be rejected explicitly, with no silent fallback to another mode.
+- Permission-mode changes are governed by the installed Claude Agent SDK. The Agent must forward a requested supported change whenever the SDK accepts it, including while a task is executing or awaiting approval, and report the SDK's resulting state or failure without adding an Agent-level idle-only restriction.
+- The Agent must run multiple independent Claude Code tasks concurrently. Switching the mobile view between tasks must not pause a task that is already running.
+- The Agent defaults to a maximum of three concurrent tasks. The user can change this capacity from a configuration page hosted by the computer-side Agent.
+- The computer-side configuration page is implemented after the core Agent, concurrent task runtime, session recovery, and API are complete.
+- The configuration page is available only from the computer itself through `localhost`; it must not be exposed through the remote control API, a user-operated tunnel, or Tailscale.
+- The configuration page is limited to local security and operational configuration: Agent status; the mobile-reachable base URL; QR pairing generation and approval; paired-device revocation; workspace roots; concurrent-task capacity; listener address and port; audit records; and master-key rotation/reset guidance. It does not control tasks, Claude API keys, or Claude configuration.
+- A new Agent installation starts with no authorized workspace roots. The local configuration page manages the explicit root-directory allowlist, and a task may use only an authorized root or one of its descendant directories.
+- The workspace-root allowlist limits only the task's initial working directory; it is not a filesystem sandbox. Before every new task, the Agent must disclose that a user-selected Claude Code permission mode may access paths outside that directory, and require explicit acceptance. Without that acceptance, it must not create the task.
+- When the configured concurrent-task capacity is reached, the Agent rejects a new task immediately rather than queuing it.
+- Concurrent tasks may use the same working directory. The Agent must not reserve, lock, or reject a working directory based on another task; users are responsible for coordinating any resulting file or Git conflicts.
+- Concurrent tasks are failure-isolated: stopping, cancelling, or encountering an SDK/runtime failure in one task must not stop or corrupt another active task.
+- Claude Code SDK owns the canonical conversation session and its history. The Agent must not create a second long-term copy of the model transcript; it stores only task metadata and the reference needed to reconnect to the SDK session.
+- While a task is executing a turn, the Agent keeps a task-scoped, transient ordered event buffer solely to replay model output and progress missed while the mobile user is viewing a different task. This buffer is not the canonical conversation history and is not used for restart recovery. It starts in memory and, after a small threshold, overflows into AES-256-GCM-encrypted rows in a temporary SQLite event table.
+- The transient event buffer retains all events for the current executing turn and is released as soon as the task enters idle or terminal state; remaining temporary event rows are also deleted on Agent startup. The mobile client retains its displayed message history; the Claude Code SDK remains the canonical source of conversation context.
+- Each executing task may use at most 256 MiB of replay storage. On reaching that limit, the task continues and connected clients still receive live events, but the Agent emits `EVENT_REPLAY_STORAGE_LIMIT_REACHED` and stops retaining additional replay events for that turn.
+- Claude credentials, configuration-file discovery, and configuration precedence are owned by the locally configured Claude Agent SDK. The Agent does not collect, transmit, parse, or persist API keys.
+- The locally configured SDK determines the models available to the Agent. The Agent reports those resolved choices to the mobile client, which lets the user select one for each task.
+- A task may change its selected model only after its current Claude Code conversation turn has completed and the task is waiting for the next user instruction. The new model applies to the next turn.
+- A model-change request made while a task is executing its current turn is rejected with `TASK_BUSY`; it is not queued for a later implicit change.
+- When a task is executing a turn, the mobile client must explicitly interrupt that turn and wait for the Agent's interrupted/idle state before sending a new instruction. Interruption ends only the current turn and keeps the task's Claude Code session available for the next instruction.
+- Interrupting a task that is awaiting a mobile approval response cancels that pending approval and ends the current turn; the task then enters idle with its session retained.
+- A user-initiated interruption or task close has the highest operation priority. A close request immediately cancels the current SDK work and any pending approval, then makes its task terminal and non-resumable; it is never delayed or rejected because the task is busy.
+- A task waiting for a mobile approval response waits indefinitely until the user approves, denies, or interrupts it; approval waiting does not time out automatically.
+- A task is a persistent Claude Code session: after a normal turn completes it becomes idle and accepts later instructions in the same session. An idle task does not consume a concurrent-task slot; only executing and awaiting-approval tasks count toward that limit. A task becomes terminal only when the user explicitly closes it or manually terminates the Agent.
+- Losing a mobile connection never pauses, interrupts, or cancels its tasks. An executing turn continues and supports event replay if the client reconnects before that turn enters idle; an approval request continues waiting for the user.
+- The computer-side Agent is implemented with TypeScript/Node.js and uses the TypeScript Claude Agent SDK.
+- The supported Agent runtime is Node.js 24 LTS.
+- The Agent serves its standard HTTP/WebSocket control API with Fastify and `@fastify/websocket`; the computer-side configuration page can later be added as a Fastify static resource bound only to `localhost`.
+- SQLite stores Agent settings, task metadata, SDK session references, device state, audit metadata, and only AES-256-GCM-encrypted transient event-overflow rows for a currently executing turn. Claude conversation history and API keys remain outside the Agent database.
+- The Agent uses `better-sqlite3` as its SQLite driver. Its native-module packaging is part of the Windows-first and later cross-platform release validation.
+- The Agent uses Drizzle ORM and Drizzle Kit for typed SQLite schema and migrations, while allowing targeted `better-sqlite3` transactions for cryptographic and event-journal operations.
+- Audit records contain only control and security metadata: timestamp, device ID, task ID where applicable, operation, and result. They exclude prompts, model output, tool parameters, and secrets; the Agent retains them for thirty days, automatically prunes older records, and exposes them only in the local configuration page.
+- Agent-managed device credentials stored in SQLite must use cross-platform at-rest encryption. The design must not depend on Windows DPAPI.
+- The user supplies a 32-byte `AGENT_MASTER_KEY` through the computer's environment. The Agent uses it with cross-platform AES-256-GCM encryption for sensitive Agent-managed SQLite fields and refuses to start without it.
+- The first release includes an explicit local `rekey` command that runs only while the Agent is stopped and atomically re-encrypts sensitive Agent database fields using a supplied old and new master key. If the old key is lost, the user must explicitly reset Agent-managed data; this removes device state and task metadata but never Claude Code credentials or its session files.
+- The user manually starts and terminates the Agent as their logged-in Windows user. The first release must not register automatic login startup or a Windows Service.
+- The first release exposes manual process control only through local command-line commands: `agent start` starts the Agent, and `Ctrl+C` in its terminal or `agent stop` terminates it. The configuration page does not control the Agent process.
+- After an unexpected Agent-process or computer restart, tasks that were executing or awaiting approval are marked interrupted. The Agent restores their task-to-SDK-session mapping, but only resumes SDK execution after an explicit user action. Tasks that were idle restore as idle and may accept the next instruction directly, without automatically running anything.
+- Resuming an interrupted task reconnects its saved Claude Code session and changes it to idle; it does not automatically replay or retry the instruction that was active when the Agent stopped. The user must send a new explicit instruction to continue.
+- When the logged-in user manually terminates the Agent, it must cancel every active task runtime and every pending approval before exiting, and mark every non-terminal task session (including idle sessions) terminal and non-resumable. No Claude Code work may continue in the background after the Agent has exited.
+
+## Requirements
+
+- The backend must support a remote mobile client sending work requests to a Claude Code session running on a user's computer.
+- The first release must not require shared-device or multi-user collaboration semantics.
+- The computer-side component must install, run, and enforce its local policy on Windows 11.
+- It must provide a stream of normalized task, assistant-message, tool, approval, error, and completion events that a mobile frontend can consume.
+- It must allow the user to respond to approval requests and to send follow-up instructions or stop a task.
+- It must expose a local, authenticated control service that works through a user-operated ngrok tunnel or Tailscale connection, without requiring this project to host a public Relay service.
+- It must not create, configure, or manage ngrok, Tailscale, or any other tunnel or Relay service.
+- It must default its remote control listener to `127.0.0.1`, and allow the user to configure the listener address and port locally for a specific network interface or all interfaces; changed listener settings take effect when the user next manually starts the Agent.
+- It must let the user configure a mobile-reachable Agent base URL locally and embed that URL in newly generated pairing QR codes; it must not discover, validate, or manage that URL's tunnel or connectivity.
+- It must require a one-hour access credential for ordinary HTTP requests and WebSocket handshakes, and require a bound-device proof when a refresh credential is exchanged. A refresh credential expires after thirty consecutive days without use.
+- It must check the device-session state for access-token use, and immediately invalidate the affected device's access tokens and close its WebSocket connections when the device is revoked or its refresh credential is reused.
+- QR-based pairing must not put durable credentials in the QR payload; the computer must approve the initial device pairing locally before granting credentials.
+- It must display the pending device name and a six-digit verification code in both pairing clients, and issue the device refresh credential only after the user has locally approved the matching code.
+- It must expire and invalidate each unused QR pairing request after five minutes and after its first use, without revoking any existing device session.
+- It must support multiple independently paired devices and let the user view and revoke each device session from the local configuration page without affecting other devices.
+- It must allow every paired device to issue task instructions, approvals, interrupts, and closes. It must serialize each task's control operations by arrival order, return the current task state for a later conflicting operation, and audit the initiating device.
+- It must require a client-generated `operationId` for every state-changing mobile request, including task creation, instruction submission, approval, interrupt, close, model change, and permission-mode change. For twenty-four hours it must deduplicate by device and `operationId` and return the original result for a retry without re-executing the operation.
+- It must report the Claude Agent SDK permission modes available in the installed Agent version and accept the user's supported mode selection for each task without applying a product-level mode allowlist.
+- It must reject a task whose requested permission mode is unsupported by the installed SDK and return the Agent's capability list.
+- It must forward a supported permission-mode change to the installed SDK whenever the SDK allows it, including during execution or approval waiting, and return the SDK-reported result without an additional Agent-level `TASK_BUSY` restriction.
+- It must maintain an independent task-to-Claude-Code-session mapping, working directory, permission mode, lifecycle state, and live event stream for every concurrent task.
+- It must keep a task's Claude Code session available when its turn completes normally, mark it idle, and allow a later instruction in that same session without consuming a concurrent-task slot while it remains idle.
+- It must provide an explicit task-close operation with highest priority: regardless of whether the task is executing, awaiting approval, or idle, it immediately cancels current SDK work and any pending approval, makes the task terminal and non-resumable, and releases Agent-managed transient resources.
+- It must let a mobile client subscribe to a task with an executing turn using its last event cursor, replay the missed task-scoped transient events in order, and then continue the live stream without pausing that task.
+- It must retain the complete transient event buffer for every executing turn and release that buffer when the task enters idle or terminal state. It must begin buffering in memory and spill overflow events into encrypted temporary SQLite rows, deleting those rows on task cleanup and Agent startup.
+- It must cap replay storage at 256 MiB per executing task. At the cap it must emit `EVENT_REPLAY_STORAGE_LIMIT_REACHED`, preserve the task and live event delivery, and stop retaining later events for replay rather than exhausting Agent storage.
+- It must keep a task executing or awaiting approval when its mobile WebSocket disconnects; if the task is still executing when a client reconnects, it must replay missed buffered events from the supplied cursor.
+- It must invoke the locally configured Claude Agent SDK without implementing a parallel API-key or Claude-configuration resolver, so SDK configuration precedence remains authoritative.
+- It must expose SDK-resolved model choices through its capability API and accept a user's supported model selection when a task is created, without maintaining an independent model catalog.
+- It must allow a supported model change only while a task is between Claude Code conversation turns, and apply that selection to the task's next turn rather than altering a running turn.
+- It must reject an in-turn model-change request with `TASK_BUSY` rather than queuing it.
+- It must reject a new instruction while a task is executing a turn with `TASK_BUSY`; after an explicit interrupt has completed and the task is idle, it must accept the next instruction in the same Claude Code session.
+- It must cancel a pending mobile approval when its task is interrupted, prevent that stale approval from executing, and report the task as idle after the current turn ends.
+- It must keep a task in its awaiting-approval state without an automatic timeout until the user approves, denies, or interrupts it.
+- It must run the local HTTP/WebSocket control API and Claude Agent SDK task runtimes under the TypeScript/Node.js Agent process.
+- It must target Node.js 24 LTS for the supported Agent runtime.
+- It must implement the local HTTP REST API and standard WebSocket event/control endpoint with Fastify and `@fastify/websocket`.
+- It must use SQLite for local Agent settings, task metadata, SDK session references, device state, audit metadata, and encrypted temporary event-overflow rows for currently executing turns, without storing Claude conversation transcripts or API keys.
+- It must use `better-sqlite3` for SQLite access and validate its native-module packaging for the supported Windows 11 release.
+- It must use Drizzle ORM and Drizzle Kit for typed SQLite schema and migrations, while retaining direct `better-sqlite3` transactions where required for cryptographic and event-journal operations.
+- It must encrypt sensitive Agent-managed device credentials at rest through a cross-platform secret-encryption abstraction rather than Windows DPAPI.
+- It must read a user-provided 32-byte `AGENT_MASTER_KEY` from the local environment, use it for AES-256-GCM encryption of sensitive Agent-managed SQLite fields, and fail closed when that key is missing or invalid.
+- It must provide a local `rekey` command that can run only while the Agent is stopped, requires an old and a new valid 32-byte master key, and atomically re-encrypts sensitive Agent database fields. It must require explicit confirmation before resetting Agent-managed data when the old key is unavailable.
+- It must run only when manually started by the logged-in Windows user and must not install automatic startup or Windows Service registration in the first release.
+- It must provide local `agent start` and `agent stop` commands; `Ctrl+C` in the `agent start` terminal and `agent stop` must both invoke the coordinated shutdown path. The configuration page must not start or stop the process.
+- An Agent restart or a mobile connection loss must not silently conflate independent tasks; technical selection must validate SDK session-resume and session-history access behavior.
+- It must return a clear capacity-reached response when a new task would exceed the configured concurrent-task limit, without creating a queued task.
+- It must count only executing and awaiting-approval tasks against the configured concurrent-task limit; idle persistent sessions do not consume that limit.
+- It must permit concurrent tasks to select the same authorized working directory without adding workspace-level scheduling or locking.
+- It must deny a task whose requested working directory is not an explicitly authorized root directory or a descendant of one. The authorized roots are managed only through the local configuration page and initially empty.
+- It must treat the authorized workspace-root allowlist as an initial-working-directory selector, not a file-access sandbox. Before creating every task, it must require an explicit acknowledgement that the user-selected Claude Code permission mode may access paths outside the selected directory; without it, it must return `WORKSPACE_SCOPE_RISK_NOT_ACCEPTED` and create no task.
+- It must run every task with independent SDK runtime lifecycle, cancellation control, and event stream so a task-level failure affects only that task.
+- It must persist the task metadata and SDK session reference needed after an Agent restart: a previously executing or awaiting-approval task restores as interrupted and requires explicit user-initiated resume without automatically re-executing work; a previously idle task restores as idle and accepts its next instruction directly.
+- It must implement explicit interrupted-task resume by reconnecting the saved SDK session and marking the task idle, without replaying or retrying the previously interrupted instruction; only a subsequent user instruction may start a new turn.
+- It must perform a coordinated shutdown when the user manually terminates the Agent: cancel all active SDK runtimes and pending approvals, mark every non-terminal task session terminal and non-resumable, and wait for termination handling before the process exits.
+- The computer-side Agent must host a `localhost`-only configuration page for Agent status, the mobile-reachable base URL, QR pairing generation and approval, paired-device revocation, workspace roots, concurrent-task capacity, listener address and port, audit records, and master-key rotation/reset guidance. It must not be reachable through the remote control listener and must not provide task controls, Claude API-key handling, or Claude-configuration editing.
+- It must limit task initial working-directory selection to explicitly authorized workspace roots and preserve an auditable record of task control, user acknowledgements, and approvals; it must not claim filesystem sandboxing.
+- It must retain audit records for thirty days and automatically prune older records. The audit record must contain only timestamp, device ID, task ID where applicable, operation, and result, and must never contain prompts, model output, tool parameters, or secrets.
+- It must expose audit records only through the `localhost` configuration page.
+- The technical selection must validate the available Claude Code SDK features before committing to the execution and event model.
+
+## Acceptance Criteria
+
+- [ ] A documented technical selection explains the chosen Claude Code SDK integration, computer-side runtime, user-operated connectivity boundary, persistence, and authentication approach with their trade-offs.
+- [ ] The planned interface covers task start, streaming progress, follow-up instruction, approval response, stop, reconnection, and task completion.
+- [ ] The planned security model covers device pairing or authentication, authorization, task-start directory boundaries and their non-sandbox limitation, approval handling, and audit events.
+- [ ] The plan explicitly excludes implementation of the mobile frontend.
+- [ ] The planned authorization model enforces one user's ownership of their single enrolled computer for the first release.
+- [ ] The computer-side design, packaging, and validation scope target Windows 11 only.
+- [ ] The plan documents the local service's trust boundary and its compatibility with the selected user-operated connectivity option.
+- [ ] Audit records capture only timestamp, device ID, task ID where applicable, operation, and result; they exclude prompts, model output, tool parameters, and secrets, are retained for thirty days, and are available only through the local configuration page.
+- [ ] The first-release Agent API is defined solely in standard HTTP and WebSocket terms, without Agent-managed TLS or a dependency on a particular tunnel or Relay vendor.
+- [ ] A new Agent starts its remote listener on `127.0.0.1`; the user can locally configure a port and non-loopback or all-interface listener for Tailscale or another tool, and the new setting applies after the Agent is manually restarted.
+- [ ] The user can locally enter a mobile-reachable Agent base URL, and newly generated pairing QR codes contain that URL without the Agent discovering, validating, or operating the underlying connection path.
+- [ ] A user can pair a mobile client by scanning an Agent-generated QR code and approving the device on the computer; the QR payload contains no durable credential.
+- [ ] A new device receives no credential until the user locally approves a pending pairing whose device name and six-digit verification code match the mobile display.
+- [ ] A QR pairing request cannot be used twice or after five minutes, while existing paired devices remain authenticated.
+- [ ] Access credentials expire after one hour; refresh credentials rotate on use, expire after thirty days of device inactivity, and detected refresh-credential reuse revokes the affected device session.
+- [ ] Revoking a device or detecting refresh-credential reuse immediately rejects its previously issued access token and closes its existing WebSocket connection rather than waiting for the one-hour access-token expiry.
+- [ ] Pairing a second mobile device preserves the first device's session; the local configuration page lists both and can revoke either one independently.
+- [ ] Two paired devices can both control one task; conflicting controls are processed by arrival order, the later request receives the current state rather than applying twice, and the audit record identifies the initiating device.
+- [ ] Retrying a state-changing request with the same device and `operationId` within twenty-four hours returns its first result and does not create a second task, instruction, approval, interruption, close, or configuration change.
+- [ ] The Agent capability API returns the installed SDK version and its supported permission modes, and the task API records the user-selected supported mode without narrowing that list.
+- [ ] An unsupported requested permission mode returns `UNSUPPORTED_PERMISSION_MODE` and the supported-mode capability data; no task starts and no fallback is applied.
+- [ ] A supported permission-mode change is passed to the SDK even during execution or approval waiting; the Agent reports the SDK's resulting mode or failure and does not impose an idle-only restriction.
+- [ ] With tasks A and B executing, switching the mobile view from A to B does not pause A; switching back to A with its last event cursor replays A's missed progress and model-output events in order before resuming A's live stream.
+- [ ] The complete transient event buffer remains available while a turn is executing and is released when its task enters idle or terminal state; after a small in-memory threshold, overflow is encrypted in temporary SQLite rows which are deleted on task cleanup and Agent startup. It is not used as a cross-restart transcript store.
+- [ ] A task whose replay buffer reaches 256 MiB continues running and delivering live events, emits `EVENT_REPLAY_STORAGE_LIMIT_REACHED`, and stops retaining later events for replay without exhausting Agent storage.
+- [ ] Disconnecting the mobile client does not pause or cancel its executing task or pending approval; reconnecting during that executing turn replays missed buffered events from its cursor.
+- [ ] The Agent does not expose API-key entry, storage, or transmission; a task uses credentials and configuration resolved by the local Claude Agent SDK.
+- [ ] The capability API returns SDK-resolved model choices, and a new task records and uses the model selected by the mobile user from that response.
+- [ ] A user can change a task's model after its current turn completes; the current turn retains its original model and the next turn uses the newly selected supported model.
+- [ ] An in-turn model-change request returns `TASK_BUSY` and does not alter the running turn or create a pending change.
+- [ ] A new instruction sent during a running turn returns `TASK_BUSY`; after the client interrupts that turn and receives the idle state, the next instruction starts a new turn in the same task session.
+- [ ] After a normal turn completes, the task is idle and a later instruction runs in the same Claude Code session; that idle task does not count toward the concurrent-task limit.
+- [ ] An idle task remains reusable until the user explicitly closes it or manually terminates the Agent. Closing any task state immediately cancels its current work and pending approval, releases Agent-managed transient resources, and prevents further instructions in that task.
+- [ ] Interrupting a task with a pending approval cancels the approval; a later approval response is rejected and the task becomes idle without executing that tool call.
+- [ ] A pending approval remains actionable until the user approves, denies, or interrupts it, even after an extended wait; no automatic timeout occurs.
+- [ ] The technical design specifies a TypeScript/Node.js Agent with the TypeScript Claude Agent SDK as its execution integration.
+- [ ] The technical design targets Node.js 24 LTS.
+- [ ] The technical design specifies Fastify and `@fastify/websocket` for the Agent's HTTP and standard WebSocket service layer.
+- [ ] The technical design specifies SQLite for Agent metadata plus only encrypted temporary current-turn event-overflow rows, and explicitly excludes Claude transcripts and API keys from that database.
+- [ ] The technical design specifies `better-sqlite3` and validates its native-module packaging on Windows 11.
+- [ ] The technical design specifies Drizzle ORM and Drizzle Kit for typed SQLite schema and migrations.
+- [ ] The technical design defines cross-platform at-rest encryption for sensitive Agent-managed device credentials and contains no Windows-DPAPI dependency.
+- [ ] The Agent starts only with a valid user-provided `AGENT_MASTER_KEY` and uses it to encrypt sensitive Agent-managed SQLite fields with AES-256-GCM.
+- [ ] With the Agent stopped and the current key available, the local `rekey` command atomically migrates encrypted Agent database fields to a new key. Without the old key, only an explicit Agent-data reset is available; it invalidates device state and task metadata without deleting Claude Code credentials or session files.
+- [ ] Installing the first release creates no Windows Service and no login-startup entry; the user starts and stops the Agent manually under their own Windows account.
+- [ ] The user can start the Agent with local `agent start`, and terminate it through `Ctrl+C` in that terminal or local `agent stop`; neither action requires or is available through the configuration page.
+- [ ] A new Agent installation starts with a three-task concurrency capacity, and the user can view and update that capacity from the Agent configuration page.
+- [ ] The configuration page is reachable from the Agent computer through `localhost` and cannot be reached through the Agent's remote HTTP/WebSocket control endpoint.
+- [ ] The configuration page provides only the specified security and operational settings; it has no task-control UI, Claude API-key UI, or Claude-configuration editing UI.
+- [ ] When the configured number of executing or awaiting-approval tasks is reached, a new task receives `CONCURRENT_TASK_LIMIT_REACHED` and no queued task is created; idle sessions do not count against the limit.
+- [ ] Two active tasks can be created with the same authorized working directory; the Agent reports their independent task identities and does not add a workspace lock or conflict scheduler.
+- [ ] A new installation rejects a task until the user adds an authorized workspace root locally; it accepts a task targeting that root or its descendant and rejects every path outside those roots. It treats that root as the task's starting directory rather than a filesystem sandbox, and rejects task creation with `WORKSPACE_SCOPE_RISK_NOT_ACCEPTED` until the user explicitly accepts the corresponding risk for that task.
+- [ ] Stopping or forcing an SDK failure in task A leaves task B active and able to stream output, accept input, and complete normally.
+- [ ] After an Agent restart, a previously executing or awaiting-approval task restores as interrupted through its saved SDK-session reference and performs no SDK work until the user explicitly resumes it; a previously idle task restores as idle and accepts its next instruction directly.
+- [ ] Resuming an interrupted task reconnects its saved SDK session and returns it to idle without replaying its interrupted instruction; a new turn begins only after the user sends a new instruction.
+- [ ] When the user manually terminates the Agent, every active task, idle task session, and pending approval is terminated; every affected task is non-resumable, and no Claude Code process continues after Agent exit.
+
+## Out of Scope
+
+- Building or changing the mobile frontend.
+- The computer-side Agent configuration page is in scope; it is distinct from the mobile frontend.
+- Exposing the computer-side configuration page remotely, including through a user-operated tunnel or Tailscale.
+- Multi-user collaboration and shared-computer access in the first release.
+- macOS and Linux support in the first release.
+- Building or operating a public Relay service, including its account, tunnel, or network infrastructure.
+- Selecting, configuring, or operating the user's connectivity tools.
+- TLS certificate provisioning and TLS termination within the Agent; users who need transport encryption provide it through their selected connection path.
+- Automatically discovering or validating ngrok, Tailscale, or any other mobile-reachable connection address.
+- Managing or transporting Claude API keys or reimplementing Claude configuration-file precedence.
+- Automatic Agent startup and Windows Service installation in the first release.
+- Beginning production implementation before the planning artifacts and technical-selection research are approved.
+
+## Notes
+
+- This is a complex task. It will require `design.md` and `implement.md` before the task can start implementation.
+- Current Claude Agent SDK documentation states that tool approval is evaluated through hooks, deny rules, ask rules, the selected permission mode, allow rules, and finally the `canUseTool` callback. A tool approved before the callback does not produce a mobile approval request; a `PreToolUse` hook can still deny it.
+- Event replay for mobile task switching is separate from Claude Code session persistence and Agent restart recovery. It uses only a transient task-scoped event buffer while that task is executing a turn; the buffer is released on idle.
+- SDK validation against `@anthropic-ai/claude-agent-sdk` 0.3.210: `query()` accepts an `AsyncIterable<SDKUserMessage>` for multi-turn streaming input; `Query.streamInput()` supplies later messages, and `Query` exposes `interrupt()`, `setPermissionMode()`, `setModel()`, `supportedModels()`, and `initializationResult()`. `Options.resume` reloads a session by its session ID. `canUseTool` may wait indefinitely for a mobile decision and receives an abort signal. The current SDK type declares six permission-mode values (`default`, `acceptEdits`, `bypassPermissions`, `plan`, `dontAsk`, and `auto`), so the mobile API must consume Agent-reported installed-SDK capabilities rather than hard-code a mode count.
