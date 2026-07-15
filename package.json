@@ -4,10 +4,10 @@
   "description": "A self-hosted Windows Agent for controlling local Claude Code sessions from mobile.",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@11.7.0",
+  "packageManager": "pnpm@10.14.0",
   "engines": {
     "node": ">=24.0.0 <25",
-    "pnpm": ">=11.7.0 <12"
+    "pnpm": ">=10.14.0 <11"
   },
   "bin": {
     "agent": "./dist/cli.js"

@@ -6,7 +6,7 @@ The mobile frontend and connectivity setup are intentionally outside this reposi
 
 ## Development
 
-Use Node.js 24 and pnpm 11.7 or later within the declared major version.
+Use Node.js 24 and pnpm 10.14 or later within the declared major version.
 
 ```powershell
 pnpm install
