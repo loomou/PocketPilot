@@ -1,0 +1,5 @@
+if command -v pnpm >/dev/null 2>&1; then
+  pnpm exec lint-staged
+else
+  pnpm.cmd exec lint-staged
+fi

@@ -1,0 +1,5 @@
+if command -v pnpm >/dev/null 2>&1; then
+  pnpm exec commitlint --edit "$1"
+else
+  pnpm.cmd exec commitlint --edit "$1"
+fi

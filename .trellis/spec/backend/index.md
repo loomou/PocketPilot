@@ -6,7 +6,7 @@
 
 ## Overview
 
-This directory contains guidelines for backend development. Fill in each file with your project's specific conventions.
+This directory records the conventions for the PocketPilot TypeScript Agent.
 
 ---
 
@@ -14,24 +14,20 @@ This directory contains guidelines for backend development. Fill in each file wi
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
-| [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
-| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
-| [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
+| [Bootstrap Contracts](./bootstrap-contracts.md) | Current CLI and HTTP bootstrap boundaries | Established |
+| [Directory Structure](./directory-structure.md) | Module organization and file layout | Established |
+| [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | Deferred until persistence work |
+| [Error Handling](./error-handling.md) | Error types, handling strategies | Deferred until runtime errors exist |
+| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Established |
+| [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | Deferred until the Agent runtime |
 
 ---
 
-## How to Fill These Guidelines
+## Pre-Development Checklist
 
-For each guideline file:
-
-1. Document your project's **actual conventions** (not ideals)
-2. Include **code examples** from your codebase
-3. List **forbidden patterns** and why
-4. Add **common mistakes** your team has made
-
-The goal is to help AI assistants and new team members understand how YOUR project works.
+Before modifying the TypeScript Agent, read `bootstrap-contracts.md`,
+`directory-structure.md`, and `quality-guidelines.md`. Update deferred guides
+only when their matching implementation layer is introduced.
 
 ---
 
