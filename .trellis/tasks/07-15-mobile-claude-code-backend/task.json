@@ -12,7 +12,7 @@
   "assignee": "xue",
   "createdAt": "2026-07-15",
   "completedAt": null,
-  "branch": "feat/persistence-foundation",
+  "branch": "feat/process-listener-boundaries",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
