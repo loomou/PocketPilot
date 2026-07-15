@@ -59,8 +59,9 @@ These recommendations do not alter the product constraints; revise this table be
 
 Pin and validate a TypeScript Claude Agent SDK version before release. The currently researched 0.3.210 API supports the required model:
 
-- A task owns a long-lived `Query` created with streaming input (`AsyncIterable<SDKUserMessage>` / `streamInput`). It accepts later user turns without creating a new conversation.
-- The Agent persists the SDK `sessionId`; `Options.resume` restores the conversation context after an unexpected Agent restart.
+- A task owns a long-lived `Query` created with one task-scoped `AsyncIterable<SDKUserMessage>`. The SDK consumes that iterable through `Query.streamInput()` and closes CLI stdin when the iterable ends, so every later instruction is appended to the same still-open input stream; the Agent must not call `streamInput()` once per turn.
+- The SDK emits a `session_id` on its messages rather than exposing it on `Query` or `initializationResult()`. The task event loop captures the initial system event's ID for persistence; `Options.resume` restores the conversation context after an unexpected Agent restart.
+- The initial system event can be preceded by SDK hook events and does not arrive until the first streamed user instruction, so task creation does not persist a session ID before its first turn.
 - `Query.interrupt()` powers user interruption; the Agent waits for its state transition before accepting another instruction.
 - `Query.supportedModels()` provides the mobile model catalog. The Agent owns no model catalog.
 - `Query.setPermissionMode()` and `Query.setModel()` are forwarded according to the product rules: permission mode follows SDK acceptance; model changes only occur while the task is idle.

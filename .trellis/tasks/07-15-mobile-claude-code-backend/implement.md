@@ -9,6 +9,10 @@
   frontend scaffold early. It contains no Agent API client, no configuration
   mutation, no task controls, and no server listener; the functional page stays
   in item 9 after the required core behavior passes.
+- User-approved exception: execute item 5 as an isolated Claude Agent SDK
+  adapter spike before items 2–4. It validates the pinned SDK's process,
+  session, interruption, approval, model, and permission behavior without
+  adding persistence, authentication, or mobile/remote API implementation.
 
 ## Ordered Work
 
@@ -34,9 +38,26 @@
    - Test expiry, duplicate pairing, replayed refresh, stale challenge, and multi-device behavior.
 
 5. **Create the Claude SDK adapter spike and contract tests**
-   - Exercise streaming input, later `streamInput` turns, `supportedModels`, permission modes, `canUseTool`, interruption, and `Options.resume` with the pinned SDK.
+   - Exercise a long-lived streaming input, `supportedModels`, permission modes, `canUseTool`, interruption, and `Options.resume` with the pinned SDK. `Query.streamInput()` owns the one input stream and closes CLI stdin once that iterable ends; later turns are appended to the same open iterable rather than sent through repeated `streamInput()` calls.
    - Capture the exact normalised event mapping and feature/version capability checks.
    - Fail early if the installed Claude CLI/SDK combination cannot satisfy a required contract.
+
+## SDK Spike Record (2026-07-15)
+
+- Pinned `@anthropic-ai/claude-agent-sdk@0.3.210` passed the opt-in live
+  contract test on Node.js 24.14.0: initialization/model discovery, two
+  consecutive instructions on one long-lived input stream, permission-mode
+  forwarding, model forwarding after the first turn, and interruption control.
+- The local `claude --version` reports Claude Code 2.1.190. The SDK's own
+  process launch was used for the live contract; the Agent does not inject
+  credentials or parse Claude configuration.
+- `initializationResult()` has no session ID. The adapter captures
+  `SDKMessage.session_id` while consuming events, and the contract test accepts
+  SDK hook events that can precede the `system:init` message.
+- Unit contracts cover typed input construction, event normalization, session
+  resume-option forwarding, and `canUseTool` approval resolution and abort
+  cancellation. A later task runtime must register each pending approval so it
+  can cancel it during interrupt, close, and shutdown.
 
 6. **Implement task runtime and state machine**
    - Build per-task serialized control lanes and independent SDK lifecycles.

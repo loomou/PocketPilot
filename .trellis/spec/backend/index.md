@@ -15,6 +15,7 @@ This directory records the conventions for the PocketPilot TypeScript Agent.
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Bootstrap Contracts](./bootstrap-contracts.md) | Current CLI and HTTP bootstrap boundaries | Established |
+| [Claude Agent SDK Contracts](./claude-sdk-contracts.md) | Streaming-session, control, approval, and event boundaries | Established |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | Established |
 | [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | Deferred until persistence work |
 | [Error Handling](./error-handling.md) | Error types, handling strategies | Deferred until runtime errors exist |
@@ -26,8 +27,9 @@ This directory records the conventions for the PocketPilot TypeScript Agent.
 ## Pre-Development Checklist
 
 Before modifying the TypeScript Agent, read `bootstrap-contracts.md`,
-`directory-structure.md`, and `quality-guidelines.md`. Update deferred guides
-only when their matching implementation layer is introduced.
+`directory-structure.md`, and `quality-guidelines.md`. When modifying Claude
+Agent SDK integration, also read `claude-sdk-contracts.md`. Update deferred
+guides only when their matching implementation layer is introduced.
 
 ---
 
