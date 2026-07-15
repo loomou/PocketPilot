@@ -2,6 +2,7 @@ packages:
   - .
   - apps/*
 onlyBuiltDependencies:
+  - better-sqlite3
   - esbuild
 minimumReleaseAgeExclude:
   - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.210'

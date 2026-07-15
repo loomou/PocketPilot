@@ -59,6 +59,23 @@
   cancellation. A later task runtime must register each pending approval so it
   can cancel it during interrupt, close, and shutdown.
 
+## Persistence Foundation Record (2026-07-16)
+
+- Added `better-sqlite3`, Drizzle ORM, Drizzle Kit, and the initial generated
+  SQLite migration covering settings, devices, credentials, pairings, tasks,
+  idempotency records, audits, and encrypted event overflow.
+- Storage uses WAL with foreign keys enabled. Drizzle owns schemas/migrations;
+  targeted `better-sqlite3` transactions own rekeying, retention, reset, and
+  temporary-event cleanup.
+- `AGENT_MASTER_KEY` is a required 32-byte unpadded base64url value at secure
+  runtime startup. AES-256-GCM envelopes derive per-record keys through HKDF
+  and bind table, column, record ID, and version as authenticated data.
+- The persistence primitive intentionally sets no listener or product defaults;
+  the future process/listener layer will validate and persist those settings.
+- `rekeySensitiveData` and `resetAgentData` are storage primitives only. The
+  future process/CLI layer must enforce the Agent-stopped precondition before
+  exposing them to a user.
+
 6. **Implement task runtime and state machine**
    - Build per-task serialized control lanes and independent SDK lifecycles.
    - Enforce capacity only for executing/awaiting-approval tasks; enforce start-directory allowlist and per-task risk acknowledgement.
