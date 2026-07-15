@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
-
+import { DeviceAuthService } from "../auth/device-auth-service.js";
+import { InMemoryDeviceConnectionRegistry } from "../auth/device-connection-registry.js";
 import {
   buildLocalAdminApp,
   type LocalAdminStatus,
@@ -42,12 +43,16 @@ export type AgentRuntimeOptions = {
 
 /** Owns both listeners and the single coordinated Agent shutdown path. */
 export class AgentRuntime {
+  private readonly deviceConnectionRegistry =
+    new InMemoryDeviceConnectionRegistry();
   private controlStatePath: string;
+  private deviceAuthService: DeviceAuthService | undefined;
   private localAdminApp:
     | Awaited<ReturnType<typeof buildLocalAdminApp>>
     | undefined;
   private localAdminListener: BoundListener | undefined;
   private readonly localAdminPort: number;
+  private masterKey: Buffer | undefined;
   private remoteApiApp:
     | Awaited<ReturnType<typeof buildRemoteApiApp>>
     | undefined;
@@ -69,23 +74,26 @@ export class AgentRuntime {
   }
 
   public async start(): Promise<AgentRuntimeStatus> {
-    const masterKey = readAgentMasterKey(this.options.environment);
+    this.masterKey = readAgentMasterKey(this.options.environment);
     try {
       this.storage = openStorage({ databasePath: this.options.databasePath });
       clearTransientEventOverflow(this.storage.sqlite);
       pruneStorage(this.storage.sqlite);
 
-      const settings = readRuntimeSettings(
-        new SettingsRepository(this.storage.database),
-      );
-      await this.startListeners(settings);
+      const settingsRepository = new SettingsRepository(this.storage.database);
+      const settings = readRuntimeSettings(settingsRepository);
+      this.deviceAuthService = new DeviceAuthService({
+        closeDeviceConnections: this.deviceConnectionRegistry,
+        masterKey: this.masterKey,
+        settingsRepository,
+        sqlite: this.storage.sqlite,
+      });
+      await this.startListeners(settings, this.deviceAuthService);
       this.installSignalHandlers();
       return this.currentStatus(settings);
     } catch (error) {
       await this.shutdown();
       throw error;
-    } finally {
-      masterKey.fill(0);
     }
   }
 
@@ -102,7 +110,10 @@ export class AgentRuntime {
     return this.stoppedPromise;
   }
 
-  private async startListeners(settings: RuntimeSettings): Promise<void> {
+  private async startListeners(
+    settings: RuntimeSettings,
+    deviceAuthService: DeviceAuthService,
+  ): Promise<void> {
     const csrfToken = createControlToken();
     const shutdownControlToken = createControlToken();
     this.shutdownControlToken = shutdownControlToken;
@@ -114,6 +125,7 @@ export class AgentRuntime {
         },
         token: csrfToken,
       },
+      deviceAuthService,
       getStatus: () => this.currentStatus(settings),
       requestShutdown: () => {
         setTimeout(() => {
@@ -122,7 +134,7 @@ export class AgentRuntime {
       },
       shutdownControlToken,
     });
-    this.remoteApiApp = await buildRemoteApiApp();
+    this.remoteApiApp = await buildRemoteApiApp({ deviceAuthService });
 
     await this.localAdminApp.listen({
       host: LOCAL_ADMIN_HOST,
@@ -188,6 +200,9 @@ export class AgentRuntime {
     await Promise.allSettled(closers);
     this.storage?.close();
     this.storage = undefined;
+    this.masterKey?.fill(0);
+    this.masterKey = undefined;
+    this.deviceAuthService = undefined;
     await removeRuntimeControlState(
       this.controlStatePath,
       this.shutdownControlToken,

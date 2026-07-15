@@ -15,7 +15,7 @@ const RESET_CONFIRMATION = "RESET_AGENT_DATA";
 type EncryptedColumn =
   | {
       column: "secret_envelope";
-      table: "device_credentials" | "pairings";
+      table: "access_tokens" | "device_credentials" | "pairings";
     }
   | {
       column: "payload_envelope";
@@ -34,13 +34,16 @@ type EventOverflowRow = {
 };
 
 const encryptedColumns: readonly EncryptedColumn[] = [
+  { column: "secret_envelope", table: "access_tokens" },
   { column: "secret_envelope", table: "device_credentials" },
   { column: "secret_envelope", table: "pairings" },
   { column: "payload_envelope", table: "event_overflow" },
 ];
 
 export type StoragePruneResult = {
+  accessTokens: number;
   auditRecords: number;
+  expiredAuthChallenges: number;
   expiredOperationResults: number;
   expiredPairings: number;
 };
@@ -80,6 +83,8 @@ export function resetAgentData(
   sqlite.transaction(() => {
     sqlite.exec(`
       DELETE FROM event_overflow;
+      DELETE FROM auth_challenges;
+      DELETE FROM access_tokens;
       DELETE FROM operation_results;
       DELETE FROM device_credentials;
       DELETE FROM pairings;
@@ -96,17 +101,30 @@ export function pruneStorage(
   sqlite: BetterSqlite3.Database,
   now = Date.now(),
 ): StoragePruneResult {
+  const accessTokens = sqlite
+    .prepare("DELETE FROM access_tokens WHERE expires_at <= ?")
+    .run(now).changes;
   const auditRecords = sqlite
     .prepare("DELETE FROM audit_records WHERE occurred_at < ?")
     .run(now - AUDIT_RETENTION_MILLISECONDS).changes;
   const expiredOperationResults = sqlite
-    .prepare("DELETE FROM operation_results WHERE expires_at < ?")
+    .prepare("DELETE FROM operation_results WHERE expires_at <= ?")
     .run(now).changes;
   const expiredPairings = sqlite
-    .prepare("DELETE FROM pairings WHERE expires_at < ?")
+    .prepare("DELETE FROM pairings WHERE expires_at <= ?")
     .run(now).changes;
 
-  return { auditRecords, expiredOperationResults, expiredPairings };
+  const expiredAuthChallenges = sqlite
+    .prepare("DELETE FROM auth_challenges WHERE expires_at <= ?")
+    .run(now).changes;
+
+  return {
+    accessTokens,
+    auditRecords,
+    expiredAuthChallenges,
+    expiredOperationResults,
+    expiredPairings,
+  };
 }
 
 /** Cleans transient replay overflow at process startup and after a turn ends. */

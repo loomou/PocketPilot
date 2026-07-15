@@ -96,6 +96,26 @@
 - Unit/integration tests cover listener isolation, CSRF/control-token guards,
   manual-start settings, control-state ownership, and external stop shutdown.
 
+## Device Authentication Record (2026-07-16)
+
+- QR pairing payloads contain the configured mobile base URL, stable Agent ID,
+  random one-time pairing ID, and five-minute expiry only; they never contain
+  a refresh or access credential. A mobile device registers a raw Ed25519
+  public key and receives the six-digit verification code shown to the local
+  administrator.
+- Local approval creates a device record. The device must sign a one-time
+  pairing-claim challenge to receive its first opaque credentials. Access and
+  refresh plaintext tokens are response-only; encrypted SQLite rows contain
+  SHA-256 verifiers bound by AES-GCM record context.
+- Refresh is challenge-and-signature bound, rotates the predecessor atomically,
+  expires after thirty days without use, and revokes the device plus all of its
+  active access credentials on detected predecessor reuse. A device connection
+  registry defines immediate socket closure (code 4003) for revocation; event
+  WebSockets will register with it in the later delivery phase.
+- Added `access_tokens` and `auth_challenges`, pairing registration/delivery
+  columns, migrations, rekey/pruning/reset coverage, local pairing/device
+  administration APIs, and remote `/v1` pairing/refresh/session APIs.
+
 6. **Implement task runtime and state machine**
    - Build per-task serialized control lanes and independent SDK lifecycles.
    - Enforce capacity only for executing/awaiting-approval tasks; enforce start-directory allowlist and per-task risk acknowledgement.

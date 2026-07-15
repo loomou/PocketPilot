@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 
+import type { DeviceAuthService } from "../auth/device-auth-service.js";
+import { registerLocalDeviceAuthRoutes } from "../auth/local-admin-routes.js";
 import { createHttpApp } from "../http/create-http-app.js";
 import { registerHealthRoute } from "../http/health.js";
 import {
@@ -42,6 +44,7 @@ export type LocalAdminStatus = z.infer<typeof localAdminStatusSchema>;
 
 export type LocalAdminAppOptions = {
   csrfProtection: LocalAdminCsrfProtection;
+  deviceAuthService?: DeviceAuthService;
   getStatus(): LocalAdminStatus;
   requestShutdown(): void;
   shutdownControlToken: string;
@@ -124,6 +127,10 @@ export async function buildLocalAdminApp(
       return reply.code(202).send({ status: "stopping" as const });
     },
   );
+
+  if (options.deviceAuthService !== undefined) {
+    registerLocalDeviceAuthRoutes(app, options.deviceAuthService);
+  }
 
   return app;
 }

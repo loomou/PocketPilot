@@ -50,8 +50,13 @@ live in `drizzle/`. Runtime migration uses
   `resetConfirmationValue()` and clears Agent-owned tables only. It never reads
   or deletes Claude files, configuration, credentials, or session JSONL.
 - Delete event-overflow rows on startup and when an executing turn ends.
-  Prune audit records after 30 days and expired operation/pairing records by
-  timestamp. Do not use these tables as transcript recovery.
+  Prune audit records after 30 days and expired operation/pairing, access-token,
+  and challenge records by timestamp. Do not use these tables as transcript
+  recovery.
+- Device access/refresh credentials store only a SHA-256 verifier inside an
+  AES-GCM envelope. The opaque plaintext token is never persisted. Retain
+  superseded refresh credential verifiers until reset/device deletion so a
+  verified reuse can revoke that device.
 - Store non-secret settings only through `SettingsRepository` with a feature
   Zod schema on both write and read. Do not deserialize SQLite JSON with an
   unchecked cast.

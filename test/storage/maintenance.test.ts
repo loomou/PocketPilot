@@ -52,7 +52,7 @@ describe("storage maintenance", () => {
 
     expect(
       rekeySensitiveData(connection.sqlite, oldMasterKey, newMasterKey),
-    ).toBe(3);
+    ).toBe(4);
 
     const credentialEnvelope = selectEnvelope(
       connection,
@@ -81,6 +81,23 @@ describe("storage maintenance", () => {
         parseEncryptedValueEnvelope(credentialEnvelope),
       ),
     ).toThrow(StorageCryptoError);
+
+    const accessTokenEnvelope = selectEnvelope(
+      connection,
+      "SELECT secret_envelope AS envelope FROM access_tokens WHERE id = ?",
+      ["access-token-1"],
+    );
+    expect(
+      decryptText(
+        newMasterKey,
+        createEncryptionContext({
+          column: "secret_envelope",
+          recordId: "access-token-1",
+          table: "access_tokens",
+        }),
+        parseEncryptedValueEnvelope(accessTokenEnvelope),
+      ),
+    ).toBe("access-verifier");
   });
 
   it("rejects an invalid rekey key before scanning any rows", () => {
@@ -148,7 +165,9 @@ describe("storage maintenance", () => {
       .run("audit-1", now - 30 * 24 * 60 * 60 * 1000 - 1, "test", "ok");
 
     expect(pruneStorage(connection.sqlite, now)).toEqual({
+      accessTokens: 1,
       auditRecords: 1,
+      expiredAuthChallenges: 0,
       expiredOperationResults: 1,
       expiredPairings: 1,
     });
@@ -216,6 +235,27 @@ function insertStorageFixtures(
       ),
       now,
       now,
+    );
+  connection.sqlite
+    .prepare(
+      "INSERT INTO access_tokens (id, device_id, secret_envelope, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .run(
+      "access-token-1",
+      "device-1",
+      JSON.stringify(
+        encryptText(
+          masterKey,
+          createEncryptionContext({
+            column: "secret_envelope",
+            recordId: "access-token-1",
+            table: "access_tokens",
+          }),
+          "access-verifier",
+        ),
+      ),
+      now,
+      now + 1,
     );
   connection.sqlite
     .prepare(

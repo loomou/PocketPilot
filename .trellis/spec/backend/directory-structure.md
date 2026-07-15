@@ -5,6 +5,7 @@
 ```text
 src/
 ├── app.ts       # Unbound Fastify application composition
+├── auth/                     # Pairing, device proof, credentials, revocation
 ├── cli.ts       # Executable boundary and top-level exit handling
 ├── cli/
 │   ├── program.ts            # Commander command registration

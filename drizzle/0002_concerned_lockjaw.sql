@@ -1,0 +1,1 @@
+ALTER TABLE `pairings` ADD `credential_claimed_at` integer;

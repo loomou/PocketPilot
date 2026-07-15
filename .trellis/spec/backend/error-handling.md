@@ -16,6 +16,7 @@ output.
 | `StorageDataError` | none | Corrupt or schema-invalid non-secret setting JSON. |
 | `StorageResetConfirmationError` | none | Reset requested without the exact explicit confirmation. |
 | `RuntimeControlError` | `RUNTIME_NOT_RUNNING`, `RUNTIME_STATE_INVALID`, `RUNTIME_CONTROL_UNAVAILABLE`, `RUNTIME_CONTROL_REJECTED` | Local `agent stop` control-state or loopback shutdown failure. |
+| `DeviceAuthError` | Pairing, device-proof, challenge, opaque-token, and revocation codes | HTTP-safe device authentication failure. |
 
 ## Patterns
 
@@ -30,6 +31,9 @@ output.
 - Translate malformed/missing runtime-control state and loopback stop failures
   into `RuntimeControlError`; never surface raw `fetch`/socket text from a
   local command.
+- Translate expected pairing/authentication failure into `DeviceAuthError` and
+  let the Fastify boundary return only `{ code, message }`; never leak token,
+  verifier, signature, or crypto-library details.
 
 ## Common Mistakes
 
@@ -41,3 +45,5 @@ output.
   mapping belongs to the future validated API boundary.
 - Do not delete a runtime-control file merely because a new startup failed;
   only the runtime that owns its random control token may remove it.
+- A verified refresh-token reuse is a security event, not a normal invalid
+  token: revoke the device and close its registered sockets before responding.

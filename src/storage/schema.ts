@@ -42,20 +42,63 @@ export const deviceCredentials = sqliteTable(
   ],
 );
 
+export const accessTokens = sqliteTable(
+  "access_tokens",
+  {
+    createdAt: integer("created_at").notNull(),
+    deviceId: text("device_id")
+      .notNull()
+      .references(() => devices.id, { onDelete: "cascade" }),
+    expiresAt: integer("expires_at").notNull(),
+    id: text("id").primaryKey(),
+    revokedAt: integer("revoked_at"),
+    secretEnvelope: text("secret_envelope").notNull(),
+  },
+  (table) => [
+    index("access_tokens_device_id_index").on(table.deviceId),
+    index("access_tokens_expires_at_index").on(table.expiresAt),
+  ],
+);
+
 export const pairings = sqliteTable(
   "pairings",
   {
     approvedAt: integer("approved_at"),
+    credentialClaimedAt: integer("credential_claimed_at"),
     createdAt: integer("created_at").notNull(),
+    deviceDisplayName: text("device_display_name"),
     deviceId: text("device_id").references(() => devices.id, {
       onDelete: "set null",
     }),
+    devicePublicKey: text("device_public_key"),
     expiresAt: integer("expires_at").notNull(),
     id: text("id").primaryKey(),
     secretEnvelope: text("secret_envelope").notNull(),
     usedAt: integer("used_at"),
   },
   (table) => [index("pairings_expires_at_index").on(table.expiresAt)],
+);
+
+export const authChallenges = sqliteTable(
+  "auth_challenges",
+  {
+    createdAt: integer("created_at").notNull(),
+    deviceId: text("device_id").references(() => devices.id, {
+      onDelete: "cascade",
+    }),
+    expiresAt: integer("expires_at").notNull(),
+    id: text("id").primaryKey(),
+    nonce: text("nonce").notNull(),
+    pairingId: text("pairing_id").references(() => pairings.id, {
+      onDelete: "cascade",
+    }),
+    purpose: text("purpose").notNull(),
+    usedAt: integer("used_at"),
+  },
+  (table) => [
+    index("auth_challenges_device_id_index").on(table.deviceId),
+    index("auth_challenges_expires_at_index").on(table.expiresAt),
+  ],
 );
 
 export const tasks = sqliteTable(
@@ -124,8 +167,10 @@ export const eventOverflow = sqliteTable(
 );
 
 export const storageSchema = {
+  accessTokens,
   agentSettings,
   auditRecords,
+  authChallenges,
   deviceCredentials,
   devices,
   eventOverflow,
