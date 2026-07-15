@@ -58,6 +58,8 @@ export type ClaudeSdkQueryFactory = (params: {
 export type OpenClaudeSdkSessionOptions = {
   canUseTool?: CanUseTool;
   cwd: string;
+  model?: string;
+  permissionMode?: PermissionMode;
   resume?: string;
 };
 
@@ -150,6 +152,10 @@ export function openClaudeSdkSession(
   const input = new ClaudeSdkInputStream();
   const queryOptions: Options = {
     cwd: options.cwd,
+    ...(options.model === undefined ? {} : { model: options.model }),
+    ...(options.permissionMode === undefined
+      ? {}
+      : { permissionMode: options.permissionMode }),
     ...(options.resume === undefined ? {} : { resume: options.resume }),
     ...(options.canUseTool === undefined
       ? {}

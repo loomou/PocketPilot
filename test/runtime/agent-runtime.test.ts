@@ -80,6 +80,51 @@ describe("AgentRuntime", () => {
 
     expect(existsSync(runtimeControlPath)).toBe(false);
   });
+
+  it("terminates persisted idle sessions during a manual Agent shutdown", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pocketpilot-runtime-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "agent.sqlite");
+    const runtimeControlPath = join(directory, "runtime-control.json");
+    await configureEphemeralRemoteListener(databasePath);
+    const initialStorage = openStorage({ databasePath });
+    initialStorage.sqlite
+      .prepare(
+        "INSERT INTO tasks (id, initial_cwd, permission_mode, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        "00000000-0000-4000-8000-000000000001",
+        directory,
+        "default",
+        "idle",
+        1,
+        1,
+      );
+    initialStorage.close();
+
+    const runtime = new AgentRuntime({
+      databasePath,
+      environment: { AGENT_MASTER_KEY: masterKey },
+      installSignalHandlers: false,
+      localAdminPort: 0,
+      runtimeControlPath,
+    });
+    runtimes.push(runtime);
+
+    await runtime.start();
+    await runtime.shutdown();
+
+    const verifiedStorage = openStorage({ databasePath });
+    try {
+      expect(
+        verifiedStorage.sqlite
+          .prepare("SELECT state, terminal_at AS terminalAt FROM tasks")
+          .get(),
+      ).toMatchObject({ state: "terminal" });
+    } finally {
+      verifiedStorage.close();
+    }
+  });
 });
 
 async function configureEphemeralRemoteListener(

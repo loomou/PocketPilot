@@ -15,6 +15,7 @@ import {
 } from "../storage/maintenance.js";
 import { readAgentMasterKey } from "../storage/master-key.js";
 import { SettingsRepository } from "../storage/settings-repository.js";
+import { TaskManager } from "../tasks/task-manager.js";
 import {
   removeRuntimeControlState,
   writeRuntimeControlState,
@@ -62,6 +63,8 @@ export class AgentRuntime {
   private storage: StorageConnection | undefined;
   private stoppedResolver: (() => void) | undefined;
   private readonly stoppedPromise: Promise<void>;
+  private taskManager: TaskManager | undefined;
+  private runtimeStarted = false;
 
   public constructor(private readonly options: AgentRuntimeOptions) {
     this.controlStatePath =
@@ -88,8 +91,14 @@ export class AgentRuntime {
         settingsRepository,
         sqlite: this.storage.sqlite,
       });
+      this.taskManager = new TaskManager({
+        settingsRepository,
+        sqlite: this.storage.database,
+      });
+      this.taskManager.recoverFromUnexpectedRestart();
       await this.startListeners(settings, this.deviceAuthService);
       this.installSignalHandlers();
+      this.runtimeStarted = true;
       return this.currentStatus(settings);
     } catch (error) {
       await this.shutdown();
@@ -197,19 +206,29 @@ export class AgentRuntime {
       closers.push(this.localAdminApp.close());
     }
 
-    await Promise.allSettled(closers);
-    this.storage?.close();
-    this.storage = undefined;
-    this.masterKey?.fill(0);
-    this.masterKey = undefined;
-    this.deviceAuthService = undefined;
-    await removeRuntimeControlState(
-      this.controlStatePath,
-      this.shutdownControlToken,
-    );
-    this.shutdownControlToken = undefined;
-    this.stoppedResolver?.();
-    this.stoppedResolver = undefined;
+    const taskShutdown =
+      this.runtimeStarted && this.taskManager !== undefined
+        ? this.taskManager.shutdown()
+        : undefined;
+    try {
+      await taskShutdown;
+    } finally {
+      await Promise.allSettled(closers);
+      this.storage?.close();
+      this.storage = undefined;
+      this.masterKey?.fill(0);
+      this.masterKey = undefined;
+      this.deviceAuthService = undefined;
+      this.taskManager = undefined;
+      this.runtimeStarted = false;
+      await removeRuntimeControlState(
+        this.controlStatePath,
+        this.shutdownControlToken,
+      );
+      this.shutdownControlToken = undefined;
+      this.stoppedResolver?.();
+      this.stoppedResolver = undefined;
+    }
   }
 }
 

@@ -16,6 +16,8 @@ interactive session and loses the ability to submit later instructions.
 ```ts
 openClaudeSdkSession(options: {
   cwd: string;
+  model?: string;
+  permissionMode?: PermissionMode;
   resume?: string;
   canUseTool?: CanUseTool;
 }): ClaudeSdkSession;
@@ -42,6 +44,9 @@ once by the SDK and stays open until task close or coordinated shutdown.
   relay input, not an Agent-managed canonical transcript.
 - `Options.resume` receives the previously captured session ID to reconnect an
   interrupted task. It never retries the interrupted instruction.
+- Forward a task's initially selected model and permission mode in `Options`
+  when its SDK session is first opened. A task whose live session already
+  exists uses `setModel()` or `setPermissionMode()` instead.
 - Forward `setPermissionMode()` and `setModel()` through the wrapper. The task
   state machine, not the adapter, applies the product's idle-only model rule.
 - `canUseTool` receives an SDK `AbortSignal`, `requestId`, and `toolUseID`.

@@ -14,7 +14,8 @@ src/
 ├── local-admin/              # Local-only app factory and CSRF guard
 ├── remote-api/               # Remote-only HTTP/WebSocket application factory
 ├── runtime/                  # Listener ownership, settings, and stop control
-└── storage/                  # SQLite, encryption, and settings persistence
+├── storage/                  # SQLite, encryption, and settings persistence
+└── tasks/                    # Persistent task state, SDK lifecycle, policy
 test/
 ├── app.test.ts
 └── cli.test.ts
@@ -32,6 +33,9 @@ test/
   lifecycle in `src/runtime/`; route factories must remain unbound.
 - Keep shared HTTP compiler/plugin setup in `src/http/`, not copied into the
   remote and local-admin factories.
+- Keep persistent task policy, state transitions, SDK lifecycle ownership, and
+  task metadata repositories in `src/tasks/`; HTTP routes only validate and
+  translate the control contract.
 - Keep each test beside its observable boundary under `test/` until a module
   becomes large enough to need its own test directory.
 

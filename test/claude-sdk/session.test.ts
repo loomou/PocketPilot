@@ -145,4 +145,25 @@ describe("Claude SDK session adapter", () => {
 
     expect(resume).toBe("00000000-0000-0000-0000-000000000002");
   });
+
+  it("forwards task-selected model and permission mode when opening a session", () => {
+    let model: string | undefined;
+    let permissionMode: PermissionMode | undefined;
+
+    openClaudeSdkSession(
+      {
+        cwd: process.cwd(),
+        model: "sonnet",
+        permissionMode: "plan",
+      },
+      (params) => {
+        model = params.options?.model;
+        permissionMode = params.options?.permissionMode;
+        return createFakeQuery();
+      },
+    );
+
+    expect(model).toBe("sonnet");
+    expect(permissionMode).toBe("plan");
+  });
 });

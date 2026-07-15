@@ -17,6 +17,7 @@ output.
 | `StorageResetConfirmationError` | none | Reset requested without the exact explicit confirmation. |
 | `RuntimeControlError` | `RUNTIME_NOT_RUNNING`, `RUNTIME_STATE_INVALID`, `RUNTIME_CONTROL_UNAVAILABLE`, `RUNTIME_CONTROL_REJECTED` | Local `agent stop` control-state or loopback shutdown failure. |
 | `DeviceAuthError` | Pairing, device-proof, challenge, opaque-token, and revocation codes | HTTP-safe device authentication failure. |
+| `TaskError` | `TASK_BUSY`, `TASK_INTERRUPTED`, `TASK_TERMINAL`, `STALE_APPROVAL`, `CONCURRENT_TASK_LIMIT_REACHED`, workspace-policy, capability, and task-lookup codes | Validated mobile task-control and task-policy failures. |
 
 ## Patterns
 
@@ -34,6 +35,8 @@ output.
 - Translate expected pairing/authentication failure into `DeviceAuthError` and
   let the Fastify boundary return only `{ code, message }`; never leak token,
   verifier, signature, or crypto-library details.
+- Keep task errors metadata-only: do not put an instruction, model output, tool
+  input, or SDK process details in a `TaskError` message.
 
 ## Common Mistakes
 

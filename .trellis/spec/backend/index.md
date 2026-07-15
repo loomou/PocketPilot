@@ -22,6 +22,7 @@ This directory records the conventions for the PocketPilot TypeScript Agent.
 | [Error Handling](./error-handling.md) | Error types, handling strategies | Established |
 | [Process and Listener Runtime Contracts](./process-runtime-contracts.md) | Manual start/stop, listener isolation, local CSRF, and shutdown | Established |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Established |
+| [Task Runtime Contracts](./task-runtime-contracts.md) | Persistent task lifecycle, control priority, workspace policy, and recovery | Established |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | Established |
 
 ---
@@ -36,6 +37,8 @@ read `database-guidelines.md`. When modifying listener setup, start/stop, or
 local-admin HTTP boundaries, also read `process-runtime-contracts.md` and
 `logging-guidelines.md`. When modifying pairing, credentials, remote auth, or
 device-bound WebSockets, also read `device-auth-contracts.md`.
+When modifying task state, SDK task lifecycles, workspace policy, capacity,
+idempotency, or task recovery, also read `task-runtime-contracts.md`.
 
 ---
 

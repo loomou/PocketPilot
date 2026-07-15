@@ -116,6 +116,27 @@
   columns, migrations, rekey/pruning/reset coverage, local pairing/device
   administration APIs, and remote `/v1` pairing/refresh/session APIs.
 
+## Task Runtime Record (2026-07-16)
+
+- Added `src/tasks/` as the owner of persistent task metadata, Zod-backed
+  workspace/capacity settings, per-task serialized control lanes, SDK session
+  lifecycles, approval cancellation, idempotency results, and metadata-only
+  audit emission. It stores neither instructions nor model output.
+- Task creation requires a canonical authorized initial workspace and explicit
+  non-sandbox risk acknowledgement. Capacity defaults to three, counts only
+  executing/approval-waiting tasks, allows shared directories, and rejects
+  capacity overflow without a queue.
+- User interrupt and close bypass ordinary task lanes. Close persists terminal
+  state after cancellation begins; manual Agent shutdown cancels live SDK work
+  and marks all non-terminal task rows terminal before storage closes.
+- Startup converts unfinished active tasks to interrupted. Explicit resume
+  requires a saved SDK session ID, passes it through `Options.resume`, returns
+  the task to idle, and never replays the previous instruction. Idle rows stay
+  idle across restart.
+- The SDK adapter now forwards persisted initial model and permission mode in
+  its opening options; later task changes use SDK control methods under the
+  state-machine rules.
+
 6. **Implement task runtime and state machine**
    - Build per-task serialized control lanes and independent SDK lifecycles.
    - Enforce capacity only for executing/awaiting-approval tasks; enforce start-directory allowlist and per-task risk acknowledgement.
