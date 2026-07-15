@@ -12,7 +12,7 @@
   "assignee": "xue",
   "createdAt": "2026-07-15",
   "completedAt": null,
-  "branch": "feat/event-delivery-replay",
+  "branch": "feat/versioned-mobile-api",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
