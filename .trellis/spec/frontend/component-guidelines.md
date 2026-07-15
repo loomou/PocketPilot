@@ -1,59 +1,32 @@
 # Component Guidelines
 
-> How components are built in this project.
+## Composition
 
----
+- Export named React components. `App` is the root composition component;
+  reusable primitives export their component and any variant helper explicitly.
+- Use a typed `asChild` option and Radix `Slot` only in shared primitives where
+  composition is required. See `src/components/ui/button.tsx`.
+- Keep page-level display lists as immutable `as const` data when they contain
+  no user or server state.
 
-## Overview
+## Styling
 
-<!--
-Document your project's component conventions here.
-
-Questions to answer:
-- What component patterns do you use?
-- How are props defined?
-- How do you handle composition?
-- What accessibility standards apply?
--->
-
-(To be filled by the team)
-
----
-
-## Component Structure
-
-<!-- Standard structure of a component file -->
-
-(To be filled by the team)
-
----
-
-## Props Conventions
-
-<!-- How props should be defined and typed -->
-
-(To be filled by the team)
-
----
-
-## Styling Patterns
-
-<!-- How styles are applied (CSS modules, styled-components, Tailwind, etc.) -->
-
-(To be filled by the team)
-
----
+- Use Tailwind utilities in JSX and Tailwind v4 from `src/styles.css`.
+- Use `cn()` from `@/lib/utils` to merge conditional utility classes. Do not
+  concatenate class strings by hand.
+- New shadcn components must respect `components.json` aliases and remain
+  framework-neutral; application-specific behavior belongs outside `ui/`.
 
 ## Accessibility
 
-<!-- A11y requirements and patterns -->
+- Native buttons must specify their type when rendered in a form-capable
+  context.
+- Icons that do not add text meaning use `aria-hidden="true"`.
+- Disabled scaffold actions must be visibly disabled and use the native
+  `disabled` attribute; do not simulate disabled behavior with a click guard.
 
-(To be filled by the team)
+## Current Boundary
 
----
-
-## Common Mistakes
-
-<!-- Component-related mistakes your team has made -->
-
-(To be filled by the team)
+The scaffold presents placeholders only. Components must not add fetch calls,
+task controls, Claude configuration, or persistent client state until the
+localhost-only API contract exists.

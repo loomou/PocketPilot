@@ -17,14 +17,16 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && pnpm --filter @pocketpilot/local-admin build",
+    "build:admin": "pnpm --filter @pocketpilot/local-admin build",
     "dev": "node --watch --experimental-strip-types src/cli.ts start",
+    "dev:admin": "pnpm --filter @pocketpilot/local-admin dev",
     "start": "node dist/cli.js start",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "typecheck": "tsc --noEmit && pnpm --filter @pocketpilot/local-admin typecheck",
+    "test": "vitest run && pnpm --filter @pocketpilot/local-admin test",
     "test:watch": "vitest",
     "prepare": "husky"
   },

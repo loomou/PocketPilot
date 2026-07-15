@@ -5,6 +5,10 @@
 - Obtain user review of `prd.md`, `design.md`, and this plan before running `task.py start`.
 - Pin Node.js 24 LTS and the validated Claude Agent SDK version.
 - Do not begin the configuration page until core remote API, task runtime, recovery, and concurrency behavior pass their tests.
+- User-approved exception: create the standalone React/Vite/shadcn local-admin
+  frontend scaffold early. It contains no Agent API client, no configuration
+  mutation, no task controls, and no server listener; the functional page stays
+  in item 9 after the required core behavior passes.
 
 ## Ordered Work
 

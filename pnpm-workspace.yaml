@@ -1,7 +1,8 @@
 packages:
   - .
-allowBuilds:
-  esbuild: true
+  - apps/*
+onlyBuiltDependencies:
+  - esbuild
 minimumReleaseAgeExclude:
   - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.210'
   - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.210'

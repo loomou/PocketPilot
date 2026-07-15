@@ -1,51 +1,27 @@
-# Quality Guidelines
+# Frontend Quality Guidelines
 
-> Code quality standards for frontend development.
+## Required Checks
 
----
+- Run root `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` with
+  pnpm 10.14 before committing frontend changes. Root commands include the
+  local-admin workspace.
+- Biome has one root configuration. Do not add a nested `biome.json` below
+  `apps/local-admin`; add its paths to the root configuration instead.
+- Vite's production build is required for any Tailwind or shadcn component
+  change because it verifies the CSS transformation pipeline.
 
-## Overview
+## Tests Required
 
-<!--
-Document your project's quality standards here.
-
-Questions to answer:
-- What patterns are forbidden?
-- What linting rules do you enforce?
-- What are your testing requirements?
-- What code review standards apply?
--->
-
-(To be filled by the team)
-
----
+- A root or feature component needs a Vitest/Testing Library test for its
+  primary accessible output.
+- Shared controls need tests for externally observable state, such as the
+  native disabled state of the scaffold button.
+- Before the local API exists, tests must not mock invented HTTP endpoints.
 
 ## Forbidden Patterns
 
-<!-- Patterns that should never be used and why -->
-
-(To be filled by the team)
-
----
-
-## Required Patterns
-
-<!-- Patterns that must always be used -->
-
-(To be filled by the team)
-
----
-
-## Testing Requirements
-
-<!-- What level of testing is expected -->
-
-(To be filled by the team)
-
----
-
-## Code Review Checklist
-
-<!-- What reviewers should check -->
-
-(To be filled by the team)
+- Do not run a Vite dev server from the Agent process or expose it through the
+  remote listener.
+- Do not introduce a second formatter, nested Biome root configuration, or CSS
+  framework beside Tailwind.
+- Do not make a placeholder configuration action appear to persist data.

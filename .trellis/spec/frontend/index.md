@@ -6,7 +6,7 @@
 
 ## Overview
 
-This directory contains guidelines for frontend development. Fill in each file with your project's specific conventions.
+This directory records conventions for the local-only PocketPilot configuration UI.
 
 ---
 
@@ -14,25 +14,22 @@ This directory contains guidelines for frontend development. Fill in each file w
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | To fill |
-| [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |
-| [State Management](./state-management.md) | Local state, global state, server state | To fill |
-| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
-| [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
+| [Scaffold Contracts](./scaffold-contracts.md) | Early local-admin boundary and static UI contract | Established |
+| [Directory Structure](./directory-structure.md) | Module organization and file layout | Established |
+| [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | Established |
+| [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | Deferred until local APIs exist |
+| [State Management](./state-management.md) | Local state, global state, server state | Deferred until configuration data exists |
+| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Established |
+| [Type Safety](./type-safety.md) | Type patterns, validation | Established |
 
 ---
 
-## How to Fill These Guidelines
+## Pre-Development Checklist
 
-For each guideline file:
-
-1. Document your project's **actual conventions** (not ideals)
-2. Include **code examples** from your codebase
-3. List **forbidden patterns** and why
-4. Add **common mistakes** your team has made
-
-The goal is to help AI assistants and new team members understand how YOUR project works.
+Before editing `apps/local-admin`, read `scaffold-contracts.md`,
+`directory-structure.md`, `component-guidelines.md`, `quality-guidelines.md`,
+and `type-safety.md`. Do not add local API clients or configuration state until
+the localhost-only backend listener is implemented.
 
 ---
 

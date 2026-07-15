@@ -6,7 +6,19 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["src/**", "test/**", "*.json", "*.jsonc", "*.ts", "*.mjs"]
+    "includes": [
+      "src/**",
+      "test/**",
+      "apps/local-admin/src/**",
+      "apps/local-admin/test/**",
+      "apps/local-admin/*.json",
+      "apps/local-admin/*.ts",
+      "apps/local-admin/*.html",
+      "*.json",
+      "*.jsonc",
+      "*.ts",
+      "*.mjs"
+    ]
   },
   "formatter": {
     "enabled": true,

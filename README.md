@@ -19,3 +19,7 @@ pnpm build
 The current bootstrap exposes `agent start`, `agent stop`, `agent rekey`, and
 `agent reset`, but deliberately fails them closed until the secure runtime and
 storage layers are implemented.
+
+The local configuration UI scaffold lives in `apps/local-admin`. Run
+`pnpm dev:admin` to develop it separately; it is not yet served by the Agent or
+connected to any configuration API.
