@@ -1,51 +1,39 @@
 # Logging Guidelines
 
-> How logging is done in this project.
+## Scope
 
----
+These rules apply to CLI/process output and every future Agent logger. The
+current listener runtime uses concise foreground CLI output for the bound remote
+health URL and local-admin URL; it deliberately does not enable Fastify's
+request logger yet.
 
-## Overview
+## Current Runtime Output
 
-<!--
-Document your project's logging conventions here.
+- `agent start` may print listener addresses after successful binding.
+- `agent stop` is quiet on success and prints only a stable corrective error on
+  failure.
+- Fastify application factories use `logger: false`. Do not turn on request
+  logging ad hoc; introduce one configured logger when task/auth event logging
+  is implemented.
 
-Questions to answer:
-- What logging library do you use?
-- What are the log levels and when to use each?
-- What should be logged?
-- What should NOT be logged (PII, secrets)?
--->
+## Required Future Structured Fields
 
-(To be filled by the team)
+When the configured logger is added, every process/security record must use a
+stable event name and may include timestamp, task ID, device ID, listener kind,
+operation, and result. It must not infer a user or task identifier from prompt
+content.
 
----
+## Never Log
 
-## Log Levels
+- `AGENT_MASTER_KEY`, encryption envelopes, refresh/access credentials,
+  runtime-control tokens, CSRF tokens, pairing secrets, or device proofs.
+- Prompts, assistant output, tool input/output, Claude configuration, API keys,
+  or raw HTTP authorization headers.
+- Full persisted setting JSON, because later settings may gain sensitive fields.
 
-<!-- When to use each level: debug, info, warn, error -->
+## Process Events
 
-(To be filled by the team)
-
----
-
-## Structured Logging
-
-<!-- Log format, required fields -->
-
-(To be filled by the team)
-
----
-
-## What to Log
-
-<!-- Important events to log -->
-
-(To be filled by the team)
-
----
-
-## What NOT to Log
-
-<!-- Sensitive data, PII, secrets -->
-
-(To be filled by the team)
+Log only safe lifecycle facts when structured logging exists: secure startup
+passed, listener bind failure, listener started/stopped, local stop accepted,
+and shutdown complete. A log line must never make an unauthenticated remote
+request appear authorized or successful.

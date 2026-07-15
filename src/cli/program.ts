@@ -1,5 +1,6 @@
 import { Command } from "commander";
 
+import { runStartCommand, runStopCommand } from "../runtime/commands.js";
 import { requireRuntimeImplementation } from "./bootstrap-command.js";
 
 const COMMAND_DESCRIPTIONS = {
@@ -17,12 +18,20 @@ export function createProgram(): Command {
     .description("PocketPilot local Agent control CLI.")
     .showSuggestionAfterError();
 
-  for (const [commandName, description] of Object.entries(
-    COMMAND_DESCRIPTIONS,
-  )) {
+  program
+    .command("start")
+    .description(COMMAND_DESCRIPTIONS.start)
+    .action(runStartCommand);
+
+  program
+    .command("stop")
+    .description(COMMAND_DESCRIPTIONS.stop)
+    .action(runStopCommand);
+
+  for (const commandName of ["rekey", "reset"] as const) {
     program
       .command(commandName)
-      .description(description)
+      .description(COMMAND_DESCRIPTIONS[commandName])
       .action(() => requireRuntimeImplementation(commandName));
   }
 

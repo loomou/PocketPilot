@@ -76,6 +76,26 @@
   future process/CLI layer must enforce the Agent-stopped precondition before
   exposing them to a user.
 
+## Process and Listener Boundaries Record (2026-07-16)
+
+- `agent start` now validates `AGENT_MASTER_KEY`, migrates/prunes Agent-owned
+  storage, starts separate remote and local-admin Fastify instances, and stays
+  foreground-controlled by the user. The remote listener exposes only
+  `/healthz` until device authentication and the versioned control API exist.
+- Remote listener settings are stored as Zod-validated `runtime` settings and
+  are read only during manual startup: default `127.0.0.1:43182`, with an
+  optional user-entered mobile base URL. The local-admin listener is always
+  `127.0.0.1` and defaults to port `43183`.
+- `GET /admin/status` and `GET /admin/csrf` exist only on the local listener.
+  Unsafe future local-admin mutations require exact loopback origin plus a
+  per-runtime CSRF token; the remote application has no local-admin routes.
+- `agent stop`, Ctrl+C, and `SIGTERM` share `AgentRuntime.shutdown()`. The
+  stop command uses a temporary, random, loopback-only control credential; no
+  browser page receives it. Ownership-matched cleanup prevents a failed second
+  startup from deleting another Agent's control-state file.
+- Unit/integration tests cover listener isolation, CSRF/control-token guards,
+  manual-start settings, control-state ownership, and external stop shutdown.
+
 6. **Implement task runtime and state machine**
    - Build per-task serialized control lanes and independent SDK lifecycles.
    - Enforce capacity only for executing/awaiting-approval tasks; enforce start-directory allowlist and per-task risk acknowledgement.

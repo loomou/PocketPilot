@@ -15,6 +15,7 @@ output.
 | `StorageCryptoError` | `INVALID_ENVELOPE`, `AUTHENTICATION_FAILED` | Invalid encrypted data or failed AES-GCM authentication. |
 | `StorageDataError` | none | Corrupt or schema-invalid non-secret setting JSON. |
 | `StorageResetConfirmationError` | none | Reset requested without the exact explicit confirmation. |
+| `RuntimeControlError` | `RUNTIME_NOT_RUNNING`, `RUNTIME_STATE_INVALID`, `RUNTIME_CONTROL_UNAVAILABLE`, `RUNTIME_CONTROL_REJECTED` | Local `agent stop` control-state or loopback shutdown failure. |
 
 ## Patterns
 
@@ -26,6 +27,9 @@ output.
   and continue to another encrypted row.
 - Use Zod `safeParse` for persisted JSON and turn both parse and schema errors
   into `StorageDataError`.
+- Translate malformed/missing runtime-control state and loopback stop failures
+  into `RuntimeControlError`; never surface raw `fetch`/socket text from a
+  local command.
 
 ## Common Mistakes
 
@@ -35,3 +39,5 @@ output.
   raw setting JSON that could later contain a secret.
 - Do not expose internal error messages directly through the remote API; that
   mapping belongs to the future validated API boundary.
+- Do not delete a runtime-control file merely because a new startup failed;
+  only the runtime that owns its random control token may remove it.
