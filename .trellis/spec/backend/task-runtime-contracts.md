@@ -78,6 +78,10 @@ three and no workspace root is authorized by default.
   record-specific AES-GCM context, and deletes both stores at turn end.
   At 256 MiB it sends `EVENT_REPLAY_STORAGE_LIMIT_REACHED` live and stops
   retaining later events without stopping the task.
+- Remote task HTTP routes live below `/v1`. Authenticate every request with the
+  existing bearer-token service before calling `TaskManager`; the route layer
+  validates Zod request/response shapes and maps `TaskError` to its stable
+  `{ code, message }` response. It never reimplements task transitions.
 
 ### 4. Validation & Error Matrix
 

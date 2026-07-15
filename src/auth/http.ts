@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
-
+import { TaskError } from "../tasks/errors.js";
 import { DeviceAuthError } from "./errors.js";
 
 export const authErrorResponseSchema = z.object({
@@ -13,11 +13,18 @@ export const authErrorResponses = {
   404: authErrorResponseSchema,
   409: authErrorResponseSchema,
   410: authErrorResponseSchema,
+  422: authErrorResponseSchema,
 } as const;
 
 export function registerDeviceAuthErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof DeviceAuthError) {
+      return reply.code(error.statusCode).send({
+        code: error.code,
+        message: error.message,
+      });
+    }
+    if (error instanceof TaskError) {
       return reply.code(error.statusCode).send({
         code: error.code,
         message: error.message,

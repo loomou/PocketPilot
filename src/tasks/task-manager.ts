@@ -134,6 +134,10 @@ export class TaskManager {
     return this.#repository.list();
   }
 
+  public supportedPermissionModes(): readonly PermissionMode[] {
+    return this.#supportedPermissionModes;
+  }
+
   public getTask(taskId: string): TaskSnapshot {
     this.assertTaskId(taskId);
     return this.requireTask(taskId);

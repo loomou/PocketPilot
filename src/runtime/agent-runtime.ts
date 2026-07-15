@@ -156,6 +156,9 @@ export class AgentRuntime {
       ...(this.taskEventJournal === undefined
         ? {}
         : { eventJournal: this.taskEventJournal }),
+      ...(this.taskManager === undefined
+        ? {}
+        : { taskManager: this.taskManager }),
     });
 
     await this.localAdminApp.listen({

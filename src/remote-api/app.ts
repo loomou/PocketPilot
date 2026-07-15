@@ -6,12 +6,15 @@ import { registerRemoteDeviceAuthRoutes } from "../auth/remote-routes.js";
 import { createHttpApp } from "../http/create-http-app.js";
 import { registerHealthRoute } from "../http/health.js";
 import type { TaskEventJournal } from "../tasks/task-event-journal.js";
+import type { TaskManager } from "../tasks/task-manager.js";
 import { registerTaskEventRoutes } from "./task-event-routes.js";
+import { registerTaskRoutes } from "./task-routes.js";
 
 export type RemoteApiAppOptions = {
   connectionRegistry?: InMemoryDeviceConnectionRegistry;
   deviceAuthService?: DeviceAuthService;
   eventJournal?: TaskEventJournal;
+  taskManager?: TaskManager;
 };
 
 /**
@@ -28,6 +31,12 @@ export async function buildRemoteApiApp(
   registerHealthRoute(app);
   if (options.deviceAuthService !== undefined) {
     registerRemoteDeviceAuthRoutes(app, options.deviceAuthService);
+    if (options.taskManager !== undefined) {
+      registerTaskRoutes(app, {
+        deviceAuthService: options.deviceAuthService,
+        taskManager: options.taskManager,
+      });
+    }
   }
   if (
     options.connectionRegistry !== undefined &&

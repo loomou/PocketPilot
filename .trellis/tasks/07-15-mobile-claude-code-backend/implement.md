@@ -147,6 +147,13 @@
   `/v1/events` WebSocket subscription surface and registers its sockets with
   the existing device-revocation registry.
 
+## Versioned Mobile API Record (2026-07-16)
+
+- Added authenticated `/v1` task capability, list/detail, creation,
+  instruction, approval, interrupt, close, resume, model, and permission-mode
+  HTTP controls. Fastify Zod contracts delegate all state decisions to
+  `TaskManager`; `TaskError` returns stable HTTP-safe error payloads.
+
 6. **Implement task runtime and state machine**
    - Build per-task serialized control lanes and independent SDK lifecycles.
    - Enforce capacity only for executing/awaiting-approval tasks; enforce start-directory allowlist and per-task risk acknowledgement.
