@@ -50,6 +50,6 @@
     "vitest": "4.1.10"
   },
   "lint-staged": {
-    "*.{js,mjs,cjs,ts,tsx,json,jsonc}": "biome check --write"
+    "*.{js,mjs,cjs,ts,tsx,json,jsonc}": "biome check --write --no-errors-on-unmatched"
   }
 }
