@@ -137,6 +137,16 @@
   its opening options; later task changes use SDK control methods under the
   state-machine rules.
 
+## Event Delivery and Replay Record (2026-07-16)
+
+- Added a task-scoped event journal with monotonic cursors, live subscribers,
+  active-turn memory retention, AES-256-GCM-encrypted SQLite overflow, a
+  256 MiB replay cap notification, and mandatory cleanup when a turn ends.
+- Task lifecycle, SDK, and approval events enter the journal without creating
+  an Agent-owned transcript. The remote listener now exposes the authenticated
+  `/v1/events` WebSocket subscription surface and registers its sockets with
+  the existing device-revocation registry.
+
 6. **Implement task runtime and state machine**
    - Build per-task serialized control lanes and independent SDK lifecycles.
    - Enforce capacity only for executing/awaiting-approval tasks; enforce start-directory allowlist and per-task risk acknowledgement.

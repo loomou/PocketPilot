@@ -19,6 +19,7 @@ import type { StorageDatabase } from "../storage/database.js";
 import type { SettingsRepository } from "../storage/settings-repository.js";
 import { TaskError } from "./errors.js";
 import { readTaskRuntimeSettings } from "./settings.js";
+import type { TaskEventSink } from "./task-events.js";
 import { TaskRepository } from "./task-repository.js";
 import type {
   TaskOperationAction,
@@ -67,6 +68,7 @@ export type TaskSdkSessionFactory = (
 
 export type TaskManagerOptions = {
   createSession?: TaskSdkSessionFactory;
+  eventSink?: TaskEventSink;
   now?: () => number;
   pathResolver?: TaskPathResolver;
   settingsRepository: SettingsRepository;
@@ -98,6 +100,7 @@ type OperationExecution = {
 export class TaskManager {
   readonly #capacityLane = new SerialExecutor();
   readonly #createSession: TaskSdkSessionFactory;
+  readonly #eventSink: TaskEventSink | undefined;
   readonly #inFlightOperations = new Map<
     string,
     Promise<TaskOperationResult>
@@ -113,6 +116,7 @@ export class TaskManager {
 
   public constructor(options: TaskManagerOptions) {
     this.#createSession = options.createSession ?? openClaudeSdkSession;
+    this.#eventSink = options.eventSink;
     this.#now = options.now ?? Date.now;
     this.#pathResolver = options.pathResolver ?? nodeTaskPathResolver;
     this.#repository = new TaskRepository(options.sqlite);
@@ -223,17 +227,21 @@ export class TaskManager {
           }
 
           const session = this.ensureSession(task);
+          this.#eventSink?.beginTurn(task.id);
           const executing = this.#repository.update(task.id, {
             state: "executing",
             updatedAt: this.#now(),
           });
           try {
             session.submit(createSdkUserMessage(input.instruction));
+            this.publishTaskState(executing);
           } catch (error) {
-            this.#repository.update(task.id, {
+            const idle = this.#repository.update(task.id, {
               state: "idle",
               updatedAt: this.#now(),
             });
+            this.publishTaskState(idle);
+            this.#eventSink?.endTurn(task.id);
             throw error;
           }
           return {
@@ -279,6 +287,8 @@ export class TaskManager {
               state: "idle",
               updatedAt: this.#now(),
             });
+      this.publishTaskState(updated);
+      this.#eventSink?.endTurn(task.id);
       return {
         action: "interrupted",
         auditResult: current.state === "idle" ? "already-idle" : "interrupted",
@@ -307,6 +317,8 @@ export class TaskManager {
         terminalAt: this.#now(),
         updatedAt: this.#now(),
       });
+      this.publishTaskState(terminal);
+      this.#eventSink?.endTurn(task.id);
       const interrupt = this.interruptSession(liveTask.session);
       this.closeSession(liveTask.session);
       await Promise.allSettled(interrupt === undefined ? [] : [interrupt]);
@@ -392,6 +404,7 @@ export class TaskManager {
           state: "executing",
           updatedAt: this.#now(),
         });
+        this.publishTaskState(executing);
         return {
           action:
             input.decision === "approve"
@@ -510,9 +523,10 @@ export class TaskManager {
     this.#shuttingDown = true;
 
     const interruptions: Promise<unknown>[] = [];
-    for (const liveTask of this.#liveTasks.values()) {
+    for (const [taskId, liveTask] of this.#liveTasks) {
       liveTask.closed = true;
       this.cancelPendingApproval(liveTask, "The Agent is shutting down.");
+      this.#eventSink?.endTurn(taskId);
       if (liveTask.session !== undefined) {
         const interrupt = this.interruptSession(liveTask.session);
         if (interrupt !== undefined) {
@@ -574,10 +588,12 @@ export class TaskManager {
 
     const liveTask = this.liveTask(taskId);
     this.cancelPendingApproval(liveTask, "The Claude turn has already ended.");
-    this.#repository.update(taskId, {
+    const idle = this.#repository.update(taskId, {
       state: "idle",
       updatedAt: this.#now(),
     });
+    this.publishTaskState(idle);
+    this.#eventSink?.endTurn(taskId);
   }
 
   private consumeSessionEvents(
@@ -588,6 +604,7 @@ export class TaskManager {
       try {
         for await (const event of session.events()) {
           this.persistSessionId(taskId, session);
+          this.#eventSink?.publish(taskId, { kind: "sdk", payload: event });
           if (
             event.kind === "turn.result" ||
             (event.kind === "session.state-changed" &&
@@ -766,9 +783,20 @@ export class TaskManager {
       approval,
       approvalId: approval.requestId,
     };
-    this.#repository.update(taskId, {
+    const awaitingApproval = this.#repository.update(taskId, {
       state: "awaiting_approval",
       updatedAt: this.#now(),
+    });
+    this.publishTaskState(awaitingApproval);
+    this.#eventSink?.publish(taskId, {
+      kind: "approval.requested",
+      payload: {
+        approvalId: approval.requestId,
+        description: approval.description,
+        displayName: approval.displayName,
+        title: approval.title,
+        toolName: approval.toolName,
+      },
     });
   }
 
@@ -826,6 +854,13 @@ export class TaskManager {
         "The task is closed and cannot accept further control operations.",
       );
     }
+  }
+
+  private publishTaskState(task: TaskSnapshot): void {
+    this.#eventSink?.publish(task.id, {
+      kind: "task.state",
+      payload: { state: task.state },
+    });
   }
 
   private interruptSession(

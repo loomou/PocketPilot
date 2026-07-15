@@ -15,6 +15,7 @@ import {
 } from "../storage/maintenance.js";
 import { readAgentMasterKey } from "../storage/master-key.js";
 import { SettingsRepository } from "../storage/settings-repository.js";
+import { TaskEventJournal } from "../tasks/task-event-journal.js";
 import { TaskManager } from "../tasks/task-manager.js";
 import {
   removeRuntimeControlState,
@@ -64,6 +65,7 @@ export class AgentRuntime {
   private stoppedResolver: (() => void) | undefined;
   private readonly stoppedPromise: Promise<void>;
   private taskManager: TaskManager | undefined;
+  private taskEventJournal: TaskEventJournal | undefined;
   private runtimeStarted = false;
 
   public constructor(private readonly options: AgentRuntimeOptions) {
@@ -91,7 +93,12 @@ export class AgentRuntime {
         settingsRepository,
         sqlite: this.storage.sqlite,
       });
+      this.taskEventJournal = new TaskEventJournal({
+        masterKey: this.masterKey,
+        sqlite: this.storage.sqlite,
+      });
       this.taskManager = new TaskManager({
+        eventSink: this.taskEventJournal,
         settingsRepository,
         sqlite: this.storage.database,
       });
@@ -143,7 +150,13 @@ export class AgentRuntime {
       },
       shutdownControlToken,
     });
-    this.remoteApiApp = await buildRemoteApiApp({ deviceAuthService });
+    this.remoteApiApp = await buildRemoteApiApp({
+      connectionRegistry: this.deviceConnectionRegistry,
+      deviceAuthService,
+      ...(this.taskEventJournal === undefined
+        ? {}
+        : { eventJournal: this.taskEventJournal }),
+    });
 
     await this.localAdminApp.listen({
       host: LOCAL_ADMIN_HOST,
@@ -220,6 +233,7 @@ export class AgentRuntime {
       this.masterKey = undefined;
       this.deviceAuthService = undefined;
       this.taskManager = undefined;
+      this.taskEventJournal = undefined;
       this.runtimeStarted = false;
       await removeRuntimeControlState(
         this.controlStatePath,

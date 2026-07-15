@@ -72,6 +72,12 @@ three and no workspace root is authorized by default.
   Existing idle rows remain idle. Manual `TaskManager.shutdown()` cancels all
   live SDK/approval resources and marks every non-terminal row terminal before
   storage closes.
+- `TaskEventJournal` assigns monotonic in-memory task cursors, sends each
+  event to current subscribers, and retains only the active turn. It keeps a
+  small memory prefix, encrypts later `event_overflow` rows with the existing
+  record-specific AES-GCM context, and deletes both stores at turn end.
+  At 256 MiB it sends `EVENT_REPLAY_STORAGE_LIMIT_REACHED` live and stops
+  retaining later events without stopping the task.
 
 ### 4. Validation & Error Matrix
 
@@ -86,6 +92,7 @@ three and no workspace root is authorized by default.
 | Approval ID is no longer pending | `STALE_APPROVAL`; never resolve the SDK callback. |
 | Close or any later control against terminal state | `TASK_TERMINAL`; no SDK work restarts. |
 | Resume has no persisted SDK session reference | `TASK_SESSION_UNAVAILABLE`; do not invent a new transcript. |
+| Replay buffer reaches its per-task budget | Send `EVENT_REPLAY_STORAGE_LIMIT_REACHED` live; retain no later replay data. |
 
 ### 5. Good / Base / Bad Cases
 
@@ -110,6 +117,8 @@ three and no workspace root is authorized by default.
 - Unit-test active-state recovery, resume-option forwarding without a replayed
   message, close priority, and manual runtime shutdown turning idle and active
   rows terminal.
+- Unit-test memory replay ordering, encrypted SQLite overflow round-trip,
+  cap notification/live delivery, and cleanup after idle or terminal state.
 
 ### 7. Wrong vs Correct
 
