@@ -10,18 +10,22 @@ path into the Node Agent source.
 apps/local-admin/
 ├── components.json     # shadcn registry and alias configuration
 ├── src/
-│   ├── App.tsx         # Root static configuration shell
+│   ├── App.tsx         # Root composition only
+│   ├── api/            # Zod-decoded localhost API boundary
 │   ├── main.tsx        # React mount boundary
 │   ├── styles.css      # Tailwind entry stylesheet
 │   ├── components/ui/  # Reusable shadcn-style primitives
+│   ├── features/       # Stateful administration features
 │   └── lib/            # UI-only utilities
 └── test/               # Component-level Vitest tests
 ```
 
 ## Module Rules
 
-- Keep `App.tsx` as composition only. Move a functional configuration area into
-  a named feature directory once it has API contracts and state.
+- Keep `App.tsx` as composition only. Functional configuration state and
+  behavior belong in `features/administration`.
+- Keep HTTP paths, Zod response schemas, error translation, and CSRF write
+  helpers in `api/local-admin.ts`; components consume typed results only.
 - Place shadcn-derived primitives under `src/components/ui/`; keep application
   components out of that directory.
 - Keep browser-only values and local API clients out of `main.tsx`. The mount

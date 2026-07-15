@@ -1,51 +1,28 @@
 # State Management
 
-> How state is managed in this project.
-
----
-
-## Overview
-
-<!--
-Document your project's state management conventions here.
-
-Questions to answer:
-- What state management solution do you use?
-- How is local vs global state decided?
-- How do you handle server state?
-- What are the patterns for derived state?
--->
-
-(To be filled by the team)
-
----
-
 ## State Categories
 
-<!-- Local state, global state, server state, URL state -->
-
-(To be filled by the team)
-
----
-
-## When to Use Global State
-
-<!-- Criteria for promoting state to global -->
-
-(To be filled by the team)
-
----
+- `LocalAdminSnapshot` is the current validated server snapshot: status,
+  settings, pending pairings, devices, audits, and the runtime CSRF token.
+- Form edits are local immutable updates to the configuration inside that
+  snapshot and become server state only after Save succeeds.
+- Busy action, notice, approval-code inputs, and the generated QR image are
+  transient UI state. They are not persisted or promoted to a global store.
 
 ## Server State
 
-<!-- How server data is cached and synchronized -->
+The local page has one feature and one server, so React state plus explicit
+refresh is sufficient. Add a caching library only when invalidation,
+background synchronization, or multiple page consumers create demonstrated
+complexity.
 
-(To be filled by the team)
-
----
+After a mutation, keep the successful result/notice and refresh the collections
+that another device or the Agent may have changed. Never treat browser state as
+the authority for device revocation or pending-pairing status.
 
 ## Common Mistakes
 
-<!-- State management mistakes your team has made -->
-
-(To be filled by the team)
+- Do not store the CSRF token in local storage; keep it in the in-memory runtime
+  snapshot.
+- Do not persist the QR or pairing payload in browser storage.
+- Do not create a global store for form fields that have one page owner.

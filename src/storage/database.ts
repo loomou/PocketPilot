@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,7 +12,12 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { storageSchema } from "./schema.js";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
-const defaultMigrationsFolder = resolve(sourceDirectory, "../../drizzle");
+const packagedMigrationsFolder = resolve(sourceDirectory, "drizzle");
+const defaultMigrationsFolder = existsSync(
+  resolve(packagedMigrationsFolder, "meta/_journal.json"),
+)
+  ? packagedMigrationsFolder
+  : resolve(sourceDirectory, "../../drizzle");
 
 export type StorageDatabase = BetterSQLite3Database<typeof storageSchema>;
 

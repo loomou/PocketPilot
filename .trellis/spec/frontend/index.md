@@ -14,11 +14,11 @@ This directory records conventions for the local-only PocketPilot configuration 
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Scaffold Contracts](./scaffold-contracts.md) | Early local-admin boundary and static UI contract | Established |
+| [Local Admin Application Contracts](./scaffold-contracts.md) | Browser API, configuration, pairing, device, and audit UI contract | Established |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | Established |
 | [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | Established |
-| [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | Deferred until local APIs exist |
-| [State Management](./state-management.md) | Local state, global state, server state | Deferred until configuration data exists |
+| [Hook Guidelines](./hook-guidelines.md) | Effect, callback, and data-fetching patterns | Established |
+| [State Management](./state-management.md) | Local form, server snapshot, and transient action state | Established |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Established |
 | [Type Safety](./type-safety.md) | Type patterns, validation | Established |
 
@@ -28,8 +28,8 @@ This directory records conventions for the local-only PocketPilot configuration 
 
 Before editing `apps/local-admin`, read `scaffold-contracts.md`,
 `directory-structure.md`, `component-guidelines.md`, `quality-guidelines.md`,
-and `type-safety.md`. Do not add local API clients or configuration state until
-the localhost-only backend listener is implemented.
+and `type-safety.md`. Functional page changes must also read
+`hook-guidelines.md` and `state-management.md`.
 
 ---
 

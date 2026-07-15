@@ -24,6 +24,7 @@ This directory records the conventions for the PocketPilot TypeScript Agent.
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Established |
 | [Task Runtime Contracts](./task-runtime-contracts.md) | Persistent task lifecycle, control priority, workspace policy, and recovery | Established |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | Established |
+| [Local Administration Contracts](./local-admin-contracts.md) | Local configuration APIs, static assets, audits, and isolation | Established |
 
 ---
 
@@ -35,8 +36,9 @@ When modifying Claude Agent SDK integration, also read
 `claude-sdk-contracts.md`; when modifying storage or encrypted Agent data, also
 read `database-guidelines.md`. When modifying listener setup, start/stop, or
 local-admin HTTP boundaries, also read `process-runtime-contracts.md` and
-`logging-guidelines.md`. When modifying pairing, credentials, remote auth, or
-device-bound WebSockets, also read `device-auth-contracts.md`.
+`logging-guidelines.md` plus `local-admin-contracts.md`. When modifying pairing,
+credentials, remote auth, or device-bound WebSockets, also read
+`device-auth-contracts.md`.
 When modifying task state, SDK task lifecycles, workspace policy, capacity,
 idempotency, or task recovery, also read `task-runtime-contracts.md`.
 

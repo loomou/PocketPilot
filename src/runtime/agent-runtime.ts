@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DeviceAuthService } from "../auth/device-auth-service.js";
 import { InMemoryDeviceConnectionRegistry } from "../auth/device-connection-registry.js";
 import {
@@ -130,6 +132,10 @@ export class AgentRuntime {
     settings: RuntimeSettings,
     deviceAuthService: DeviceAuthService,
   ): Promise<void> {
+    const storage = this.storage;
+    if (storage === undefined) {
+      throw new Error("Storage must be open before listeners start.");
+    }
     const csrfToken = createControlToken();
     const shutdownControlToken = createControlToken();
     this.shutdownControlToken = shutdownControlToken;
@@ -142,6 +148,8 @@ export class AgentRuntime {
         token: csrfToken,
       },
       deviceAuthService,
+      settingsRepository: new SettingsRepository(storage.database),
+      staticRoot: resolveLocalAdminStaticRoot(),
       getStatus: () => this.currentStatus(settings),
       requestShutdown: () => {
         setTimeout(() => {
@@ -149,6 +157,7 @@ export class AgentRuntime {
         }, 0);
       },
       shutdownControlToken,
+      sqlite: storage.sqlite,
     });
     this.remoteApiApp = await buildRemoteApiApp({
       connectionRegistry: this.deviceConnectionRegistry,
@@ -251,6 +260,14 @@ export class AgentRuntime {
 
 function createControlToken(): string {
   return randomBytes(32).toString("base64url");
+}
+
+function resolveLocalAdminStaticRoot(): string {
+  const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+  const packagedRoot = join(moduleDirectory, "local-admin");
+  return existsSync(packagedRoot)
+    ? packagedRoot
+    : join(process.cwd(), "dist", "local-admin");
 }
 
 function listenerAddress(address: string | AddressInfo | null): BoundListener {

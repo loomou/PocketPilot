@@ -16,7 +16,8 @@
   primary accessible output.
 - Shared controls need tests for externally observable state, such as the
   native disabled state of the scaffold button.
-- Before the local API exists, tests must not mock invented HTTP endpoints.
+- Mock only endpoints defined by the local-admin backend contract, and keep
+  response fixtures valid under the browser Zod schemas.
 
 ## Forbidden Patterns
 
@@ -24,4 +25,5 @@
   remote listener.
 - Do not introduce a second formatter, nested Biome root configuration, or CSS
   framework beside Tailwind.
-- Do not make a placeholder configuration action appear to persist data.
+- Do not claim a mutation succeeded until its validated local API response is
+  received.

@@ -154,6 +154,28 @@
   HTTP controls. Fastify Zod contracts delegate all state decisions to
   `TaskManager`; `TaskError` returns stable HTTP-safe error payloads.
 
+## Local Administration Record (2026-07-16)
+
+- Added localhost-only runtime/task configuration and metadata-only audit
+  routes behind the existing same-origin CSRF guard. Existing pairing approval
+  and device revocation routes remain the only local security mutations.
+- Replaced the placeholder page with a typed React administration surface for
+  Agent status, base URL/listener settings, workspace roots, concurrency, QR
+  pairing, pending approval, paired-device revocation, audits, and stopped-only
+  rekey/reset guidance. It includes no task, Claude credential, or process
+  controls.
+- Browser HTTP responses are decoded from `unknown` by one Zod API module;
+  configuration writes carry the runtime CSRF token. QR SVGs encode the exact
+  server-returned pairing payload.
+- Vite emits into `dist/local-admin`, and the build copies Drizzle migrations
+  into `dist/drizzle`. The bundled CLI resolves both beside `dist/cli.js`, so
+  the published package contains the page and fresh-install migration journal
+  without depending on the launch working directory.
+- Tests cover defaults, CSRF rejection, persisted settings, metadata-only
+  audits, loaded UI data, CSRF write headers, local static serving, and remote
+  404 isolation. A built-CLI smoke test confirmed local page/status delivery,
+  remote admin 404, coordinated `agent stop`, and fresh storage migration.
+
 6. **Implement task runtime and state machine**
    - Build per-task serialized control lanes and independent SDK lifecycles.
    - Enforce capacity only for executing/awaiting-approval tasks; enforce start-directory allowlist and per-task risk acknowledgement.

@@ -1,66 +1,86 @@
-# Local Admin Scaffold Contracts
+# Local Admin Application Contracts
 
 ## 1. Scope / Trigger
 
-The early React/Vite/shadcn scaffold lets the configuration UI evolve without
-blocking the core Agent. It intentionally precedes the functional local-admin
-page and must not create a second control surface before the secure runtime.
+Apply this contract when changing the React/Vite localhost configuration page
+or its browser API client. The page is an operational surface for one local
+Agent and is not a second mobile/task control application.
 
 ## 2. Signatures
 
-- `App(): JSX.Element` in `apps/local-admin/src/App.tsx`
-- `Button(props: ButtonProps): JSX.Element` in
-  `apps/local-admin/src/components/ui/button.tsx`
-- Workspace commands: `pnpm dev:admin` and `pnpm build:admin`
+- `App(): JSX.Element` composes `AdministrationPage`.
+- `loadLocalAdminSnapshot(): Promise<LocalAdminSnapshot>` owns initial reads.
+- Browser mutations: `saveRuntimeSettings`, `saveTaskSettings`,
+  `createPairing`, `approvePairing`, and `revokeDevice`.
+- Workspace commands: `pnpm dev:admin` and `pnpm build:admin`.
 
 ## 3. Contracts
 
-- The UI is a separate Vite workspace under `apps/local-admin`.
-- The displayed configuration areas are static placeholders; no fetch, storage,
-  task control, Claude credential, or configuration mutation exists.
-- The future deployed bundle is served only by the separate localhost Fastify
-  listener. Vite development is never a remote Agent endpoint.
+- `src/api/local-admin.ts` is the single owner of `/admin/*` payload schemas.
+  Every `response.json()` value is `unknown` until a Zod schema accepts it.
+- Initial load obtains CSRF, configuration, status, pending pairings, devices,
+  and audits. Writes include `x-pocketpilot-csrf-token`; configuration writes
+  use JSON request bodies.
+- The page exposes Agent status, listener/base URL settings, workspace roots,
+  concurrency, QR generation, pairing approval, device revocation, audit
+  metadata, and terminal-only rekey/reset guidance.
+- QR rendering encodes the complete server-returned `qrPayload` as JSON. The
+  UI never invents an Agent ID, pairing ID, base URL, or expiry.
+- `App.tsx` remains composition-only. Stateful application behavior lives in
+  `features/administration`; shadcn-style primitives remain under
+  `components/ui`.
+- The page never calls `/v1`, starts/stops the Agent, controls a Claude task, or
+  reads/writes Claude credentials and configuration.
+- Vite emits production assets to `dist/local-admin`, which is part of the
+  root package's published `dist` tree.
 
 ## 4. Validation & Error Matrix
 
-| Condition | Result |
+| Condition | UI behavior |
 | --- | --- |
-| `pnpm build:admin` | Vite produces a static production bundle |
-| Rendering `App` | Heading and four placeholder areas are visible |
-| "Agent unavailable" action | Native disabled button; no side effect |
-| Attempted remote/API integration | Out of scope until local API contracts exist |
+| A successful response fails its Zod schema | Show the stable invalid-response error; do not place payload data in state. |
+| A local API returns `{ code, message }` with non-2xx status | Show its safe message and keep current state. |
+| Initial load fails | Keep the page shell visible and show an error notice. |
+| Configuration save succeeds | Update the typed snapshot and state that listener changes apply on next start. |
+| Pairing approval code is not six digits | Keep the Approve action disabled. |
+| Device is already revoked | Show revoked state and no revoke action. |
 
 ## 5. Good / Base / Bad Cases
 
-- Good: add a visual primitive under `components/ui/` and compose it in a
-  feature or root component.
-- Base: static copy describes an unavailable setting without pretending it was
-  saved.
-- Bad: add `fetch("/v1/...")` or mobile task controls to this scaffold.
+- Good: one API decoder validates server data, the feature consumes inferred
+  types, and a save sends the current typed settings with the CSRF token.
+- Base: empty pending/device/audit arrays render explicit empty rows while the
+  configuration form stays usable.
+- Bad: casting `await response.json()` to a component-local interface,
+  constructing a QR from partial fields, or adding mobile task operations to
+  the localhost page.
 
 ## 6. Tests Required
 
-- `test/App.test.tsx` checks the accessible title and disabled Agent action.
-- New static component behavior receives an accessible Testing Library
-  assertion.
-- Any local API feature added later must include API-boundary tests before UI
-  persistence is claimed.
+- Testing Library renders loaded configuration values plus pairing, device,
+  status, and audit sections from mocked local API responses.
+- Save behavior asserts both PUT requests contain the fetched CSRF token and
+  JSON content type.
+- Backend/static integration separately proves the bundle is never served by
+  the remote listener; a component test cannot establish listener isolation.
+- Root lint, type-check, test, and production build include the workspace.
 
 ## 7. Wrong vs Correct
 
 ### Wrong
 
-```tsx
-await fetch("/v1/tasks", { method: "POST" });
+```ts
+const configuration = (await response.json()) as Configuration;
 ```
 
-The remote task API is not the local-admin contract and does not exist yet.
+The component trusts unknown HTTP data and privately redefines the server
+contract.
 
 ### Correct
 
-```tsx
-<Button disabled type="button">Agent unavailable</Button>
+```ts
+const payload: unknown = await response.json();
+const configuration = configurationSchema.parse(payload);
 ```
 
-The scaffold stays honest about unavailable functionality until the local
-listener and authenticated configuration APIs are implemented.
+The API boundary validates once and exports the inferred type to the feature.

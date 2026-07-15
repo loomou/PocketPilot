@@ -25,8 +25,9 @@
 - Disabled scaffold actions must be visibly disabled and use the native
   `disabled` attribute; do not simulate disabled behavior with a click guard.
 
-## Current Boundary
+## Application Boundary
 
-The scaffold presents placeholders only. Components must not add fetch calls,
-task controls, Claude configuration, or persistent client state until the
-localhost-only API contract exists.
+Keep API calls in `src/api`, stateful local administration behavior in the
+named feature, and `App.tsx` as composition only. The page must not add task
+controls, process start/stop actions, Claude configuration, or credential
+inputs.

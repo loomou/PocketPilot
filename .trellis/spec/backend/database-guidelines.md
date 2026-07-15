@@ -31,6 +31,10 @@ live in `drizzle/`. Runtime migration uses
   for schema/query ownership. `openStorage` enables `foreign_keys` and WAL.
 - Generate schema changes with `pnpm exec drizzle-kit generate`; commit the
   schema, SQL migration, and Drizzle metadata in the same change.
+- `pnpm build` copies the complete `drizzle/` tree to `dist/drizzle`. A bundled
+  CLI resolves that same-directory copy; source execution falls back to the
+  repository `drizzle/` tree. The published package must contain SQL files,
+  snapshots, and `meta/_journal.json` together.
 - `AGENT_MASTER_KEY` is required only at secure runtime startup. It is exactly
   32 bytes represented as unpadded base64url (43 characters); reject missing,
   malformed, and non-32-byte values. Generate one with:
@@ -72,6 +76,7 @@ live in `drizzle/`. Runtime migration uses
 | A rekeyed row cannot be parsed or authenticated | Throw and roll back every prior row update in that rekey transaction. |
 | Reset confirmation differs from `RESET_AGENT_DATA` | `StorageResetConfirmationError`; make no changes. |
 | Stored setting JSON is invalid or fails its Zod schema | `StorageDataError`; do not return the value. |
+| Packaged migration journal is absent | Startup fails before binding listeners; release validation must reject the package. |
 
 ### 5. Good / Base / Bad Cases
 
@@ -87,6 +92,9 @@ live in `drizzle/`. Runtime migration uses
 
 - Native SQLite smoke test opens a migrated file under Node 24 and confirms
   `foreign_keys` is enabled.
+- Package inspection proves `dist/drizzle/meta/_journal.json` and every
+  generated SQL migration ship with the built CLI. A fresh-storage built-CLI
+  smoke test must complete migrations before listener startup.
 - Settings test proves valid Zod data round-trips and corrupt JSON/schema data
   throws `StorageDataError`.
 - Crypto test covers valid round-trip, altered ciphertext/tag, wrong context,

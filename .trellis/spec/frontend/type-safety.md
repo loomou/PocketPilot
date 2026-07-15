@@ -17,6 +17,7 @@ adding feature-level configuration.
 
 ## Runtime Data Boundary
 
-There is no local API client yet. When configuration data is introduced, decode
-unknown HTTP data at the client boundary with a shared Zod schema; components
-must not cast JSON with `as` or use `any`.
+`src/api/local-admin.ts` decodes unknown HTTP data with Zod and exports inferred
+types. Components must not cast JSON with `as`, duplicate response interfaces,
+or use `any`. API errors also pass through a validated `{ code, message }`
+schema before their message reaches the page.

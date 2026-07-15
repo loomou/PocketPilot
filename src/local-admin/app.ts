@@ -1,11 +1,15 @@
+import { existsSync } from "node:fs";
+import fastifyStatic from "@fastify/static";
+import type BetterSqlite3 from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
-
 import type { DeviceAuthService } from "../auth/device-auth-service.js";
 import { registerLocalDeviceAuthRoutes } from "../auth/local-admin-routes.js";
 import { createHttpApp } from "../http/create-http-app.js";
 import { registerHealthRoute } from "../http/health.js";
+import type { SettingsRepository } from "../storage/settings-repository.js";
+import { registerConfigurationRoutes } from "./configuration-routes.js";
 import {
   hasValidLocalAdminCsrfToken,
   isUnsafeHttpMethod,
@@ -45,9 +49,12 @@ export type LocalAdminStatus = z.infer<typeof localAdminStatusSchema>;
 export type LocalAdminAppOptions = {
   csrfProtection: LocalAdminCsrfProtection;
   deviceAuthService?: DeviceAuthService;
+  settingsRepository?: SettingsRepository;
+  sqlite?: BetterSqlite3.Database;
   getStatus(): LocalAdminStatus;
   requestShutdown(): void;
   shutdownControlToken: string;
+  staticRoot?: string;
 };
 
 /**
@@ -58,6 +65,9 @@ export async function buildLocalAdminApp(
   options: LocalAdminAppOptions,
 ): Promise<FastifyInstance> {
   const app = await createHttpApp();
+  if (options.staticRoot !== undefined && existsSync(options.staticRoot)) {
+    await app.register(fastifyStatic, { root: options.staticRoot });
+  }
   registerHealthRoute(app);
 
   app.addHook("onRequest", async (request, reply) => {
@@ -130,6 +140,15 @@ export async function buildLocalAdminApp(
 
   if (options.deviceAuthService !== undefined) {
     registerLocalDeviceAuthRoutes(app, options.deviceAuthService);
+  }
+  if (
+    options.settingsRepository !== undefined &&
+    options.sqlite !== undefined
+  ) {
+    registerConfigurationRoutes(app, {
+      settingsRepository: options.settingsRepository,
+      sqlite: options.sqlite,
+    });
   }
 
   return app;
