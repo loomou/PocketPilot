@@ -11,6 +11,9 @@ on the remote mobile listener.
 
 ```ts
 buildLocalAdminApp(options): Promise<FastifyInstance>;
+GET /documentation/;
+GET /documentation/json;
+GET /documentation/yaml;
 registerConfigurationRoutes(app, { settingsRepository, sqlite }): void;
 GET /admin/configuration;
 PUT /admin/configuration/runtime;
@@ -40,6 +43,10 @@ Pairing and device administration retain their existing local routes:
 - Built assets live under `dist/local-admin` and are registered only by
   `buildLocalAdminApp`. `buildRemoteApiApp` serves neither these assets nor any
   `/admin/*` route.
+- When supplied a generated mobile OpenAPI document, the local app serves
+  Swagger UI plus raw JSON/YAML below `/documentation`. Those routes document
+  the remote `/v1` contract but remain local-only and disable interactive
+  request execution by default.
 - The surface has no task controls, Claude credential/configuration editor, or
   Agent start/stop action. Rekey/reset are guidance for stopped-terminal use.
 
@@ -53,6 +60,7 @@ Pairing and device administration retain their existing local routes:
 | Audit table is empty | HTTP 200 with `[]`. |
 | Static build directory is absent | Local APIs still start; no static route is registered. |
 | Remote request targets `/admin/*` or the local page | HTTP 404. |
+| Remote request targets `/documentation/*` | HTTP 404. |
 
 ## 5. Good / Base / Bad Cases
 
@@ -72,6 +80,8 @@ Pairing and device administration retain their existing local routes:
   are 404.
 - Static-app injection proves a local `index.html` is served when the build
   directory exists.
+- Local/remote injection proves Swagger UI and raw documents are local-only and
+  coexist with the React static root.
 - A built CLI smoke test starts with fresh storage, returns the local page and
   status, returns remote 404 for `/admin/status`, and shuts down through
   `agent stop`.

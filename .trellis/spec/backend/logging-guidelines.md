@@ -30,6 +30,8 @@ content.
 
 - `AGENT_MASTER_KEY`, encryption envelopes, refresh/access credentials,
   runtime-control tokens, CSRF tokens, pairing secrets, or device proofs.
+- Dotenv file contents, parsed dotenv maps, secret-bearing source lines, or
+  rejected environment values.
 - Prompts, assistant output, tool input/output, Claude configuration, API keys,
   or raw HTTP authorization headers.
 - Full persisted setting JSON, because later settings may gain sensitive fields.

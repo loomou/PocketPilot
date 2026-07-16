@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { CommanderError } from "commander";
 
-import { createProgram } from "./cli/program.js";
+import { createProgram, createProgramActions } from "./cli/program.js";
+import { loadPocketPilotEnvironment } from "./config/environment.js";
+import { EnvironmentConfigurationError } from "./config/errors.js";
 import {
   AgentMaintenanceError,
   RuntimeControlError,
@@ -13,13 +15,14 @@ import {
   StorageResetConfirmationError,
 } from "./storage/errors.js";
 
-const program = createProgram();
-
 try {
+  const environment = loadPocketPilotEnvironment();
+  const program = createProgram(createProgramActions(environment));
   await program.parseAsync();
 } catch (error: unknown) {
   if (
     error instanceof AgentMaintenanceError ||
+    error instanceof EnvironmentConfigurationError ||
     error instanceof MasterKeyError ||
     error instanceof RuntimeControlError ||
     error instanceof StorageCryptoError ||

@@ -5,10 +5,12 @@
 ```text
 src/
 ├── app.ts       # Unbound Fastify application composition
+├── api-docs/                  # Mobile OpenAPI factory and build entry
 ├── auth/                     # Pairing, device proof, credentials, revocation
 ├── cli.ts       # Executable boundary and top-level exit handling
 ├── cli/
 │   └── program.ts            # Commander command registration and dispatch
+├── config/                    # Allowlisted dotenv loading and typed readers
 ├── http/                     # Shared unbound Fastify setup and health route
 ├── local-admin/              # Local-only app factory and CSRF guard
 ├── remote-api/               # Remote-only HTTP/WebSocket application factory
@@ -26,6 +28,11 @@ test/
   listener. `src/runtime/` owns listener binding and process lifecycle.
 - Keep command parsing in `src/cli/`. `src/cli.ts` only creates the program,
   invokes it, and translates known command errors into exit codes.
+- Keep bootstrap file loading, environment allowlists, and typed environment
+  readers in `src/config/`; command/runtime modules consume the validated
+  snapshot instead of reading dotenv independently.
+- Keep reusable OpenAPI composition and its side-effect-free build entry in
+  `src/api-docs/`. Route modules continue to own executable Zod schemas.
 - Add future domain layers below `src/` by ownership (`auth/`, `storage/`,
   `tasks/`, `remote-api/`, `local-admin/`) rather than by generic file type.
 - Keep listener binding, runtime-control state, signal handling, and foreground

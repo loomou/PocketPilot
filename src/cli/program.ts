@@ -20,15 +20,19 @@ export type ProgramActions = {
   stop(): Promise<void> | void;
 };
 
-const defaultProgramActions: ProgramActions = {
-  rekey: runRekeyCommand,
-  reset: runResetCommand,
-  start: runStartCommand,
-  stop: runStopCommand,
-};
+export function createProgramActions(
+  environment: NodeJS.ProcessEnv = process.env,
+): ProgramActions {
+  return {
+    rekey: () => runRekeyCommand(environment),
+    reset: (confirmation) => runResetCommand(confirmation, environment),
+    start: () => runStartCommand(environment),
+    stop: () => runStopCommand(environment),
+  };
+}
 
 export function createProgram(
-  actions: ProgramActions = defaultProgramActions,
+  actions: ProgramActions = createProgramActions(),
 ): Command {
   const program = new Command();
 

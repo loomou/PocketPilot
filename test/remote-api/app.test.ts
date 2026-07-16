@@ -18,9 +18,14 @@ describe("remote API application", () => {
       method: "GET",
       url: "/admin/status",
     });
+    const documentation = await app.inject({
+      method: "GET",
+      url: "/documentation/json",
+    });
 
     expect(health.statusCode).toBe(200);
     expect(health.json()).toEqual({ status: "ok" });
     expect(localAdmin.statusCode).toBe(404);
+    expect(documentation.statusCode).toBe(404);
   });
 });

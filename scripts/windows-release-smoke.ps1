@@ -48,6 +48,28 @@ function Get-FreeTcpPort {
   }
 }
 
+function Write-PocketPilotEnvironmentFile(
+  [string]$MasterKey,
+  [string]$NewMasterKey = ""
+) {
+  $lines = @(
+    "POCKETPILOT_DATA_DIR=$script:dataDirectory",
+    "POCKETPILOT_LOCAL_ADMIN_PORT=$script:localAdminPort"
+  )
+  if ($MasterKey -ne "") {
+    $lines = @("AGENT_MASTER_KEY=$MasterKey") + $lines
+  }
+  if ($NewMasterKey -ne "") {
+    $lines += "AGENT_NEW_MASTER_KEY=$NewMasterKey"
+  }
+  $utf8WithoutBom = New-Object Text.UTF8Encoding($false)
+  [IO.File]::WriteAllLines(
+    (Join-Path $script:installDirectory ".env"),
+    $lines,
+    $utf8WithoutBom
+  )
+}
+
 function Get-PocketPilotStartupSnapshot {
   $services = @(
     Get-Service -ErrorAction SilentlyContinue |
@@ -111,21 +133,29 @@ function Start-PackagedAgent([string]$MasterKey, [string]$HealthUrl) {
   $script:outputIndex += 1
   $stdout = Join-Path $temporaryRoot "agent-$script:outputIndex.stdout.log"
   $stderr = Join-Path $temporaryRoot "agent-$script:outputIndex.stderr.log"
+  Write-PocketPilotEnvironmentFile $MasterKey
   $previousDataDirectory = $env:POCKETPILOT_DATA_DIR
   $previousMasterKey = $env:AGENT_MASTER_KEY
+  $previousNewMasterKey = $env:AGENT_NEW_MASTER_KEY
+  $previousLocalAdminPort = $env:POCKETPILOT_LOCAL_ADMIN_PORT
   try {
-    $env:POCKETPILOT_DATA_DIR = $dataDirectory
-    $env:AGENT_MASTER_KEY = $MasterKey
+    Remove-Item Env:POCKETPILOT_DATA_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:AGENT_MASTER_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:AGENT_NEW_MASTER_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:POCKETPILOT_LOCAL_ADMIN_PORT -ErrorAction SilentlyContinue
     $process = Start-Process -FilePath $node `
       -ArgumentList @($script:agentCli, "start") `
       -PassThru `
       -RedirectStandardError $stderr `
       -RedirectStandardOutput $stdout `
+      -WorkingDirectory $installDirectory `
       -WindowStyle Hidden
     $process | Add-Member -NotePropertyName PocketPilotStderr -NotePropertyValue $stderr
   } finally {
     $env:POCKETPILOT_DATA_DIR = $previousDataDirectory
     $env:AGENT_MASTER_KEY = $previousMasterKey
+    $env:AGENT_NEW_MASTER_KEY = $previousNewMasterKey
+    $env:POCKETPILOT_LOCAL_ADMIN_PORT = $previousLocalAdminPort
   }
   Wait-HttpOk $HealthUrl $process
   return $process
@@ -133,14 +163,28 @@ function Start-PackagedAgent([string]$MasterKey, [string]$HealthUrl) {
 
 function Stop-PackagedAgent([Diagnostics.Process]$Process) {
   $previousDataDirectory = $env:POCKETPILOT_DATA_DIR
+  $previousMasterKey = $env:AGENT_MASTER_KEY
+  $previousNewMasterKey = $env:AGENT_NEW_MASTER_KEY
+  $previousLocalAdminPort = $env:POCKETPILOT_LOCAL_ADMIN_PORT
   try {
-    $env:POCKETPILOT_DATA_DIR = $dataDirectory
-    & $node $script:agentCli stop
-    if ($LASTEXITCODE -ne 0) {
-      throw "agent stop failed with exit code $LASTEXITCODE."
+    Remove-Item Env:POCKETPILOT_DATA_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:AGENT_MASTER_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:AGENT_NEW_MASTER_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:POCKETPILOT_LOCAL_ADMIN_PORT -ErrorAction SilentlyContinue
+    Push-Location $installDirectory
+    try {
+      & $node $script:agentCli stop
+      if ($LASTEXITCODE -ne 0) {
+        throw "agent stop failed with exit code $LASTEXITCODE."
+      }
+    } finally {
+      Pop-Location
     }
   } finally {
     $env:POCKETPILOT_DATA_DIR = $previousDataDirectory
+    $env:AGENT_MASTER_KEY = $previousMasterKey
+    $env:AGENT_NEW_MASTER_KEY = $previousNewMasterKey
+    $env:POCKETPILOT_LOCAL_ADMIN_PORT = $previousLocalAdminPort
   }
   if (-not $Process.WaitForExit(10000)) {
     throw "The packaged Agent did not stop within ten seconds."
@@ -153,25 +197,30 @@ function Invoke-MaintenanceCommand(
   [string]$CurrentKey,
   [string]$NewKey = ""
 ) {
+  Write-PocketPilotEnvironmentFile $CurrentKey $NewKey
   $previousDataDirectory = $env:POCKETPILOT_DATA_DIR
   $previousMasterKey = $env:AGENT_MASTER_KEY
   $previousNewMasterKey = $env:AGENT_NEW_MASTER_KEY
+  $previousLocalAdminPort = $env:POCKETPILOT_LOCAL_ADMIN_PORT
   try {
-    $env:POCKETPILOT_DATA_DIR = $dataDirectory
-    $env:AGENT_MASTER_KEY = $CurrentKey
-    if ($NewKey -eq "") {
-      Remove-Item Env:AGENT_NEW_MASTER_KEY -ErrorAction SilentlyContinue
-    } else {
-      $env:AGENT_NEW_MASTER_KEY = $NewKey
-    }
-    & $node $script:agentCli @Arguments
-    if ($LASTEXITCODE -ne 0) {
-      throw "agent $($Arguments[0]) failed with exit code $LASTEXITCODE."
+    Remove-Item Env:POCKETPILOT_DATA_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:AGENT_MASTER_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:AGENT_NEW_MASTER_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:POCKETPILOT_LOCAL_ADMIN_PORT -ErrorAction SilentlyContinue
+    Push-Location $installDirectory
+    try {
+      & $node $script:agentCli @Arguments
+      if ($LASTEXITCODE -ne 0) {
+        throw "agent $($Arguments[0]) failed with exit code $LASTEXITCODE."
+      }
+    } finally {
+      Pop-Location
     }
   } finally {
     $env:POCKETPILOT_DATA_DIR = $previousDataDirectory
     $env:AGENT_MASTER_KEY = $previousMasterKey
     $env:AGENT_NEW_MASTER_KEY = $previousNewMasterKey
+    $env:POCKETPILOT_LOCAL_ADMIN_PORT = $previousLocalAdminPort
   }
 }
 
@@ -217,21 +266,48 @@ try {
   if (-not (Test-Path -LiteralPath $script:agentCli)) {
     throw "The installed package does not contain dist/cli.js."
   }
+  $openApiArtifactPath = Join-Path $installDirectory `
+    "node_modules/pocketpilot/dist/openapi/mobile-v1.json"
+  if (-not (Test-Path -LiteralPath $openApiArtifactPath)) {
+    throw "The installed package does not contain the mobile OpenAPI document."
+  }
+  $dotenvExamplePath = Join-Path $installDirectory `
+    "node_modules/pocketpilot/.env.example"
+  if (-not (Test-Path -LiteralPath $dotenvExamplePath)) {
+    throw "The installed package does not contain .env.example."
+  }
 
   $oldMasterKey = New-MasterKey
   $newMasterKey = New-MasterKey
   $resetMasterKey = New-MasterKey
+  $script:localAdminPort = Get-FreeTcpPort
+  while ($localAdminPort -in @(43182, 43183)) {
+    $script:localAdminPort = Get-FreeTcpPort
+  }
   $remotePort = Get-FreeTcpPort
-  while ($remotePort -in @(43182, 43183)) {
+  while ($remotePort -in @(43182, 43183, $localAdminPort)) {
     $remotePort = Get-FreeTcpPort
   }
 
   $agentProcess = Start-PackagedAgent $oldMasterKey "http://127.0.0.1:43182/healthz"
-  $localPage = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:43183/"
+  $localBaseUrl = "http://127.0.0.1:$localAdminPort"
+  $localPage = Invoke-WebRequest -UseBasicParsing "$localBaseUrl/"
   if (-not $localPage.Content.Contains('<div id="root"></div>')) {
     throw "The packaged local administration page is missing."
   }
-  $initialStatus = Invoke-RestMethod "http://127.0.0.1:43183/admin/status"
+  $swaggerPage = Invoke-WebRequest -UseBasicParsing `
+    "$localBaseUrl/documentation/"
+  if (-not $swaggerPage.Content.Contains("Swagger UI")) {
+    throw "The packaged local Swagger UI is missing."
+  }
+  $runtimeOpenApi = Invoke-RestMethod "$localBaseUrl/documentation/json"
+  $artifactOpenApi = Get-Content -Raw $openApiArtifactPath | ConvertFrom-Json
+  $runtimeOpenApiJson = $runtimeOpenApi | ConvertTo-Json -Depth 100 -Compress
+  $artifactOpenApiJson = $artifactOpenApi | ConvertTo-Json -Depth 100 -Compress
+  if ($runtimeOpenApiJson -ne $artifactOpenApiJson) {
+    throw "The packaged and runtime OpenAPI documents differ."
+  }
+  $initialStatus = Invoke-RestMethod "$localBaseUrl/admin/status"
   if ($initialStatus.remoteListener.host -ne "127.0.0.1") {
     throw "The fresh remote listener is not loopback-only."
   }
@@ -244,28 +320,38 @@ try {
       throw
     }
   }
+  try {
+    Invoke-WebRequest -UseBasicParsing `
+      "http://127.0.0.1:43182/documentation/json" | Out-Null
+    throw "The remote listener exposed the API documentation."
+  } catch {
+    $statusCode = $_.Exception.Response.StatusCode.value__
+    if ($statusCode -ne 404) {
+      throw
+    }
+  }
 
-  $csrf = Invoke-RestMethod "http://127.0.0.1:43183/admin/csrf"
-  $origin = "http://127.0.0.1:43183"
+  $csrf = Invoke-RestMethod "$localBaseUrl/admin/csrf"
+  $origin = $localBaseUrl
   $runtimeSettings = @{
     mobileBaseUrl = "https://example.ngrok.app"
     remoteListener = @{ host = "0.0.0.0"; port = $remotePort }
   } | ConvertTo-Json -Depth 4
   Invoke-RestMethod -Method Put `
-    -Uri "http://127.0.0.1:43183/admin/configuration/runtime" `
+    -Uri "$localBaseUrl/admin/configuration/runtime" `
     -Headers @{ Origin = $origin; "x-pocketpilot-csrf-token" = $csrf.token } `
     -ContentType "application/json" `
     -Body $runtimeSettings | Out-Null
   Stop-PackagedAgent $agentProcess
 
   $agentProcess = Start-PackagedAgent $oldMasterKey "http://127.0.0.1:$remotePort/healthz"
-  $configuredStatus = Invoke-RestMethod "http://127.0.0.1:43183/admin/status"
+  $configuredStatus = Invoke-RestMethod "$localBaseUrl/admin/status"
   if ($configuredStatus.remoteListener.host -ne "0.0.0.0") {
     throw "The non-loopback listener setting was not applied on restart."
   }
-  $csrf = Invoke-RestMethod "http://127.0.0.1:43183/admin/csrf"
+  $csrf = Invoke-RestMethod "$localBaseUrl/admin/csrf"
   $pairing = Invoke-RestMethod -Method Post `
-    -Uri "http://127.0.0.1:43183/admin/pairings" `
+    -Uri "$localBaseUrl/admin/pairings" `
     -Headers @{ Origin = $origin; "x-pocketpilot-csrf-token" = $csrf.token } `
     -ContentType "application/json" `
     -Body "{}"
@@ -276,20 +362,28 @@ try {
 
   Invoke-MaintenanceCommand @("rekey") $oldMasterKey $newMasterKey
 
+  Write-PocketPilotEnvironmentFile $oldMasterKey
   $previousDataDirectory = $env:POCKETPILOT_DATA_DIR
   $previousMasterKey = $env:AGENT_MASTER_KEY
+  $previousNewMasterKey = $env:AGENT_NEW_MASTER_KEY
+  $previousLocalAdminPort = $env:POCKETPILOT_LOCAL_ADMIN_PORT
   try {
-    $env:AGENT_MASTER_KEY = $oldMasterKey
-    $env:POCKETPILOT_DATA_DIR = $dataDirectory
+    Remove-Item Env:POCKETPILOT_DATA_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:AGENT_MASTER_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:AGENT_NEW_MASTER_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:POCKETPILOT_LOCAL_ADMIN_PORT -ErrorAction SilentlyContinue
     $wrongKeyProcess = Start-Process -FilePath $node `
       -ArgumentList @($script:agentCli, "start") `
       -PassThru `
       -RedirectStandardError (Join-Path $temporaryRoot "wrong-key.stderr.log") `
       -RedirectStandardOutput (Join-Path $temporaryRoot "wrong-key.stdout.log") `
+      -WorkingDirectory $installDirectory `
       -WindowStyle Hidden
   } finally {
-    $env:AGENT_MASTER_KEY = $previousMasterKey
     $env:POCKETPILOT_DATA_DIR = $previousDataDirectory
+    $env:AGENT_MASTER_KEY = $previousMasterKey
+    $env:AGENT_NEW_MASTER_KEY = $previousNewMasterKey
+    $env:POCKETPILOT_LOCAL_ADMIN_PORT = $previousLocalAdminPort
   }
   if (-not $wrongKeyProcess.WaitForExit(10000) -or $wrongKeyProcess.ExitCode -eq 0) {
     if (-not $wrongKeyProcess.HasExited) {

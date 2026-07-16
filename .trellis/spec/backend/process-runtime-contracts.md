@@ -14,6 +14,7 @@ exposing localhost-only administration or an unauthenticated control endpoint.
 ```ts
 buildRemoteApiApp(): Promise<FastifyInstance>;
 buildLocalAdminApp(options: LocalAdminAppOptions): Promise<FastifyInstance>;
+buildMobileOpenApiDocument(): Promise<OpenAPIV3.Document>;
 new AgentRuntime(options).start(): Promise<AgentRuntimeStatus>;
 AgentRuntime.shutdown(): Promise<void>;
 requestRuntimeShutdown(runtimeControlPath: string): Promise<void>;
@@ -46,7 +47,12 @@ and use the Zod `runtimeSettingsSchema`.
   optional mobile base URL are read once during manual startup; writing a new
   setting never changes a live listener.
 - The local-admin listener always binds to `127.0.0.1`; its default port is
-  `43183`. `GET /admin/status` and `GET /admin/csrf` are local-only.
+  `43183`. `POCKETPILOT_LOCAL_ADMIN_PORT` may select another validated port but
+  never changes the host. `GET /admin/status`, `GET /admin/csrf`, and Swagger
+  documentation are local-only.
+- Startup generates the mobile OpenAPI document without listeners or storage,
+  then passes it to the local app. The remote app never registers Swagger UI or
+  raw-document routes.
 - Every unsafe non-internal local-admin request requires an exact
   `Origin: http://127.0.0.1:<bound-port>` and the current
   `x-pocketpilot-csrf-token`. The temporary `/_internal/shutdown` path instead

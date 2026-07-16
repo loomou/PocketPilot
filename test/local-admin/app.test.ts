@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { buildMobileOpenApiDocument } from "../../src/api-docs/mobile-openapi.js";
 import { buildLocalAdminApp } from "../../src/local-admin/app.js";
 import { buildRemoteApiApp } from "../../src/remote-api/app.js";
 
@@ -108,5 +109,60 @@ describe("local administration application", () => {
     expect(localPage.body).toContain("PocketPilot static shell");
     expect(remotePage.statusCode).toBe(404);
     expect(remotePage.body).not.toContain("PocketPilot static shell");
+  });
+
+  it("serves the mobile contract locally without exposing documentation remotely", async () => {
+    const mobileOpenApiDocument = await buildMobileOpenApiDocument();
+    const localApp = await buildLocalAdminApp({
+      csrfProtection: {
+        expectedOrigin: () => "http://127.0.0.1:43183",
+        token: "csrf-token",
+      },
+      getStatus: () => ({
+        localAdminListener: { host: "127.0.0.1", port: 43183 },
+        remoteListener: { host: "127.0.0.1", port: 43182 },
+        status: "running" as const,
+      }),
+      mobileOpenApiDocument,
+      requestShutdown: () => undefined,
+      shutdownControlToken: "runtime-control-token",
+    });
+    const remoteApp = await buildRemoteApiApp();
+    apps.push(localApp, remoteApp);
+
+    const ui = await localApp.inject({
+      method: "GET",
+      url: "/documentation/",
+    });
+    const json = await localApp.inject({
+      method: "GET",
+      url: "/documentation/json",
+    });
+    const yaml = await localApp.inject({
+      method: "GET",
+      url: "/documentation/yaml",
+    });
+    const remoteUi = await remoteApp.inject({
+      method: "GET",
+      url: "/documentation/",
+    });
+    const remoteJson = await remoteApp.inject({
+      method: "GET",
+      url: "/documentation/json",
+    });
+    const remoteYaml = await remoteApp.inject({
+      method: "GET",
+      url: "/documentation/yaml",
+    });
+
+    expect(ui.statusCode).toBe(200);
+    expect(ui.headers["content-type"]).toContain("text/html");
+    expect(json.statusCode).toBe(200);
+    expect(json.json()).toEqual(mobileOpenApiDocument);
+    expect(yaml.statusCode).toBe(200);
+    expect(yaml.body).toContain("openapi: 3.1.0");
+    expect(remoteUi.statusCode).toBe(404);
+    expect(remoteJson.statusCode).toBe(404);
+    expect(remoteYaml.statusCode).toBe(404);
   });
 });

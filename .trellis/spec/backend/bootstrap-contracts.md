@@ -11,6 +11,10 @@ commands.
 
 - `buildApp(): Promise<FastifyInstance>` in `src/app.ts`
 - `createProgram(actions?: ProgramActions): Command` in `src/cli/program.ts`
+- `loadPocketPilotEnvironment(options?): NodeJS.ProcessEnv` in
+  `src/config/environment.ts`
+- `buildMobileOpenApiDocument(): Promise<OpenAPIV3.Document>` in
+  `src/api-docs/mobile-openapi.ts`
 - CLI commands: `agent start`, `agent stop`, `agent rekey`, and `agent reset`
 - `runRekeyCommand(environment?, writeOutput?): Promise<void>`
 - `runResetCommand(confirmation, environment?, writeOutput?): Promise<void>`
@@ -31,6 +35,10 @@ commands.
   require the lost old master key.
 - `src/cli.ts` translates expected runtime, maintenance, storage, and key
   errors to safe stderr text and exit code `1`.
+- `src/cli.ts` loads one allowlisted startup-directory environment snapshot
+  before Commander dispatch. See `environment-configuration-contracts.md`.
+- The production build emits the remote mobile contract before packaging
+  runtime assets. See `api-documentation-contracts.md`.
 
 ## 4. Validation & Error Matrix
 

@@ -5,6 +5,7 @@ export default defineConfig({
   dts: true,
   entry: {
     cli: "src/cli.ts",
+    "generate-openapi": "src/api-docs/generate-openapi.ts",
   },
   format: ["esm"],
   platform: "node",

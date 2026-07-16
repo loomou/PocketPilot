@@ -55,10 +55,23 @@ const deviceResponseSchema = z.object({
   revokedAt: z.number().int().nullable(),
 });
 
+const authenticationTag = ["Authentication"] as const;
+const bearerSecurity = [{ bearerAuth: [] }] as const;
+
+export type RemoteDeviceAuthRouteService = Pick<
+  DeviceAuthService,
+  | "authenticateAccessToken"
+  | "claimPairingCredentials"
+  | "createPairingClaimChallenge"
+  | "createRefreshChallenge"
+  | "refreshCredentials"
+  | "registerPairingDevice"
+>;
+
 /** Registers remote pairing and device-authentication routes under /v1. */
 export function registerRemoteDeviceAuthRoutes(
   app: FastifyInstance,
-  deviceAuthService: DeviceAuthService,
+  deviceAuthService: RemoteDeviceAuthRouteService,
 ): void {
   registerDeviceAuthErrorHandler(app);
   const typedApp = app.withTypeProvider<ZodTypeProvider>();
@@ -68,11 +81,16 @@ export function registerRemoteDeviceAuthRoutes(
     {
       schema: {
         body: registerPairingBodySchema,
+        description:
+          "Registers the scanning device key and returns the local verification code.",
+        operationId: "registerPairingDevice",
         params: pairingIdParamsSchema,
         response: {
           200: pairingRegistrationResponseSchema,
           ...authErrorResponses,
         },
+        summary: "Register a device for a pending pairing",
+        tags: authenticationTag,
       },
     },
     async (request) =>
@@ -86,11 +104,16 @@ export function registerRemoteDeviceAuthRoutes(
     "/v1/pair/:pairingId/claim-challenge",
     {
       schema: {
+        description:
+          "Creates a one-time proof challenge after the computer approves the pairing.",
+        operationId: "createPairingClaimChallenge",
         params: pairingIdParamsSchema,
         response: {
           200: challengeResponseSchema,
           ...authErrorResponses,
         },
+        summary: "Create a pairing claim challenge",
+        tags: authenticationTag,
       },
     },
     async (request) =>
@@ -102,11 +125,16 @@ export function registerRemoteDeviceAuthRoutes(
     {
       schema: {
         body: proofBodySchema,
+        description:
+          "Verifies device-key possession and returns the first access and refresh credentials.",
+        operationId: "claimPairingCredentials",
         params: pairingIdParamsSchema,
         response: {
           200: credentialResponseSchema,
           ...authErrorResponses,
         },
+        summary: "Claim approved pairing credentials",
+        tags: authenticationTag,
       },
     },
     async (request) =>
@@ -120,11 +148,16 @@ export function registerRemoteDeviceAuthRoutes(
     "/v1/auth/refresh-challenge/:deviceId",
     {
       schema: {
+        description:
+          "Creates a one-time challenge that the paired device signs before refresh rotation.",
+        operationId: "createRefreshChallenge",
         params: z.object({ deviceId: deviceIdSchema }),
         response: {
           200: challengeResponseSchema,
           ...authErrorResponses,
         },
+        summary: "Create a refresh proof challenge",
+        tags: authenticationTag,
       },
     },
     async (request) =>
@@ -136,10 +169,15 @@ export function registerRemoteDeviceAuthRoutes(
     {
       schema: {
         body: refreshBodySchema,
+        description:
+          "Rotates the bound refresh credential after validating the device signature.",
+        operationId: "refreshCredentials",
         response: {
           200: credentialResponseSchema,
           ...authErrorResponses,
         },
+        summary: "Rotate device credentials",
+        tags: authenticationTag,
       },
     },
     async (request) => deviceAuthService.refreshCredentials(request.body),
@@ -149,10 +187,16 @@ export function registerRemoteDeviceAuthRoutes(
     "/v1/auth/session",
     {
       schema: {
+        description:
+          "Returns metadata for the device bound to the supplied access credential.",
+        operationId: "getAuthenticatedDeviceSession",
         response: {
           200: deviceResponseSchema,
           ...authErrorResponses,
         },
+        security: bearerSecurity,
+        summary: "Get the authenticated device session",
+        tags: authenticationTag,
       },
     },
     async (request) =>

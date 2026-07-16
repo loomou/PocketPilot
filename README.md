@@ -38,24 +38,50 @@ Install the generated tarball. pnpm 10 requires explicit approval for the
 pnpm add -g .\pocketpilot-0.1.0.tgz --allow-build=better-sqlite3
 ```
 
-The installed package contains the CLI, Drizzle migrations, and the local
-administration page under one `dist` tree.
+The installed package contains the CLI, Drizzle migrations, the local
+administration page, and `dist/openapi/mobile-v1.json` under one `dist` tree.
 
-## Master Key
+## Startup Environment
 
 PocketPilot requires a 32-byte, unpadded base64url master key. Generate one:
 
 ```powershell
 $key = node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
-$env:AGENT_MASTER_KEY = $key
 ```
 
-Keep the same key for later starts. Store it using a secret-management method
-appropriate for the computer; do not place it in source files, command-line
-arguments, screenshots, or logs.
+Create a dedicated launch directory, copy `.env.example` into it as `.env`, and
+set the generated key:
+
+```dotenv
+AGENT_MASTER_KEY=<generated-key>
+POCKETPILOT_DATA_DIR=D:\PocketPilotData
+POCKETPILOT_LOCAL_ADMIN_PORT=43183
+```
+
+Run every `agent` command from that directory. PocketPilot reads only the exact
+`.env` in its startup working directory; it does not search parent directories
+or the Agent data directory. A missing file is allowed when the required values
+are supplied through the process environment.
+
+Existing process-environment values override `.env`. The dotenv allowlist is:
+
+- `AGENT_MASTER_KEY`
+- `AGENT_NEW_MASTER_KEY` for `agent rekey` only
+- `POCKETPILOT_DATA_DIR`
+- `POCKETPILOT_LOCAL_ADMIN_PORT`
+
+Other `.env` keys are ignored. PocketPilot does not load `ANTHROPIC_*` or other
+Claude credentials from this file; Claude configuration remains owned by the
+locally configured Claude Agent SDK.
+
+Keep the same master key for later starts. `.env` contains plaintext secrets,
+so protect it with Windows account permissions and never commit, share,
+screenshot, or log it. The repository ignores `.env` and `.env.*` while
+allowing the secret-free `.env.example`.
 
 Agent data defaults to `%LOCALAPPDATA%\PocketPilot`. To use a different local
-directory, set `POCKETPILOT_DATA_DIR` before every command:
+directory without placing it in `.env`, set `POCKETPILOT_DATA_DIR` before each
+command:
 
 ```powershell
 $env:POCKETPILOT_DATA_DIR = "D:\PocketPilotData"
@@ -73,6 +99,10 @@ The default endpoints are:
 
 - Remote HTTP/WebSocket API: `http://127.0.0.1:43182`
 - Local administration: `http://127.0.0.1:43183`
+
+`POCKETPILOT_LOCAL_ADMIN_PORT` changes only the loopback administration port.
+It must be an integer from `1` through `65535`, is applied at the next manual
+start, and never makes the administration listener non-loopback.
 
 Stop it with `Ctrl+C` in its terminal or from another terminal:
 
@@ -97,6 +127,29 @@ Open `http://127.0.0.1:43183` on the Agent computer. The page manages:
 Listener changes apply only after manually stopping and starting the Agent.
 The administration page is always bound to `127.0.0.1` and is never mounted on
 the remote API listener.
+
+## Mobile API Documentation
+
+With the Agent running, open the local Swagger UI at:
+
+```text
+http://127.0.0.1:43183/documentation/
+```
+
+The raw OpenAPI 3.1 document is available locally at
+`/documentation/json`. A matching build artifact ships at
+`dist/openapi/mobile-v1.json` for sharing or mobile-client code generation.
+When `POCKETPILOT_LOCAL_ADMIN_PORT` changes, use that port in the local URL.
+
+The document contains only the remote `/v1` mobile contract. It excludes local
+`/admin/*` and `/_internal/*` routes, and the remote listener returns 404 for
+all documentation URLs. Protected operations use the opaque access credential
+as a Bearer token.
+
+`/v1/events` is described through the OpenAPI `x-websocket` extension with its
+subscribe, acknowledgement, event, error, close-code, and replay-cursor
+schemas. Swagger UI displays this protocol but does not execute WebSocket
+messages.
 
 ## Connectivity
 
@@ -134,20 +187,20 @@ encrypted and access-controlled connection path.
 
 ## Rotate the Master Key
 
-Stop the Agent first. Put the current and replacement keys in separate
-environment variables, then run rekey:
+Stop the Agent first. Run from the directory containing the current `.env`, put
+the replacement key in a temporary process variable, then run rekey:
 
 ```powershell
-$env:AGENT_MASTER_KEY = $currentKey
 $env:AGENT_NEW_MASTER_KEY = $replacementKey
 agent rekey
-$env:AGENT_MASTER_KEY = $replacementKey
 Remove-Item Env:AGENT_NEW_MASTER_KEY
 ```
 
 The command validates the current key and atomically re-encrypts every
 sensitive Agent record. It refuses to run while the Agent or another
-maintenance command owns the data lock.
+maintenance command owns the data lock. After it succeeds, replace
+`AGENT_MASTER_KEY` in `.env` with the replacement key and ensure no
+`AGENT_NEW_MASTER_KEY` entry remains.
 
 ## Reset After Losing the Key
 

@@ -17,6 +17,7 @@ output.
 | `StorageResetConfirmationError` | none | Reset requested without the exact explicit confirmation. |
 | `RuntimeControlError` | `RUNTIME_NOT_RUNNING`, `RUNTIME_STATE_INVALID`, `RUNTIME_CONTROL_UNAVAILABLE`, `RUNTIME_CONTROL_REJECTED` | Local `agent stop` control-state or loopback shutdown failure. |
 | `AgentMaintenanceError` | `AGENT_DATA_NOT_FOUND`, `AGENT_MAINTENANCE_LOCKED`, `AGENT_MAINTENANCE_LOCK_UNAVAILABLE`, `MASTER_KEYS_IDENTICAL` | Stopped-only maintenance preconditions and exclusive data-lock failures. |
+| `EnvironmentConfigurationError` | `DOTENV_READ_FAILED`, `ENVIRONMENT_VALUE_INVALID` | Safe startup-directory dotenv read and allowlisted value validation failures. |
 | `DeviceAuthError` | Pairing, device-proof, challenge, opaque-token, and revocation codes | HTTP-safe device authentication failure. |
 | `TaskError` | `TASK_BUSY`, `TASK_INTERRUPTED`, `TASK_TERMINAL`, `STALE_APPROVAL`, `CONCURRENT_TASK_LIMIT_REACHED`, workspace-policy, capability, and task-lookup codes | Validated mobile task-control and task-policy failures. |
 
@@ -24,6 +25,9 @@ output.
 
 - Validate external/environment data at the boundary, throw one of the typed
   errors, and let the future CLI/API layer translate it to a stable response.
+- Dotenv errors may identify the supported key or the startup `.env` boundary,
+  but never include file contents, parsed values, or a secret-bearing source
+  line.
 - Catch crypto implementation failures inside the crypto module and replace
   them with `StorageCryptoError`; never return OpenSSL text to a caller.
 - Preserve transaction errors from rekeying so SQLite rolls back; do not catch

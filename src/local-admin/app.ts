@@ -1,9 +1,12 @@
 import { existsSync } from "node:fs";
 import fastifyStatic from "@fastify/static";
+import fastifySwagger from "@fastify/swagger";
+import fastifySwaggerUi from "@fastify/swagger-ui";
 import type BetterSqlite3 from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
+import type { MobileOpenApiDocument } from "../api-docs/mobile-openapi.js";
 import type { DeviceAuthService } from "../auth/device-auth-service.js";
 import { registerLocalDeviceAuthRoutes } from "../auth/local-admin-routes.js";
 import { createHttpApp } from "../http/create-http-app.js";
@@ -52,6 +55,7 @@ export type LocalAdminAppOptions = {
   settingsRepository?: SettingsRepository;
   sqlite?: BetterSqlite3.Database;
   getStatus(): LocalAdminStatus;
+  mobileOpenApiDocument?: MobileOpenApiDocument;
   requestShutdown(): void;
   shutdownControlToken: string;
   staticRoot?: string;
@@ -65,6 +69,24 @@ export async function buildLocalAdminApp(
   options: LocalAdminAppOptions,
 ): Promise<FastifyInstance> {
   const app = await createHttpApp();
+  if (options.mobileOpenApiDocument !== undefined) {
+    await app.register(fastifySwagger, {
+      mode: "static",
+      specification: { document: options.mobileOpenApiDocument },
+    });
+    await app.register(fastifySwaggerUi, {
+      routePrefix: "/documentation",
+      staticCSP: true,
+      uiConfig: {
+        deepLinking: true,
+        displayOperationId: true,
+        docExpansion: "list",
+        showExtensions: true,
+        tryItOutEnabled: false,
+        validatorUrl: null,
+      },
+    });
+  }
   if (options.staticRoot !== undefined && existsSync(options.staticRoot)) {
     await app.register(fastifyStatic, { root: options.staticRoot });
   }

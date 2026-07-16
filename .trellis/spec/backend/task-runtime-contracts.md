@@ -78,10 +78,16 @@ three and no workspace root is authorized by default.
   record-specific AES-GCM context, and deletes both stores at turn end.
   At 256 MiB it sends `EVENT_REPLAY_STORAGE_LIMIT_REACHED` live and stops
   retaining later events without stopping the task.
+- The task-event WebSocket parser and sender consume exported Zod schemas for
+  subscribe, subscribed, event, and error messages. The generated OpenAPI
+  `x-websocket` extension converts those same schemas and records Bearer
+  handshake authentication, close code `4003`, and `afterCursor` replay.
 - Remote task HTTP routes live below `/v1`. Authenticate every request with the
   existing bearer-token service before calling `TaskManager`; the route layer
   validates Zod request/response shapes and maps `TaskError` to its stable
-  `{ code, message }` response. It never reimplements task transitions.
+  `{ code, message }` response. Response documentation reuses the domain
+  `taskSnapshotSchema` and `taskOperationResultSchema`; it never reimplements
+  task transitions or a parallel documentation model.
 
 ### 4. Validation & Error Matrix
 
@@ -123,6 +129,8 @@ three and no workspace root is authorized by default.
   rows terminal.
 - Unit-test memory replay ordering, encrypted SQLite overflow round-trip,
   cap notification/live delivery, and cleanup after idle or terminal state.
+- OpenAPI tests validate the complete task route set plus representative
+  WebSocket messages from the exported runtime schemas.
 
 ### 7. Wrong vs Correct
 

@@ -1,11 +1,16 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
+import {
+  AGENT_DATA_DIRECTORY_ENVIRONMENT_VARIABLE,
+  readAgentDataDirectory,
+  readLocalAdminPort,
+} from "../config/environment.js";
 import { AgentRuntime } from "./agent-runtime.js";
 import { readRuntimeControlState } from "./control-state.js";
 import { RuntimeControlError } from "./errors.js";
 
-export const AGENT_DATA_DIRECTORY_ENVIRONMENT_VARIABLE = "POCKETPILOT_DATA_DIR";
+export { AGENT_DATA_DIRECTORY_ENVIRONMENT_VARIABLE };
 
 export type AgentRuntimePaths = {
   databasePath: string;
@@ -15,10 +20,11 @@ export type AgentRuntimePaths = {
 export function resolveAgentRuntimePaths(
   environment: NodeJS.ProcessEnv = process.env,
 ): AgentRuntimePaths {
+  const configuredDataDirectory = readAgentDataDirectory(environment);
   const dataDirectory =
-    environment[AGENT_DATA_DIRECTORY_ENVIRONMENT_VARIABLE] === undefined
+    configuredDataDirectory === undefined
       ? defaultAgentDataDirectory(environment)
-      : resolve(environment[AGENT_DATA_DIRECTORY_ENVIRONMENT_VARIABLE]);
+      : resolve(configuredDataDirectory);
 
   return {
     databasePath: join(dataDirectory, "agent.sqlite"),
@@ -26,10 +32,15 @@ export function resolveAgentRuntimePaths(
   };
 }
 
-export async function runStartCommand(): Promise<void> {
-  const paths = resolveAgentRuntimePaths();
+export async function runStartCommand(
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const paths = resolveAgentRuntimePaths(environment);
+  const localAdminPort = readLocalAdminPort(environment);
   const runtime = new AgentRuntime({
     databasePath: paths.databasePath,
+    environment,
+    ...(localAdminPort === undefined ? {} : { localAdminPort }),
     runtimeControlPath: paths.runtimeControlPath,
   });
   const status = await runtime.start();
@@ -43,8 +54,10 @@ export async function runStartCommand(): Promise<void> {
   await runtime.waitUntilStopped();
 }
 
-export async function runStopCommand(): Promise<void> {
-  const paths = resolveAgentRuntimePaths();
+export async function runStopCommand(
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const paths = resolveAgentRuntimePaths(environment);
   await requestRuntimeShutdown(paths.runtimeControlPath);
 }
 

@@ -10,6 +10,9 @@
   and pnpm 10.14.x. It installs the packed tarball with the approved
   `better-sqlite3` build, then exercises listener restart, rekey, reset, and
   automatic-start isolation.
+- When remote route schemas change, generate `dist/openapi/mobile-v1.json`
+  twice and compare bytes, inspect the tarball for that file and
+  `.env.example`, and verify the installed local raw document matches it.
 - Biome owns formatting and linting. Do not introduce a second formatter.
 - Husky runs lint-staged before commits; commitlint requires Conventional
   Commit messages.

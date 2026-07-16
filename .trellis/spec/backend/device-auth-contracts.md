@@ -63,6 +63,10 @@ the device-registration/delivery columns on `pairings`.
 - `InMemoryDeviceConnectionRegistry` owns the device-to-socket mapping. Future
   authenticated WebSocket routes must register on connect and unregister on
   close; they must not invent a separate revocation mechanism.
+- Remote authentication route Zod schemas are also the generated mobile
+  OpenAPI source. Pair registration, claim, and refresh-proof routes are public
+  bootstrap operations; `/v1/auth/session` declares `bearerAuth`. Every route
+  documents the same stable `{ code, message }` error shape used at runtime.
 - `pruneStorage` removes expired access tokens and challenges. Superseded
   refresh rows remain so reuse can be detected; reset and rekey include every
   relevant Agent-owned row.
@@ -101,6 +105,8 @@ the device-registration/delivery columns on `pairings`.
 - Remote/local `app.inject()` test proves remote registration/claim work, the
   remote listener returns 404 for local approval, and local approval rejects a
   request lacking CSRF.
+- OpenAPI generation tests prove authentication operations have stable unique
+  operation IDs and only access-protected operations declare Bearer security.
 - Connection-registry test proves revoking device A closes only A's sockets
   with code `4003`.
 - Storage maintenance test inserts an access-token envelope and proves rekey

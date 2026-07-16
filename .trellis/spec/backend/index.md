@@ -15,6 +15,8 @@ This directory records the conventions for the PocketPilot TypeScript Agent.
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Bootstrap Contracts](./bootstrap-contracts.md) | Current CLI and HTTP bootstrap boundaries | Established |
+| [Environment Configuration Contracts](./environment-configuration-contracts.md) | Allowlisted cwd dotenv loading and bootstrap validation | Established |
+| [Mobile API Documentation Contracts](./api-documentation-contracts.md) | OpenAPI generation, local Swagger delivery, and WebSocket documentation | Established |
 | [Claude Agent SDK Contracts](./claude-sdk-contracts.md) | Streaming-session, control, approval, and event boundaries | Established |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | Established |
 | [Database Guidelines](./database-guidelines.md) | SQLite, encryption, retention, and migration contracts | Established |
@@ -32,6 +34,11 @@ This directory records the conventions for the PocketPilot TypeScript Agent.
 
 Before modifying the TypeScript Agent, read `bootstrap-contracts.md`,
 `directory-structure.md`, `quality-guidelines.md`, and `error-handling.md`.
+When modifying dotenv, environment variables, CLI environment wiring, or
+bootstrap listener settings, also read `environment-configuration-contracts.md`.
+When modifying a remote route/schema, the task-event WebSocket contract,
+Swagger delivery, or package documentation assets, also read
+`api-documentation-contracts.md`.
 When modifying Claude Agent SDK integration, also read
 `claude-sdk-contracts.md`; when modifying storage or encrypted Agent data, also
 read `database-guidelines.md`. When modifying listener setup, start/stop, or

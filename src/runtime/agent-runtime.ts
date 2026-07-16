@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildMobileOpenApiDocument } from "../api-docs/mobile-openapi.js";
 import { DeviceAuthService } from "../auth/device-auth-service.js";
 import { InMemoryDeviceConnectionRegistry } from "../auth/device-connection-registry.js";
 import {
@@ -144,6 +145,7 @@ export class AgentRuntime {
     }
     const csrfToken = createControlToken();
     const shutdownControlToken = createControlToken();
+    const mobileOpenApiDocument = await buildMobileOpenApiDocument();
     this.shutdownControlToken = shutdownControlToken;
     this.localAdminApp = await buildLocalAdminApp({
       csrfProtection: {
@@ -157,6 +159,7 @@ export class AgentRuntime {
       settingsRepository: new SettingsRepository(storage.database),
       staticRoot: resolveLocalAdminStaticRoot(),
       getStatus: () => this.currentStatus(settings),
+      mobileOpenApiDocument,
       requestShutdown: () => {
         setTimeout(() => {
           void this.shutdown();

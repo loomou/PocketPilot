@@ -3,14 +3,46 @@ import { z } from "zod";
 import type { DeviceConnectionRegistry } from "../auth/device-auth-service.js";
 import { readBearerAccessToken } from "../auth/http.js";
 import type { TaskEventJournal } from "../tasks/task-event-journal.js";
+import { taskEventEnvelopeSchema } from "../tasks/task-events.js";
 
-const subscriptionSchema = z.object({
+export const eventSubscriptionMessageSchema = z.object({
   afterCursor: z.number().int().min(-1).default(-1),
   taskId: z.uuid(),
   type: z.literal("subscribe"),
 });
 
-type TaskEventRouteOptions = {
+export const eventSubscribedMessageSchema = z.object({
+  afterCursor: z.number().int().min(-1),
+  taskId: z.uuid(),
+  type: z.literal("subscribed"),
+});
+
+export const eventDeliveryMessageSchema = z.object({
+  event: taskEventEnvelopeSchema,
+  type: z.literal("event"),
+});
+
+export const eventErrorMessageSchema = z.object({
+  code: z.literal("EVENT_SUBSCRIPTION_INVALID"),
+  type: z.literal("error"),
+});
+
+const eventServerMessageSchema = z.discriminatedUnion("type", [
+  eventSubscribedMessageSchema,
+  eventDeliveryMessageSchema,
+  eventErrorMessageSchema,
+]);
+
+export const taskEventRouteDocumentation = {
+  description:
+    "Authenticated WebSocket subscription for active-turn replay and live task events. See x-websocket in the generated OpenAPI document.",
+  operationId: "subscribeTaskEvents",
+  security: [{ bearerAuth: [] }],
+  summary: "Subscribe to task events",
+  tags: ["Events"],
+};
+
+export type TaskEventRouteOptions = {
   connectionRegistry: DeviceConnectionRegistry & {
     add(
       deviceId: string,
@@ -18,7 +50,7 @@ type TaskEventRouteOptions = {
     ): () => void;
   };
   deviceAuthService: AccessDeviceAuthenticator;
-  eventJournal: TaskEventJournal;
+  eventJournal: Pick<TaskEventJournal, "subscribe">;
 };
 
 export type AccessDeviceAuthenticator = {
@@ -30,59 +62,64 @@ export function registerTaskEventRoutes(
   app: FastifyInstance,
   options: TaskEventRouteOptions,
 ): void {
-  app.get("/v1/events", { websocket: true }, (socket, request) => {
-    let deviceId: string;
-    try {
-      deviceId = options.deviceAuthService.authenticateAccessToken(
-        readBearerAccessToken(request),
-      ).id;
-    } catch {
-      socket.close(4003, "Authentication failed.");
-      return;
-    }
-
-    const unregisterDevice = options.connectionRegistry.add(deviceId, socket);
-    let unsubscribeTask: (() => void) | undefined;
-    socket.on("message", (message: Buffer | ArrayBuffer | Buffer[]) => {
-      const subscription = parseSubscription(message);
-      if (subscription === undefined) {
-        socket.send(
-          JSON.stringify({
-            code: "EVENT_SUBSCRIPTION_INVALID",
-            type: "error",
-          }),
-        );
+  app.get(
+    "/v1/events",
+    {
+      schema: {
+        ...taskEventRouteDocumentation,
+      },
+      websocket: true,
+    },
+    (socket, request) => {
+      let deviceId: string;
+      try {
+        deviceId = options.deviceAuthService.authenticateAccessToken(
+          readBearerAccessToken(request),
+        ).id;
+      } catch {
+        socket.close(4003, "Authentication failed.");
         return;
       }
 
-      unsubscribeTask?.();
-      unsubscribeTask = options.eventJournal.subscribe(
-        subscription.taskId,
-        subscription.afterCursor,
-        {
-          send(event): void {
-            socket.send(JSON.stringify({ event, type: "event" }));
+      const unregisterDevice = options.connectionRegistry.add(deviceId, socket);
+      let unsubscribeTask: (() => void) | undefined;
+      socket.on("message", (message: Buffer | ArrayBuffer | Buffer[]) => {
+        const subscription = parseSubscription(message);
+        if (subscription === undefined) {
+          sendServerMessage(socket, {
+            code: "EVENT_SUBSCRIPTION_INVALID",
+            type: "error",
+          });
+          return;
+        }
+
+        unsubscribeTask?.();
+        unsubscribeTask = options.eventJournal.subscribe(
+          subscription.taskId,
+          subscription.afterCursor,
+          {
+            send(event): void {
+              sendServerMessage(socket, { event, type: "event" });
+            },
           },
-        },
-      );
-      socket.send(
-        JSON.stringify({
+        );
+        sendServerMessage(socket, {
           afterCursor: subscription.afterCursor,
           taskId: subscription.taskId,
           type: "subscribed",
-        }),
-      );
-    });
-    socket.on("close", () => {
-      unsubscribeTask?.();
-      unregisterDevice();
-    });
-  });
+        });
+      });
+      socket.on("close", () => {
+        unsubscribeTask?.();
+        unregisterDevice();
+      });
+    },
+  );
 }
 
 function parseSubscription(
   message: unknown,
-): z.infer<typeof subscriptionSchema> | undefined {
+): z.infer<typeof eventSubscriptionMessageSchema> | undefined {
   const text = decodeSocketMessage(message);
   if (text === undefined) {
     return undefined;
@@ -93,8 +130,15 @@ function parseSubscription(
   } catch {
     return undefined;
   }
-  const parsed = subscriptionSchema.safeParse(value);
+  const parsed = eventSubscriptionMessageSchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
+}
+
+function sendServerMessage(
+  socket: { send(message: string): void },
+  message: z.input<typeof eventServerMessageSchema>,
+): void {
+  socket.send(JSON.stringify(eventServerMessageSchema.parse(message)));
 }
 
 function decodeSocketMessage(message: unknown): string | undefined {
