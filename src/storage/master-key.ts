@@ -1,6 +1,7 @@
 import { MasterKeyError } from "./errors.js";
 
 export const AGENT_MASTER_KEY_ENVIRONMENT_VARIABLE = "AGENT_MASTER_KEY";
+export const AGENT_NEW_MASTER_KEY_ENVIRONMENT_VARIABLE = "AGENT_NEW_MASTER_KEY";
 
 const masterKeyPattern = /^[A-Za-z0-9_-]{43}$/;
 
@@ -13,18 +14,37 @@ const masterKeyPattern = /^[A-Za-z0-9_-]{43}$/;
 export function readAgentMasterKey(
   environment: NodeJS.ProcessEnv = process.env,
 ): Buffer {
-  const encoded = environment[AGENT_MASTER_KEY_ENVIRONMENT_VARIABLE];
+  return readEnvironmentMasterKey(
+    AGENT_MASTER_KEY_ENVIRONMENT_VARIABLE,
+    environment,
+  );
+}
+
+export function readNewAgentMasterKey(
+  environment: NodeJS.ProcessEnv = process.env,
+): Buffer {
+  return readEnvironmentMasterKey(
+    AGENT_NEW_MASTER_KEY_ENVIRONMENT_VARIABLE,
+    environment,
+  );
+}
+
+function readEnvironmentMasterKey(
+  variableName: string,
+  environment: NodeJS.ProcessEnv,
+): Buffer {
+  const encoded = environment[variableName];
   if (encoded === undefined || encoded.length === 0) {
     throw new MasterKeyError(
       "MASTER_KEY_MISSING",
-      `${AGENT_MASTER_KEY_ENVIRONMENT_VARIABLE} must contain a 32-byte base64url key.`,
+      `${variableName} must contain a 32-byte base64url key.`,
     );
   }
 
   if (!masterKeyPattern.test(encoded)) {
     throw new MasterKeyError(
       "MASTER_KEY_INVALID",
-      `${AGENT_MASTER_KEY_ENVIRONMENT_VARIABLE} must be an unpadded base64url-encoded 32-byte key.`,
+      `${variableName} must be an unpadded base64url-encoded 32-byte key.`,
     );
   }
 
@@ -32,7 +52,7 @@ export function readAgentMasterKey(
   if (key.toString("base64url") !== encoded) {
     throw new MasterKeyError(
       "MASTER_KEY_INVALID",
-      `${AGENT_MASTER_KEY_ENVIRONMENT_VARIABLE} must be an unpadded base64url-encoded 32-byte key.`,
+      `${variableName} must be an unpadded base64url-encoded 32-byte key.`,
     );
   }
 

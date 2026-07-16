@@ -12,6 +12,9 @@ request logger yet.
 - `agent start` may print listener addresses after successful binding.
 - `agent stop` is quiet on success and prints only a stable corrective error on
   failure.
+- Successful `agent rekey` prints only the migrated record count; successful
+  `agent reset` prints only a completion statement. Neither command prints key
+  values, encrypted envelopes, database paths, or deleted record contents.
 - Fastify application factories use `logger: false`. Do not turn on request
   logging ad hoc; introduce one configured logger when task/auth event logging
   is implemented.

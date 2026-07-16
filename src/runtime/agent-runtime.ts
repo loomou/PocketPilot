@@ -13,12 +13,14 @@ import { buildRemoteApiApp } from "../remote-api/app.js";
 import { openStorage, type StorageConnection } from "../storage/database.js";
 import {
   clearTransientEventOverflow,
+  ensureMasterKeyVerifier,
   pruneStorage,
 } from "../storage/maintenance.js";
 import { readAgentMasterKey } from "../storage/master-key.js";
 import { SettingsRepository } from "../storage/settings-repository.js";
 import { TaskEventJournal } from "../tasks/task-event-journal.js";
 import { TaskManager } from "../tasks/task-manager.js";
+import { acquireAgentLock, type ReleaseAgentLock } from "./agent-lock.js";
 import {
   removeRuntimeControlState,
   writeRuntimeControlState,
@@ -61,6 +63,7 @@ export class AgentRuntime {
     | Awaited<ReturnType<typeof buildRemoteApiApp>>
     | undefined;
   private remoteListener: BoundListener | undefined;
+  private releaseAgentLock: ReleaseAgentLock | undefined;
   private shutdownControlToken: string | undefined;
   private shutdownPromise: Promise<void> | undefined;
   private storage: StorageConnection | undefined;
@@ -81,9 +84,12 @@ export class AgentRuntime {
   }
 
   public async start(): Promise<AgentRuntimeStatus> {
-    this.masterKey = readAgentMasterKey(this.options.environment);
+    const masterKey = readAgentMasterKey(this.options.environment);
+    this.masterKey = masterKey;
     try {
+      this.releaseAgentLock = await acquireAgentLock(this.options.databasePath);
       this.storage = openStorage({ databasePath: this.options.databasePath });
+      ensureMasterKeyVerifier(this.storage.sqlite, masterKey);
       clearTransientEventOverflow(this.storage.sqlite);
       pruneStorage(this.storage.sqlite);
 
@@ -91,12 +97,12 @@ export class AgentRuntime {
       const settings = readRuntimeSettings(settingsRepository);
       this.deviceAuthService = new DeviceAuthService({
         closeDeviceConnections: this.deviceConnectionRegistry,
-        masterKey: this.masterKey,
+        masterKey,
         settingsRepository,
         sqlite: this.storage.sqlite,
       });
       this.taskEventJournal = new TaskEventJournal({
-        masterKey: this.masterKey,
+        masterKey,
         sqlite: this.storage.sqlite,
       });
       this.taskManager = new TaskManager({
@@ -247,13 +253,22 @@ export class AgentRuntime {
       this.taskManager = undefined;
       this.taskEventJournal = undefined;
       this.runtimeStarted = false;
-      await removeRuntimeControlState(
-        this.controlStatePath,
-        this.shutdownControlToken,
-      );
-      this.shutdownControlToken = undefined;
-      this.stoppedResolver?.();
-      this.stoppedResolver = undefined;
+      const releaseAgentLock = this.releaseAgentLock;
+      this.releaseAgentLock = undefined;
+      try {
+        await removeRuntimeControlState(
+          this.controlStatePath,
+          this.shutdownControlToken,
+        );
+      } finally {
+        this.shutdownControlToken = undefined;
+        try {
+          await releaseAgentLock?.();
+        } finally {
+          this.stoppedResolver?.();
+          this.stoppedResolver = undefined;
+        }
+      }
     }
   }
 }

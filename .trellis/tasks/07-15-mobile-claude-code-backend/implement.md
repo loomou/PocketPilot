@@ -176,6 +176,29 @@
   404 isolation. A built-CLI smoke test confirmed local page/status delivery,
   remote admin 404, coordinated `agent stop`, and fresh storage migration.
 
+## Windows Release Validation Record (2026-07-16)
+
+- Activated the stopped-only `agent rekey` and `agent reset` CLI commands.
+  Rekey accepts distinct old/new environment keys, rotates every encrypted
+  Agent row and a persistent master-key verifier in one transaction, and reset
+  requires its literal confirmation before storage is opened while remaining
+  usable when the old key is lost.
+- Added one database-path lock shared by the live runtime and maintenance
+  commands. A second runtime or maintenance operation fails closed; shutdown
+  closes storage before releasing the lock.
+- Added the Windows setup and connectivity responsibility guide covering
+  manual foreground operation, key/data configuration, loopback forwarding,
+  Tailscale-compatible binding, plain HTTP/WebSocket boundaries, rekey, reset,
+  and the absence of service/login startup.
+- Added a Windows Node 24/pnpm 10.14 packed-install smoke test. It verifies the
+  tarball's CLI, migrations, local-admin assets, native `better-sqlite3`
+  installation, listener isolation/restart settings, QR base URL, coordinated
+  stop, rekey with old-key rejection, lost-key reset, and unchanged Windows
+  service/Run/Startup/scheduled-task state.
+- Final validation passed: Biome, strict TypeScript checks, 60 backend tests,
+  3 local-admin tests, production build, and the complete Windows release
+  smoke test. The opt-in live Claude SDK contract remains separately gated.
+
 6. **Implement task runtime and state machine**
    - Build per-task serialized control lanes and independent SDK lifecycles.
    - Enforce capacity only for executing/awaiting-approval tasks; enforce start-directory allowlist and per-task risk acknowledgement.

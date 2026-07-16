@@ -16,7 +16,10 @@ Claude configuration, and API keys do not belong in these tables.
 ```ts
 openStorage({ databasePath, migrationsFolder? }): StorageConnection;
 readAgentMasterKey(environment?): Buffer;
+readNewAgentMasterKey(environment?): Buffer;
+ensureMasterKeyVerifier(sqlite, masterKey): void;
 rekeySensitiveData(sqlite, oldMasterKey, newMasterKey): number;
+assertResetConfirmation(confirmation): void;
 resetAgentData(sqlite, confirmation): void;
 pruneStorage(sqlite, now?): StoragePruneResult;
 ```
@@ -43,16 +46,26 @@ live in `drizzle/`. Runtime migration uses
   node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
   ```
 
+- Secure startup creates or authenticates the encrypted
+  `storage.master-key-verifier` row before pruning or binding listeners. This
+  makes a later wrong-but-well-formed key fail even when no device credential
+  happens to be available for authentication.
+
 - Sensitive database fields use an AES-256-GCM envelope:
   `{ version: 1, algorithm, nonce, ciphertext, tag }`. Derive a key with
   HKDF-SHA-256 and authenticate JSON AAD containing the table, column, record
   ID, and envelope version. Never decrypt under a different record context.
-- `rekeySensitiveData` validates both keys before work, decrypts and encrypts
-  all known sensitive columns inside one SQLite transaction, and rolls back on
-  any malformed/tampered row.
+- `rekeySensitiveData` validates both keys before work, authenticates the old
+  key, decrypts and encrypts all known sensitive columns inside one SQLite
+  transaction, replaces the key verifier, and rolls back on any
+  malformed/tampered row. The CLI supplies the new key through the distinct
+  `AGENT_NEW_MASTER_KEY` environment variable and rejects identical keys.
 - `resetAgentData` requires the literal confirmation returned by
   `resetConfirmationValue()` and clears Agent-owned tables only. It never reads
   or deletes Claude files, configuration, credentials, or session JSONL.
+- CLI reset calls `assertResetConfirmation()` before acquiring the data lock or
+  opening SQLite, so an invalid confirmation cannot run migrations or perform
+  any other storage write. Reset intentionally works without the old key.
 - Delete event-overflow rows on startup and when an executing turn ends.
   Prune audit records after 30 days and expired operation/pairing, access-token,
   and challenge records by timestamp. Do not use these tables as transcript
@@ -71,6 +84,9 @@ live in `drizzle/`. Runtime migration uses
 | --- | --- |
 | `AGENT_MASTER_KEY` absent | `MasterKeyError` with `MASTER_KEY_MISSING`; secure runtime fails closed. |
 | Key not 43-character unpadded base64url or not 32 bytes | `MasterKeyError` with `MASTER_KEY_INVALID`. |
+| Persisted verifier does not authenticate | `StorageCryptoError` with `AUTHENTICATION_FAILED`; startup/rekey stops. |
+| `AGENT_NEW_MASTER_KEY` missing or malformed | `MasterKeyError`; rekey makes no storage change. |
+| Old and new rekey values are identical | `AgentMaintenanceError` with `MASTER_KEYS_IDENTICAL`. |
 | Envelope malformed, version/algorithm unsupported | `StorageCryptoError` with `INVALID_ENVELOPE`. |
 | Envelope/tag/context/key does not authenticate | `StorageCryptoError` with `AUTHENTICATION_FAILED`; do not expose crypto internals. |
 | A rekeyed row cannot be parsed or authenticated | Throw and roll back every prior row update in that rekey transaction. |
@@ -83,8 +99,8 @@ live in `drizzle/`. Runtime migration uses
 - Good: create a 32-byte key, encrypt a device refresh secret using
   `{ table: 'device_credentials', column: 'secret_envelope', recordId }`, then
   decrypt it with precisely the same context.
-- Base: a new database contains only migration metadata and no settings or
-  sensitive rows; rekey still validates both supplied master keys.
+- Base: the first secure startup of a new database establishes its persistent
+  key verifier before exposing either listener.
 - Bad: encrypt one table row and copy its envelope to another record ID. AAD
   authentication must fail rather than treating the ciphertext as portable.
 
@@ -100,10 +116,13 @@ live in `drizzle/`. Runtime migration uses
 - Crypto test covers valid round-trip, altered ciphertext/tag, wrong context,
   malformed envelope, missing/invalid environment key, and wrong key length.
 - Rekey test covers every encrypted table, successful new-key decrypt, old-key
-  failure, and full transaction rollback on one corrupt row.
+  failure, verifier replacement, and full transaction rollback on one corrupt
+  row.
 - Retention/reset test covers 30-day audit cleanup, expired rows, temporary
   event deletion, rejected reset confirmation, and no remaining Agent rows
   after confirmed reset.
+- Runtime maintenance tests prove invalid reset confirmation is rejected before
+  storage opening and that reset remains possible when the old key is lost.
 
 ### 7. Wrong vs Correct
 

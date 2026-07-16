@@ -8,12 +8,11 @@ src/
 ├── auth/                     # Pairing, device proof, credentials, revocation
 ├── cli.ts       # Executable boundary and top-level exit handling
 ├── cli/
-│   ├── program.ts            # Commander command registration
-│   └── bootstrap-command.ts  # Explicit unavailable-runtime error
+│   └── program.ts            # Commander command registration and dispatch
 ├── http/                     # Shared unbound Fastify setup and health route
 ├── local-admin/              # Local-only app factory and CSRF guard
 ├── remote-api/               # Remote-only HTTP/WebSocket application factory
-├── runtime/                  # Listener ownership, settings, and stop control
+├── runtime/                  # Listener ownership, data lock, stop, maintenance
 ├── storage/                  # SQLite, encryption, and settings persistence
 └── tasks/                    # Persistent task state, SDK lifecycle, policy
 test/
@@ -31,6 +30,8 @@ test/
   `tasks/`, `remote-api/`, `local-admin/`) rather than by generic file type.
 - Keep listener binding, runtime-control state, signal handling, and foreground
   lifecycle in `src/runtime/`; route factories must remain unbound.
+- Keep the shared Agent data lock and stopped-only CLI maintenance orchestration
+  in `src/runtime/`; storage primitives must not infer process ownership.
 - Keep shared HTTP compiler/plugin setup in `src/http/`, not copied into the
   remote and local-admin factories.
 - Keep persistent task policy, state transitions, SDK lifecycle ownership, and

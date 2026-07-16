@@ -1,7 +1,10 @@
 import { Command } from "commander";
 
 import { runStartCommand, runStopCommand } from "../runtime/commands.js";
-import { requireRuntimeImplementation } from "./bootstrap-command.js";
+import {
+  runRekeyCommand,
+  runResetCommand,
+} from "../runtime/maintenance-commands.js";
 
 const COMMAND_DESCRIPTIONS = {
   start: "Start the Agent in the foreground.",
@@ -10,7 +13,23 @@ const COMMAND_DESCRIPTIONS = {
   reset: "Reset Agent-managed data after explicit confirmation.",
 } as const;
 
-export function createProgram(): Command {
+export type ProgramActions = {
+  rekey(): Promise<void> | void;
+  reset(confirmation: string): Promise<void> | void;
+  start(): Promise<void> | void;
+  stop(): Promise<void> | void;
+};
+
+const defaultProgramActions: ProgramActions = {
+  rekey: runRekeyCommand,
+  reset: runResetCommand,
+  start: runStartCommand,
+  stop: runStopCommand,
+};
+
+export function createProgram(
+  actions: ProgramActions = defaultProgramActions,
+): Command {
   const program = new Command();
 
   program
@@ -21,19 +40,26 @@ export function createProgram(): Command {
   program
     .command("start")
     .description(COMMAND_DESCRIPTIONS.start)
-    .action(runStartCommand);
+    .action(() => actions.start());
 
   program
     .command("stop")
     .description(COMMAND_DESCRIPTIONS.stop)
-    .action(runStopCommand);
+    .action(() => actions.stop());
 
-  for (const commandName of ["rekey", "reset"] as const) {
-    program
-      .command(commandName)
-      .description(COMMAND_DESCRIPTIONS[commandName])
-      .action(() => requireRuntimeImplementation(commandName));
-  }
+  program
+    .command("rekey")
+    .description(COMMAND_DESCRIPTIONS.rekey)
+    .action(() => actions.rekey());
+
+  program
+    .command("reset")
+    .description(COMMAND_DESCRIPTIONS.reset)
+    .requiredOption(
+      "--confirm <value>",
+      "Confirm deletion of Agent-managed data.",
+    )
+    .action((options: { confirm: string }) => actions.reset(options.confirm));
 
   return program;
 }

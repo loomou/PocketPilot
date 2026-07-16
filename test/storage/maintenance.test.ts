@@ -22,6 +22,7 @@ import {
 } from "../../src/storage/errors.js";
 import {
   clearTransientEventOverflow,
+  ensureMasterKeyVerifier,
   pruneStorage,
   rekeySensitiveData,
   resetAgentData,
@@ -98,6 +99,26 @@ describe("storage maintenance", () => {
         parseEncryptedValueEnvelope(accessTokenEnvelope),
       ),
     ).toBe("access-verifier");
+  });
+
+  it("persists a verifier that rejects the wrong master key", () => {
+    const connection = createTemporaryStorage(
+      connections,
+      temporaryDirectories,
+    );
+    const masterKey = randomBytes(32);
+
+    ensureMasterKeyVerifier(connection.sqlite, masterKey);
+    ensureMasterKeyVerifier(connection.sqlite, masterKey);
+
+    expect(() =>
+      ensureMasterKeyVerifier(connection.sqlite, randomBytes(32)),
+    ).toThrow(StorageCryptoError);
+    expect(
+      connection.sqlite
+        .prepare("SELECT COUNT(*) AS count FROM agent_settings")
+        .get(),
+    ).toEqual({ count: 1 });
   });
 
   it("rejects an invalid rekey key before scanning any rows", () => {

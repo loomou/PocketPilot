@@ -17,18 +17,27 @@ buildLocalAdminApp(options: LocalAdminAppOptions): Promise<FastifyInstance>;
 new AgentRuntime(options).start(): Promise<AgentRuntimeStatus>;
 AgentRuntime.shutdown(): Promise<void>;
 requestRuntimeShutdown(runtimeControlPath: string): Promise<void>;
+acquireAgentLock(databasePath: string): Promise<ReleaseAgentLock>;
+runRekeyCommand(environment?, writeOutput?): Promise<void>;
+runResetCommand(confirmation, environment?, writeOutput?): Promise<void>;
 readRuntimeSettings(settingsRepository): RuntimeSettings;
 writeRuntimeSettings(settingsRepository, settings): void;
 ```
 
-The CLI commands are `agent start` and `agent stop`. The runtime settings are
-stored under the `runtime` settings key and use the Zod `runtimeSettingsSchema`.
+The CLI commands are `agent start`, `agent stop`, `agent rekey`, and
+`agent reset`. The runtime settings are stored under the `runtime` settings key
+and use the Zod `runtimeSettingsSchema`.
 
 ### 3. Contracts
 
 - `agent start` first validates `AGENT_MASTER_KEY`, opens/migrates SQLite,
-  prunes expired storage, and deletes transient event-overflow rows. A missing
-  or invalid master key fails before either listener binds.
+  authenticates its persistent key verifier, prunes expired storage, and
+  deletes transient event-overflow rows. A missing, invalid, or unauthenticated
+  master key fails before either listener binds.
+- Before opening SQLite, the runtime acquires an exclusive lock derived from
+  the database path. The same lock covers stopped-only rekey/reset commands;
+  it is held for the full runtime or maintenance operation and released only
+  after storage closes.
 - The remote Fastify app and local-admin Fastify app are separate factories and
   are unbound until `AgentRuntime` owns their sockets. The remote app may expose
   only non-sensitive `/healthz` until device authentication and `/v1` routes
@@ -57,6 +66,9 @@ stored under the `runtime` settings key and use the Zod `runtimeSettingsSchema`.
 | Condition | Required behavior |
 | --- | --- |
 | `AGENT_MASTER_KEY` absent or invalid | Throw `MasterKeyError`; do not bind a listener. |
+| Well-formed key fails persisted verifier | Throw `StorageCryptoError` with `AUTHENTICATION_FAILED`; do not bind. |
+| Runtime or maintenance already owns data lock | Throw `AgentMaintenanceError` with `AGENT_MAINTENANCE_LOCKED`. |
+| Data lock cannot be acquired/released safely | Throw `AgentMaintenanceError` with `AGENT_MAINTENANCE_LOCK_UNAVAILABLE`. |
 | No control-state file on `agent stop` | Throw `RuntimeControlError` with `RUNTIME_NOT_RUNNING`. |
 | Malformed control-state JSON | Throw `RuntimeControlError` with `RUNTIME_STATE_INVALID`. |
 | Loopback control listener cannot be reached | Throw `RuntimeControlError` with `RUNTIME_CONTROL_UNAVAILABLE`. |
@@ -70,12 +82,12 @@ stored under the `runtime` settings key and use the Zod `runtimeSettingsSchema`.
 - Good: a user starts the Agent with a valid key, exposes only the configured
   remote listener through their own tunnel, and runs `agent stop`; both
   listeners close and the control-state file disappears.
-- Base: a fresh database has no `runtime` setting, so the Agent binds remote
-  health on `127.0.0.1:43182` and local administration on
+- Base: a fresh database establishes its key verifier and, with no `runtime`
+  setting, binds remote health on `127.0.0.1:43182` and local administration on
   `127.0.0.1:43183`.
-- Bad: registering local-admin routes on the remote app, accepting a mutation
-  with only a CSRF header but no matching origin, or deleting an unmatched
-  control-state file during startup failure.
+- Bad: opening SQLite before acquiring the data lock, registering local-admin
+  routes on the remote app, or deleting an unmatched control-state file during
+  startup failure.
 
 ### 6. Tests Required
 
@@ -89,6 +101,10 @@ stored under the `runtime` settings key and use the Zod `runtimeSettingsSchema`.
   shared shutdown promise, and verifies control-state cleanup.
 - Runtime startup with no master key rejects before creating the database or
   control-state file.
+- Runtime tests prove a second owner is rejected, shutdown releases the lock,
+  and a wrong persisted master key is rejected before binding.
+- Maintenance tests prove rekey/reset cannot overlap a running Agent or each
+  other.
 - Control-state tests prove a runtime cannot remove a file whose token belongs
   to another runtime.
 
@@ -97,22 +113,26 @@ stored under the `runtime` settings key and use the Zod `runtimeSettingsSchema`.
 #### Wrong
 
 ```ts
-const app = await buildRemoteApiApp();
-app.register(localAdminRoutes);
-await app.listen({ host: "0.0.0.0", port: 43182 });
+const storage = openStorage({ databasePath });
+await runAgent(storage);
 ```
 
-This makes a tunnel or a Tailscale binding expose administration endpoints.
+This lets a stopped-only maintenance command open the same database while the
+Agent is live.
 
 #### Correct
 
 ```ts
-const remoteApp = await buildRemoteApiApp();
-const localAdminApp = await buildLocalAdminApp(options);
+const release = await acquireAgentLock(databasePath);
+const storage = openStorage({ databasePath });
 
-await localAdminApp.listen({ host: "127.0.0.1", port: 43183 });
-await remoteApp.listen({ host: remoteHost, port: remotePort });
+try {
+  await runAgent(storage);
+} finally {
+  storage.close();
+  await release();
+}
 ```
 
-The process runtime owns both sockets, and only the local-admin app can mount
-local administration routes.
+The runtime owns the lock for the same lifetime as SQLite and all listeners,
+so stopped-only maintenance cannot overlap live Agent work.

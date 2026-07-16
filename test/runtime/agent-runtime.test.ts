@@ -125,6 +125,48 @@ describe("AgentRuntime", () => {
       verifiedStorage.close();
     }
   });
+
+  it("rejects a second runtime and a wrong persisted master key", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pocketpilot-runtime-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "agent.sqlite");
+    await configureEphemeralRemoteListener(databasePath);
+    const firstRuntime = new AgentRuntime({
+      databasePath,
+      environment: { AGENT_MASTER_KEY: masterKey },
+      installSignalHandlers: false,
+      localAdminPort: 0,
+      runtimeControlPath: join(directory, "runtime-control.json"),
+    });
+    const secondRuntime = new AgentRuntime({
+      databasePath,
+      environment: { AGENT_MASTER_KEY: masterKey },
+      installSignalHandlers: false,
+      localAdminPort: 0,
+      runtimeControlPath: join(directory, "second-runtime-control.json"),
+    });
+    runtimes.push(firstRuntime, secondRuntime);
+
+    await firstRuntime.start();
+    await expect(secondRuntime.start()).rejects.toMatchObject({
+      code: "AGENT_MAINTENANCE_LOCKED",
+    });
+    await firstRuntime.shutdown();
+
+    const wrongKeyRuntime = new AgentRuntime({
+      databasePath,
+      environment: {
+        AGENT_MASTER_KEY: Buffer.alloc(32, 2).toString("base64url"),
+      },
+      installSignalHandlers: false,
+      localAdminPort: 0,
+      runtimeControlPath: join(directory, "wrong-key-runtime-control.json"),
+    });
+    runtimes.push(wrongKeyRuntime);
+    await expect(wrongKeyRuntime.start()).rejects.toMatchObject({
+      code: "AUTHENTICATION_FAILED",
+    });
+  });
 });
 
 async function configureEphemeralRemoteListener(

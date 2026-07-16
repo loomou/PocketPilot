@@ -16,6 +16,7 @@ output.
 | `StorageDataError` | none | Corrupt or schema-invalid non-secret setting JSON. |
 | `StorageResetConfirmationError` | none | Reset requested without the exact explicit confirmation. |
 | `RuntimeControlError` | `RUNTIME_NOT_RUNNING`, `RUNTIME_STATE_INVALID`, `RUNTIME_CONTROL_UNAVAILABLE`, `RUNTIME_CONTROL_REJECTED` | Local `agent stop` control-state or loopback shutdown failure. |
+| `AgentMaintenanceError` | `AGENT_DATA_NOT_FOUND`, `AGENT_MAINTENANCE_LOCKED`, `AGENT_MAINTENANCE_LOCK_UNAVAILABLE`, `MASTER_KEYS_IDENTICAL` | Stopped-only maintenance preconditions and exclusive data-lock failures. |
 | `DeviceAuthError` | Pairing, device-proof, challenge, opaque-token, and revocation codes | HTTP-safe device authentication failure. |
 | `TaskError` | `TASK_BUSY`, `TASK_INTERRUPTED`, `TASK_TERMINAL`, `STALE_APPROVAL`, `CONCURRENT_TASK_LIMIT_REACHED`, workspace-policy, capability, and task-lookup codes | Validated mobile task-control and task-policy failures. |
 
@@ -32,6 +33,8 @@ output.
 - Translate malformed/missing runtime-control state and loopback stop failures
   into `RuntimeControlError`; never surface raw `fetch`/socket text from a
   local command.
+- Translate expected data-lock and maintenance precondition failures into
+  `AgentMaintenanceError`; do not surface filesystem/lock-library details.
 - Translate expected pairing/authentication failure into `DeviceAuthError` and
   let the Fastify boundary return only `{ code, message }`; never leak token,
   verifier, signature, or crypto-library details.
@@ -48,5 +51,7 @@ output.
   mapping belongs to the future validated API boundary.
 - Do not delete a runtime-control file merely because a new startup failed;
   only the runtime that owns its random control token may remove it.
+- Do not open SQLite for reset until the literal confirmation has been
+  validated, and do not let rekey/reset proceed without the shared data lock.
 - A verified refresh-token reuse is a security event, not a normal invalid
   token: revoke the device and close its registered sockets before responding.

@@ -14,8 +14,10 @@ import {
 } from "../../src/storage/errors.js";
 import {
   AGENT_MASTER_KEY_ENVIRONMENT_VARIABLE,
+  AGENT_NEW_MASTER_KEY_ENVIRONMENT_VARIABLE,
   assertMasterKey,
   readAgentMasterKey,
+  readNewAgentMasterKey,
 } from "../../src/storage/master-key.js";
 
 const context = createEncryptionContext({
@@ -70,6 +72,11 @@ describe("storage encryption", () => {
     expect(
       readAgentMasterKey({
         [AGENT_MASTER_KEY_ENVIRONMENT_VARIABLE]: encodedKey,
+      }),
+    ).toEqual(key);
+    expect(
+      readNewAgentMasterKey({
+        [AGENT_NEW_MASTER_KEY_ENVIRONMENT_VARIABLE]: encodedKey,
       }),
     ).toEqual(key);
     expect(() => readAgentMasterKey({})).toThrow(MasterKeyError);
