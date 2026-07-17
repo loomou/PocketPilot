@@ -1,0 +1,31 @@
+{
+  "id": "claude-sdk-message-passthrough",
+  "name": "claude-sdk-message-passthrough",
+  "title": "Claude SDK Message Passthrough",
+  "description": "Relay SDKUserMessage and SDKMessage objects unchanged between remote clients and task-scoped Claude Code sessions.",
+  "status": "in_progress",
+  "dev_type": "backend",
+  "scope": "remote SDK message transport",
+  "package": null,
+  "priority": "P2",
+  "creator": "xue",
+  "assignee": "xue",
+  "createdAt": "2026-07-17",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "feat/claude-sdk-message-passthrough",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "src/claude-sdk/",
+    "src/tasks/",
+    "src/remote-api/",
+    "src/api-docs/"
+  ],
+  "notes": "",
+  "meta": {}
+}
