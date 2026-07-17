@@ -1,8 +1,0 @@
-{"file": ".trellis/spec/frontend/scaffold-contracts.md", "reason": "Preserve the local-admin browser API and supported operations."}
-{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "Place the decomposed feature and shadcn primitives in approved locations."}
-{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Follow project component composition and prop conventions."}
-{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "Preserve effect, callback, and explicit refresh patterns during decomposition."}
-{"file": ".trellis/spec/frontend/state-management.md", "reason": "Keep server snapshots, form drafts, and transient action state correctly separated."}
-{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Maintain decoded API boundaries and strict TypeScript contracts."}
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Apply frontend quality and forbidden-pattern requirements."}
-{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Avoid duplicating UI helpers and repeated state presentation patterns."}
