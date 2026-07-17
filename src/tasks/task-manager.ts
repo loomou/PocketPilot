@@ -143,6 +143,12 @@ export class TaskManager {
     return this.#supportedPermissionModes;
   }
 
+  public authorizedWorkspaceRoots(): readonly string[] {
+    return [
+      ...readTaskRuntimeSettings(this.#settingsRepository).workspaceRoots,
+    ];
+  }
+
   public getTask(taskId: string): TaskSnapshot {
     this.assertTaskId(taskId);
     return this.requireTask(taskId);

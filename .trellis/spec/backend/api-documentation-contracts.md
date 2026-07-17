@@ -34,6 +34,10 @@ emits `dist/openapi/mobile-v1.json`.
   objects used at runtime. Route schemas also declare a stable operation ID,
   tag, summary, description, error-body shape, and Bearer security where
   access-token authentication is required.
+- `GET /v1/workspaces` documents the Bearer-protected configured workspace
+  list as `{ workspaceRoots: string[] }`. Its response schema is derived from
+  `taskRuntimeSettingsSchema.pick({ workspaceRoots: true })`, matching the
+  settings owner used by task authorization.
 - Generate the complete document with structural no-op service dependencies.
   `app.ready()` may build the route graph, but documentation generation must
   never bind sockets, open storage, launch Claude, or require a real key.
@@ -99,8 +103,8 @@ emits `dist/openapi/mobile-v1.json`.
   schemas; reject malformed control subscriptions and invalid/binary SDK
   frames.
 - Assert the complete path set contains `/v1/tasks/{taskId}/sdk`, omits
-  `/v1/tasks/{taskId}/instruction`, and names the approval parameter
-  `requestId`.
+  `/v1/tasks/{taskId}/instruction`, includes protected `/v1/workspaces`, and
+  names the approval parameter `requestId`.
 - Assert control docs contain no SDK server message, raw SDK docs contain no
   PocketPilot wrapper, and all approval fields and stable close codes appear.
 - Local-app injection must return Swagger UI and the exact raw document while

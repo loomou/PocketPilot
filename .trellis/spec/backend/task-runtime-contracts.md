@@ -19,6 +19,7 @@ manager.createTask({
   deviceId, operationId, initialCwd, model, permissionMode,
   workspaceRiskAccepted,
 });
+manager.authorizedWorkspaceRoots(): readonly string[];
 manager.submitSdkMessage({ deviceId, taskId, message: SDKUserMessage });
 manager.resolveApproval({
   deviceId, operationId, taskId, requestId, result: PermissionResult,
@@ -38,7 +39,8 @@ journal.subscribeControl(taskId, afterCursor, subscriber): Unsubscribe;
 
 Remote conversation transport is the bidirectional
 `GET /v1/tasks/{taskId}/sdk` WebSocket. `GET /v1/events` is the independent
-PocketPilot control WebSocket. `/v1/tasks/{taskId}/instruction` does not exist.
+PocketPilot control WebSocket. `GET /v1/workspaces` returns configured
+authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
 
 ### 3. Contracts
 
@@ -67,6 +69,12 @@ PocketPilot control WebSocket. `/v1/tasks/{taskId}/instruction` does not exist.
   Canonicalize selected cwd and configured roots, require
   `workspaceRiskAccepted: true`, and remember that roots authorize initial cwd
   but are not a filesystem sandbox.
+- `GET /v1/workspaces` requires the existing Bearer access credential and
+  returns `{ workspaceRoots: string[] }` from the same Zod-validated
+  `task-runtime` settings used by task creation. Return a new array, expose no
+  other local settings, and do not duplicate settings/SQLite reads in the
+  route. These are configured roots; task creation still performs canonical
+  existence and descendant authorization checks.
 - Normal HTTP controls use the per-task lane and 24-hour
   `(deviceId, operationId)` cache. Interrupt and close bypass the lane. Close
   persists `terminal`, cancels approval, interrupts, and closes the SDK session
@@ -100,6 +108,8 @@ PocketPilot control WebSocket. `/v1/tasks/{taskId}/instruction` does not exist.
 | --- | --- |
 | Workspace risk not accepted | `WORKSPACE_SCOPE_RISK_NOT_ACCEPTED`; create no task. |
 | Canonical cwd is outside configured roots | `WORKSPACE_NOT_AUTHORIZED`; create no task. |
+| Workspace list request lacks a valid access credential | HTTP 401; expose no configured path. |
+| No workspace root is configured | HTTP 200 with `{ workspaceRoots: [] }`. |
 | Idle query would exceed active capacity | `CONCURRENT_TASK_LIMIT_REACHED`; submit nothing. |
 | Raw input arrives during executing/approval | Accept and forward unchanged; do not return `TASK_BUSY`. |
 | Task is interrupted/terminal or SDK input is closed | Raw socket closes `4009 / TASK_SESSION_UNAVAILABLE`. |
@@ -117,6 +127,8 @@ PocketPilot control WebSocket. `/v1/tasks/{taskId}/instruction` does not exist.
   remains active across both SDK result boundaries.
 - Base: an SDK socket connects without `afterUuid`; it receives the retained
   current turn from the beginning and then live raw messages.
+- Base: an authenticated device lists workspaces before local configuration
+  and receives an empty array rather than a synthetic default path.
 - Bad: writing raw frames to `operation_results`, wrapping SDK output in a task
   envelope, using one subscriber set for both channels, or rejecting active
   input as busy.
@@ -126,6 +138,9 @@ PocketPilot control WebSocket. `/v1/tasks/{taskId}/instruction` does not exist.
 - Test workspace risk/root policy, idle exclusion and active capacity, raw
   input while idle/executing/awaiting approval, `shouldQuery: false`, queued
   query lifecycle, and same-session object identity.
+- Route-test that `/v1/workspaces` rejects unauthenticated requests and returns
+  exactly the configured `workspaceRoots` for an authenticated device; OpenAPI
+  must include the protected operation and shared response schema.
 - Assert SDK input creates metadata-only audit rows and no operation-result
   rows; inspect SQLite/logs for prompt, UUID, tool, and output content.
 - Test known/missing/unknown UUID replay, messages without UUID, encrypted
@@ -155,6 +170,7 @@ idempotency subsystem.
 ```ts
 await taskLane.run(() => session.submit(sdkUserMessage));
 recordMetadataOnlyAudit(deviceId, taskId, "task.sdk-message-submitted");
+return { workspaceRoots: [...manager.authorizedWorkspaceRoots()] };
 ```
 
 The lane preserves arrival order only; the SDK controls scheduling and the

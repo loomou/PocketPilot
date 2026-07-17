@@ -36,12 +36,26 @@ describe("versioned task routes", () => {
     apps.push(app);
     const unauthorized = await app.inject({ method: "GET", url: "/v1/tasks" });
     expect(unauthorized.statusCode).toBe(401);
+    const unauthorizedWorkspaces = await app.inject({
+      method: "GET",
+      url: "/v1/workspaces",
+    });
+    expect(unauthorizedWorkspaces.statusCode).toBe(401);
     const capabilities = await app.inject({
       headers: fixture.headers,
       method: "GET",
       url: "/v1/capabilities",
     });
     expect(capabilities.statusCode).toBe(200);
+    const workspaces = await app.inject({
+      headers: fixture.headers,
+      method: "GET",
+      url: "/v1/workspaces",
+    });
+    expect(workspaces.statusCode).toBe(200);
+    expect(workspaces.json()).toEqual({
+      workspaceRoots: [fixture.workspace],
+    });
     const rejected = await app.inject({
       headers: fixture.headers,
       method: "POST",

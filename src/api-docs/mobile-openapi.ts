@@ -202,6 +202,7 @@ const documentationDeviceAuthService: RemoteApiDeviceAuthService = {
 
 const documentationTaskManager: TaskRouteManager &
   TaskSdkRouteOptions["taskManager"] = {
+  authorizedWorkspaceRoots: unavailableDocumentationHandler,
   closeTask: unavailableDocumentationHandler,
   createTask: unavailableDocumentationHandler,
   getTask: unavailableDocumentationHandler,

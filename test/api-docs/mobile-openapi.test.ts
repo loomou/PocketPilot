@@ -27,6 +27,7 @@ const expectedPaths = [
   "/v1/tasks/{taskId}/permission-mode",
   "/v1/tasks/{taskId}/resume",
   "/v1/tasks/{taskId}/sdk",
+  "/v1/workspaces",
 ] as const;
 
 const websocketExtensionSchema = z.object({

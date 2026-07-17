@@ -8,6 +8,7 @@ import {
   authErrorResponseSchema,
   readBearerAccessToken,
 } from "../auth/http.js";
+import { taskRuntimeSettingsSchema } from "../tasks/settings.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import {
   taskOperationResultSchema,
@@ -21,6 +22,9 @@ const createTaskSchema = operationSchema.extend({
   model: z.string().min(1).optional(),
   permissionMode: z.string().min(1),
   workspaceRiskAccepted: z.boolean(),
+});
+const authorizedWorkspacesResponseSchema = taskRuntimeSettingsSchema.pick({
+  workspaceRoots: true,
 });
 
 export const permissionResultSchema = z.discriminatedUnion("behavior", [
@@ -65,6 +69,7 @@ export type TaskRouteDeviceAuthService = Pick<
 
 export type TaskRouteManager = Pick<
   TaskManager,
+  | "authorizedWorkspaceRoots"
   | "closeTask"
   | "createTask"
   | "getTask"
@@ -116,6 +121,29 @@ export function registerTaskRoutes(
         supportedPermissionModes: [
           ...options.taskManager.supportedPermissionModes(),
         ],
+      };
+    },
+  );
+  typed.get(
+    "/v1/workspaces",
+    {
+      schema: {
+        description:
+          "Lists the workspace roots authorized by the computer's local task policy.",
+        operationId: "listAuthorizedWorkspaces",
+        response: {
+          200: authorizedWorkspacesResponseSchema,
+          ...taskErrorResponses,
+        },
+        security: bearerSecurity,
+        summary: "List authorized workspaces",
+        tags: taskTag,
+      },
+    },
+    async (request) => {
+      authenticate(request);
+      return {
+        workspaceRoots: [...options.taskManager.authorizedWorkspaceRoots()],
       };
     },
   );
