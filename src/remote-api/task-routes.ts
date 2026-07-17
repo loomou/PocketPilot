@@ -1,3 +1,4 @@
+import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
@@ -21,6 +22,31 @@ const createTaskSchema = operationSchema.extend({
   permissionMode: z.string().min(1),
   workspaceRiskAccepted: z.boolean(),
 });
+
+export const permissionResultSchema = z.discriminatedUnion("behavior", [
+  z
+    .object({
+      behavior: z.literal("allow"),
+      decisionClassification: z
+        .enum(["user_temporary", "user_permanent", "user_reject"])
+        .optional(),
+      toolUseID: z.string().optional(),
+      updatedInput: z.record(z.string(), z.unknown()).optional(),
+      updatedPermissions: z.array(z.unknown()).optional(),
+    })
+    .passthrough(),
+  z
+    .object({
+      behavior: z.literal("deny"),
+      decisionClassification: z
+        .enum(["user_temporary", "user_permanent", "user_reject"])
+        .optional(),
+      interrupt: z.boolean().optional(),
+      message: z.string(),
+      toolUseID: z.string().optional(),
+    })
+    .passthrough(),
+]);
 
 const bearerSecurity = [{ bearerAuth: [] }] as const;
 const taskTag = ["Tasks"] as const;
@@ -48,7 +74,6 @@ export type TaskRouteManager = Pick<
   | "resumeTask"
   | "setModel"
   | "setPermissionMode"
-  | "submitInstruction"
   | "supportedPermissionModes"
 >;
 
@@ -151,28 +176,6 @@ export function registerTaskRoutes(
       options.taskManager.createTask({
         ...request.body,
         deviceId: authenticate(request),
-      }),
-  );
-  typed.post(
-    "/v1/tasks/:taskId/instruction",
-    {
-      schema: {
-        body: operationSchema.extend({ instruction: z.string().min(1) }),
-        description:
-          "Starts the next Claude turn in an idle persistent task session.",
-        operationId: "submitTaskInstruction",
-        params: taskIdParamsSchema,
-        response: { 200: taskOperationResultSchema, ...taskErrorResponses },
-        security: bearerSecurity,
-        summary: "Submit a task instruction",
-        tags: taskTag,
-      },
-    },
-    async (request) =>
-      options.taskManager.submitInstruction({
-        ...request.body,
-        deviceId: authenticate(request),
-        taskId: request.params.taskId,
       }),
   );
   typed.post(
@@ -287,14 +290,14 @@ export function registerTaskRoutes(
       }),
   );
   typed.post(
-    "/v1/tasks/:taskId/approvals/:approvalId",
+    "/v1/tasks/:taskId/approvals/:requestId",
     {
       schema: {
-        body: operationSchema.extend({ decision: z.enum(["approve", "deny"]) }),
+        body: operationSchema.extend({ result: permissionResultSchema }),
         description:
-          "Approves or denies the currently pending mobile tool request.",
+          "Returns the complete Claude Agent SDK PermissionResult for the pending request.",
         operationId: "resolveTaskApproval",
-        params: taskIdParamsSchema.extend({ approvalId: z.string().min(1) }),
+        params: taskIdParamsSchema.extend({ requestId: z.string().min(1) }),
         response: { 200: taskOperationResultSchema, ...taskErrorResponses },
         security: bearerSecurity,
         summary: "Resolve a task approval",
@@ -303,9 +306,10 @@ export function registerTaskRoutes(
     },
     async (request) =>
       options.taskManager.resolveApproval({
-        ...request.body,
-        approvalId: request.params.approvalId,
         deviceId: authenticate(request),
+        operationId: request.body.operationId,
+        requestId: request.params.requestId,
+        result: request.body.result as PermissionResult,
         taskId: request.params.taskId,
       }),
   );

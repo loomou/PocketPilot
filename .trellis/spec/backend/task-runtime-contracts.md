@@ -1,160 +1,161 @@
 # Task Runtime Contracts
 
-## Scenario: Persistent, Independently Controlled Claude Tasks
+## Scenario: Persistent Tasks with Separate SDK and Control Transports
 
 ### 1. Scope / Trigger
 
 Apply this contract when code creates, controls, restores, terminates, or
-persists a task, including workspace policy, concurrency, mobile operation-id
-deduplication, SDK approvals, and manual Agent shutdown.
+persists a task; accepts SDK user messages; publishes SDK/control traffic;
+handles approvals; or changes active-turn replay.
 
-The Agent stores task metadata and the SDK session reference only. Instructions,
-assistant output, tool inputs, and Claude transcript history never enter the
-task tables, idempotency result, or audit record.
+The Agent stores task metadata and the SDK session reference only. SDK input,
+assistant output, tool input/output, and Claude transcript history never enter
+task rows, operation results, audit content, or logs.
 
 ### 2. Signatures
 
 ```ts
-new TaskManager({ sqlite, settingsRepository }).recoverFromUnexpectedRestart();
-
 manager.createTask({
-  deviceId,
-  operationId,
-  initialCwd,
-  model, // optional
-  permissionMode,
+  deviceId, operationId, initialCwd, model, permissionMode,
   workspaceRiskAccepted,
 });
-manager.submitInstruction({ deviceId, operationId, taskId, instruction });
-manager.resolveApproval({ deviceId, operationId, taskId, approvalId, decision });
+manager.submitSdkMessage({ deviceId, taskId, message: SDKUserMessage });
+manager.resolveApproval({
+  deviceId, operationId, taskId, requestId, result: PermissionResult,
+});
 manager.interruptTask({ deviceId, operationId, taskId });
 manager.closeTask({ deviceId, operationId, taskId });
 manager.resumeTask({ deviceId, operationId, taskId });
 manager.setModel({ deviceId, operationId, taskId, model });
 manager.setPermissionMode({ deviceId, operationId, taskId, permissionMode });
 manager.shutdown();
+
+journal.publishSdkMessage(taskId, message: SDKMessage): void;
+journal.subscribeSdk(taskId, afterUuid, subscriber): Unsubscribe;
+journal.publishControlEvent(taskId, event): TaskControlEventEnvelope;
+journal.subscribeControl(taskId, afterCursor, subscriber): Unsubscribe;
 ```
 
-`task-runtime` settings are Zod-validated through `SettingsRepository` and
-contain `{ concurrentTaskCapacity, workspaceRoots }`. The initial capacity is
-three and no workspace root is authorized by default.
+Remote conversation transport is the bidirectional
+`GET /v1/tasks/{taskId}/sdk` WebSocket. `GET /v1/events` is the independent
+PocketPilot control WebSocket. `/v1/tasks/{taskId}/instruction` does not exist.
 
 ### 3. Contracts
 
 - Persist only `idle`, `executing`, `awaiting_approval`, `interrupted`, and
-  `terminal` task states. The normal path is `idle -> executing ->
-  awaiting_approval -> executing -> idle`.
-- Only `executing` and `awaiting_approval` count towards capacity. A new task
-  is rejected immediately when active work is at capacity; an instruction is
-  also rejected if previously created idle sessions would exceed the limit.
-- Canonicalize both the selected initial directory and configured roots before
-  the descendant check. The root list authorizes only the initial `cwd`; it is
-  not a filesystem sandbox. Require `workspaceRiskAccepted: true` before any
-  task row is created.
-- A task owns one long-lived SDK input stream while its live session exists.
-  Open an idle/recovered session lazily, passing persisted `model`,
-  `permissionMode`, and `sdkSessionId` as SDK options. Never recreate an SDK
-  transcript in Agent storage.
-- Per-task normal controls run in arrival order. `interruptTask` and
-  `closeTask` bypass that ordinary lane. Close cancels a pending approval,
-  interrupts and closes the SDK session, and persists `terminal` before it
-  waits for cancellation completion.
-- An approval uses the SDK request ID as its task-scoped approval ID. Approval
-  waits without an Agent timeout. Interrupt, close, SDK abort, or a stale ID
-  cancels/rejects that deferred decision.
-- Persist each successful mobile state-changing result for 24 hours by
-  `(deviceId, operationId)` and return its original metadata-only result on a
-  retry. Write exactly one matching audit row without prompt, output, tool, or
-  secret data.
-- At process startup turn unfinished `executing` and `awaiting_approval` rows
-  into `interrupted`. `resumeTask` requires a saved SDK session ID, opens with
-  `Options.resume`, and changes to `idle` without replaying an instruction.
-  Existing idle rows remain idle. Manual `TaskManager.shutdown()` cancels all
-  live SDK/approval resources and marks every non-terminal row terminal before
-  storage closes.
-- `TaskEventJournal` assigns monotonic in-memory task cursors, sends each
-  event to current subscribers, and retains only the active turn. It keeps a
-  small memory prefix, encrypts later `event_overflow` rows with the existing
-  record-specific AES-GCM context, and deletes both stores at turn end.
-  At 256 MiB it sends `EVENT_REPLAY_STORAGE_LIMIT_REACHED` live and stops
-  retaining later events without stopping the task.
-- The task-event WebSocket parser and sender consume exported Zod schemas for
-  subscribe, subscribed, event, and error messages. The generated OpenAPI
-  `x-websocket` extension converts those same schemas and records Bearer
-  handshake authentication, close code `4003`, and `afterCursor` replay.
-- Remote task HTTP routes live below `/v1`. Authenticate every request with the
-  existing bearer-token service before calling `TaskManager`; the route layer
-  validates Zod request/response shapes and maps `TaskError` to its stable
-  `{ code, message }` response. Response documentation reuses the domain
-  `taskSnapshotSchema` and `taskOperationResultSchema`; it never reimplements
-  task transitions or a parallel documentation model.
+  `terminal`. The common path is `idle -> executing -> awaiting_approval ->
+  executing -> idle`.
+- A task owns one long-lived SDK input stream and Query while its live session
+  exists. Lazily open idle/recovered sessions with persisted `model`,
+  `permissionMode`, and `sdkSessionId`; never recreate a transcript.
+- A raw SDK frame has no PocketPilot `operationId` and is outside the 24-hour
+  HTTP operation-result cache. After accepting it, write one metadata-only
+  audit record with device ID, task ID, operation name, and result only.
+- An idle message with `shouldQuery !== false` reserves capacity, begins
+  active-turn retention, and changes the task to `executing`. An idle
+  `shouldQuery: false` message is appended to the same SDK session without
+  inventing a turn or consuming active capacity.
+- Accept SDK messages while `executing` or `awaiting_approval`. Serialize
+  simultaneous socket callbacks only to retain arrival order; never return
+  `TASK_BUSY` merely because a turn or approval is active. Preserve `priority`
+  and `shouldQuery`; do not implement a PocketPilot scheduler.
+- Count query-triggering messages only for lifecycle accounting. A result
+  boundary advances retained-turn ownership; the task becomes idle after the
+  outstanding SDK query boundaries or authoritative SDK idle state, without
+  changing SDK queuing behavior.
+- Only `executing` and `awaiting_approval` count toward configured capacity.
+  Canonicalize selected cwd and configured roots, require
+  `workspaceRiskAccepted: true`, and remember that roots authorize initial cwd
+  but are not a filesystem sandbox.
+- Normal HTTP controls use the per-task lane and 24-hour
+  `(deviceId, operationId)` cache. Interrupt and close bypass the lane. Close
+  persists `terminal`, cancels approval, interrupts, and closes the SDK session
+  before awaiting cancellation completion.
+- An approval uses the SDK `requestId`. The control payload is
+  `{ toolName, input, options: Omit<CanUseToolOptions, "signal"> }`; the HTTP
+  response body is `{ operationId, result: PermissionResult }`. Return the
+  result unchanged to the deferred callback.
+- SDK and control journal APIs are disjoint. Raw subscribers receive only
+  `SDKMessage`; control subscribers receive only PocketPilot envelopes. Never
+  publish `{ kind: "sdk", payload }` on `/v1/events`.
+- Retain only the active turn. Use one internal storage order, an in-memory
+  SDK `uuid -> storageCursor` map, a memory prefix, and encrypted
+  `event_overflow` rows. The internal record wrapper never crosses either
+  public protocol.
+- SDK reconnect `afterUuid` is outside the message body. A known UUID replays
+  later retained SDK records; absent or unknown UUID replays the current turn
+  from its beginning. Messages without UUID remain valid and replay normally.
+- Control reconnect retains `afterCursor`. At 256 MiB stop later retention but
+  continue live delivery and publish
+  `EVENT_REPLAY_STORAGE_LIMIT_REACHED` on the control stream. Delete transient
+  replay at turn end, terminal cleanup, shutdown, and secure startup.
+- At startup mark unfinished active rows `interrupted`. Resume requires a saved
+  SDK session ID and uses `Options.resume` without resubmitting any message.
+  Manual shutdown cancels live resources and makes all non-terminal rows
+  terminal before storage closes.
 
 ### 4. Validation & Error Matrix
 
 | Condition | Required result |
 | --- | --- |
-| `workspaceRiskAccepted` is false | `WORKSPACE_SCOPE_RISK_NOT_ACCEPTED`; create no task. |
-| Canonical initial cwd is not a configured root/descendant | `WORKSPACE_NOT_AUTHORIZED`; create no task. |
-| Active work meets configured capacity | `CONCURRENT_TASK_LIMIT_REACHED`; never queue work. |
-| Permission mode is absent from installed SDK capability data | `UNSUPPORTED_PERMISSION_MODE`; never fall back. |
-| Instruction/model change during a current turn | `TASK_BUSY`; model change is not queued. |
-| Instruction/interrupt/permission change before explicit recovery | `TASK_INTERRUPTED`; only resume can reopen it. |
-| Approval ID is no longer pending | `STALE_APPROVAL`; never resolve the SDK callback. |
-| Close or any later control against terminal state | `TASK_TERMINAL`; no SDK work restarts. |
-| Resume has no persisted SDK session reference | `TASK_SESSION_UNAVAILABLE`; do not invent a new transcript. |
-| Replay buffer reaches its per-task budget | Send `EVENT_REPLAY_STORAGE_LIMIT_REACHED` live; retain no later replay data. |
+| Workspace risk not accepted | `WORKSPACE_SCOPE_RISK_NOT_ACCEPTED`; create no task. |
+| Canonical cwd is outside configured roots | `WORKSPACE_NOT_AUTHORIZED`; create no task. |
+| Idle query would exceed active capacity | `CONCURRENT_TASK_LIMIT_REACHED`; submit nothing. |
+| Raw input arrives during executing/approval | Accept and forward unchanged; do not return `TASK_BUSY`. |
+| Task is interrupted/terminal or SDK input is closed | Raw socket closes `4009 / TASK_SESSION_UNAVAILABLE`. |
+| Task does not exist | Raw socket closes `4004 / TASK_NOT_FOUND`. |
+| Raw transport fails unexpectedly | Close `4011 / SDK_TRANSPORT_FAILED`; never send an error JSON frame on the SDK socket. |
+| Model changes while active | `TASK_BUSY`; do not queue the model change. |
+| Approval request ID is stale | `STALE_APPROVAL`; never resolve another SDK callback. |
+| Resume lacks an SDK session reference | `TASK_SESSION_UNAVAILABLE`; do not invent a transcript. |
+| Replay reaches 256 MiB | Notify control subscribers, retain no later records, and continue live SDK/control delivery. |
 
 ### 5. Good / Base / Bad Cases
 
-- Good: two idle tasks share an authorized directory, one starts a turn and
-  becomes active, and both retain independent SDK/session metadata.
-- Base: a fresh Agent has no roots, so every task creation is rejected until a
-  localhost administrator configures one and the mobile user accepts its
-  non-sandbox risk.
-- Bad: treating an idle session as active capacity, storing an instruction in
-  `operation_results`, waiting behind a model change before honoring close, or
-  submitting the interrupted instruction when a task resumes.
+- Good: a task accepts two SDK user messages during execution, preserves their
+  scheduling fields, emits raw Query messages on only its SDK socket, and
+  remains active across both SDK result boundaries.
+- Base: an SDK socket connects without `afterUuid`; it receives the retained
+  current turn from the beginning and then live raw messages.
+- Bad: writing raw frames to `operation_results`, wrapping SDK output in a task
+  envelope, using one subscriber set for both channels, or rejecting active
+  input as busy.
 
 ### 6. Tests Required
 
-- Unit-test risk acknowledgement, real/canonical root descendant checks,
-  same-directory tasks, idle exclusion from capacity, and active capacity
-  rejection.
-- Unit-test operation retries return the first result and create one audit row
-  with no instruction content.
-- Unit-test user interrupt cancels approval, stale approval rejection, idle
-  model changes, and permission-mode forwarding while execution continues.
-- Unit-test active-state recovery, resume-option forwarding without a replayed
-  message, close priority, and manual runtime shutdown turning idle and active
-  rows terminal.
-- Unit-test memory replay ordering, encrypted SQLite overflow round-trip,
-  cap notification/live delivery, and cleanup after idle or terminal state.
-- OpenAPI tests validate the complete task route set plus representative
-  WebSocket messages from the exported runtime schemas.
+- Test workspace risk/root policy, idle exclusion and active capacity, raw
+  input while idle/executing/awaiting approval, `shouldQuery: false`, queued
+  query lifecycle, and same-session object identity.
+- Assert SDK input creates metadata-only audit rows and no operation-result
+  rows; inspect SQLite/logs for prompt, UUID, tool, and output content.
+- Test known/missing/unknown UUID replay, messages without UUID, encrypted
+  overflow, cap notification/live delivery, cleanup, task isolation, and
+  negative SDK/control cross-delivery.
+- Test raw WebSocket authentication, bidirectional deep equality, invalid/base
+  frames, stable close codes, multiple tasks, and device revocation.
+- Test all serializable approval options and full allow/deny results, plus
+  abort, replacement, interrupt, close, and shutdown cancellation.
+- Test recovery/resume without replay, close priority, and manual runtime
+  shutdown of idle and active tasks.
 
 ### 7. Wrong vs Correct
 
 #### Wrong
 
 ```ts
-if (task.state !== "idle") throw new Error("busy");
-await queuedModelChange;
-await session.interrupt();
-task.state = "terminal";
+if (task.state !== "idle") throw taskBusyError();
+return persistOperation({ operationId, result: sdkMessage });
 ```
 
-The queued operation delays an explicit close and gives it lower priority than
-ordinary control work.
+This adds an independent scheduler and stores conversation content in the HTTP
+idempotency subsystem.
 
 #### Correct
 
 ```ts
-pendingApproval?.cancel("The user closed this task.");
-persistTaskState(taskId, "terminal");
-const interrupt = session.interrupt();
-session.close();
-await Promise.allSettled([interrupt]);
+await taskLane.run(() => session.submit(sdkUserMessage));
+recordMetadataOnlyAudit(deviceId, taskId, "task.sdk-message-submitted");
 ```
 
-Persist terminal state immediately after cancellation begins, bypass the normal
-task lane, and never let a late SDK completion reopen the task.
+The lane preserves arrival order only; the SDK controls scheduling and the
+Agent records no message content.

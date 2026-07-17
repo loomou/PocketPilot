@@ -1,6 +1,7 @@
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
-export const taskEventEnvelopeSchema = z.object({
+export const taskControlEventEnvelopeSchema = z.object({
   cursor: z.number().int().nonnegative(),
   event: z.object({
     kind: z.string().min(1),
@@ -10,15 +11,27 @@ export const taskEventEnvelopeSchema = z.object({
   taskId: z.uuid(),
 });
 
-export type TaskEvent = z.infer<typeof taskEventEnvelopeSchema>["event"];
-export type TaskEventEnvelope = z.infer<typeof taskEventEnvelopeSchema>;
+export type TaskControlEvent = z.infer<
+  typeof taskControlEventEnvelopeSchema
+>["event"];
+export type TaskControlEventEnvelope = z.infer<
+  typeof taskControlEventEnvelopeSchema
+>;
 
 export type TaskEventSink = {
   beginTurn(taskId: string): void;
   endTurn(taskId: string): void;
-  publish(taskId: string, event: TaskEvent): TaskEventEnvelope;
+  publishControlEvent(
+    taskId: string,
+    event: TaskControlEvent,
+  ): TaskControlEventEnvelope;
+  publishSdkMessage(taskId: string, message: SDKMessage): void;
 };
 
-export type TaskEventSubscriber = {
-  send(event: TaskEventEnvelope): void;
+export type TaskControlEventSubscriber = {
+  send(event: TaskControlEventEnvelope): void;
+};
+
+export type TaskSdkMessageSubscriber = {
+  send(message: SDKMessage): void;
 };

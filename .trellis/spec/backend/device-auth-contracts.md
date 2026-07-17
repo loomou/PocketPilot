@@ -60,9 +60,11 @@ the device-registration/delivery columns on `pairings`.
   mark its active access rows revoked, close all registered device sockets with
   WebSocket code `4003`, and return `REFRESH_TOKEN_REUSED`. Access-token
   authentication also checks device and token revocation state on every use.
-- `InMemoryDeviceConnectionRegistry` owns the device-to-socket mapping. Future
-  authenticated WebSocket routes must register on connect and unregister on
-  close; they must not invent a separate revocation mechanism.
+- `InMemoryDeviceConnectionRegistry` owns the device-to-socket mapping. Both
+  `/v1/events` and `/v1/tasks/{taskId}/sdk` authenticate during the handshake,
+  register only after successful authentication, and unregister on close.
+  They share this registry so revocation closes control and raw SDK sockets for
+  only the affected device with code `4003`.
 - Remote authentication route Zod schemas are also the generated mobile
   OpenAPI source. Pair registration, claim, and refresh-proof routes are public
   bootstrap operations; `/v1/auth/session` declares `bearerAuth`. Every route
@@ -85,6 +87,7 @@ the device-registration/delivery columns on `pairings`.
 | Refresh credential idle for 30 days | `REFRESH_TOKEN_EXPIRED` (401); user pairs again. |
 | Verified superseded refresh credential | Revoke device, close its sockets, return `REFRESH_TOKEN_REUSED` (401). |
 | Access credential expired/revoked | `ACCESS_TOKEN_EXPIRED` or `ACCESS_TOKEN_REVOKED` (401). |
+| WebSocket handshake has a missing/invalid/revoked access credential | Close `4003`; register no subscription and expose no auth detail. |
 
 ### 5. Good / Base / Bad Cases
 
@@ -107,8 +110,9 @@ the device-registration/delivery columns on `pairings`.
   request lacking CSRF.
 - OpenAPI generation tests prove authentication operations have stable unique
   operation IDs and only access-protected operations declare Bearer security.
-- Connection-registry test proves revoking device A closes only A's sockets
-  with code `4003`.
+- Connection-registry and WebSocket integration tests prove revoking device A
+  closes only A's control/SDK sockets with code `4003`, while device B stays
+  connected.
 - Storage maintenance test inserts an access-token envelope and proves rekey
   migrates it with the other encrypted records; pruning removes expired access
   and challenge state.

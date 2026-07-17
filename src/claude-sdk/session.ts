@@ -11,10 +11,6 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
-import {
-  type NormalizedClaudeSdkEvent,
-  normalizeSdkMessage,
-} from "./event-normalizer.js";
 import { ClaudeSdkInputStream } from "./input.js";
 
 export const pinnedPermissionModes: readonly PermissionMode[] = [
@@ -120,7 +116,7 @@ export class ClaudeSdkSession {
     await this.#query.setPermissionMode(mode);
   }
 
-  /** Adds the next instruction to the Query's one long-lived input stream. */
+  /** Adds the next raw SDK user message to the Query's long-lived input. */
   public submit(message: SDKUserMessage): void {
     this.#input.push(message);
   }
@@ -134,13 +130,12 @@ export class ClaudeSdkSession {
     this.#query.close();
   }
 
-  public async *events(): AsyncGenerator<NormalizedClaudeSdkEvent> {
+  public async *events(): AsyncGenerator<SDKMessage> {
     for await (const message of this.#query) {
-      this.#sessionId = message.session_id;
-      const event = normalizeSdkMessage(message);
-      if (event !== undefined) {
-        yield event;
+      if (message.session_id !== undefined) {
+        this.#sessionId = message.session_id;
       }
+      yield message;
     }
   }
 }

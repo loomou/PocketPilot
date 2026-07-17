@@ -17,14 +17,14 @@ This directory records the conventions for the PocketPilot TypeScript Agent.
 | [Bootstrap Contracts](./bootstrap-contracts.md) | Current CLI and HTTP bootstrap boundaries | Established |
 | [Environment Configuration Contracts](./environment-configuration-contracts.md) | Allowlisted cwd dotenv loading and bootstrap validation | Established |
 | [Mobile API Documentation Contracts](./api-documentation-contracts.md) | OpenAPI generation, local Swagger delivery, and WebSocket documentation | Established |
-| [Claude Agent SDK Contracts](./claude-sdk-contracts.md) | Streaming-session, control, approval, and event boundaries | Established |
+| [Claude Agent SDK Contracts](./claude-sdk-contracts.md) | Raw message passthrough, long-lived input, controls, and approval boundaries | Established |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | Established |
 | [Database Guidelines](./database-guidelines.md) | SQLite, encryption, retention, and migration contracts | Established |
 | [Device Authentication and Pairing Contracts](./device-auth-contracts.md) | QR pairing, device proof, credential rotation, and revocation | Established |
 | [Error Handling](./error-handling.md) | Error types, handling strategies | Established |
 | [Process and Listener Runtime Contracts](./process-runtime-contracts.md) | Manual start/stop, listener isolation, local CSRF, and shutdown | Established |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Established |
-| [Task Runtime Contracts](./task-runtime-contracts.md) | Persistent task lifecycle, control priority, workspace policy, and recovery | Established |
+| [Task Runtime Contracts](./task-runtime-contracts.md) | Persistent lifecycle, split SDK/control transports, replay, policy, and recovery | Established |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | Established |
 | [Local Administration Contracts](./local-admin-contracts.md) | Local configuration APIs, static assets, audits, and isolation | Established |
 

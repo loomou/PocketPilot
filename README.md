@@ -146,10 +146,13 @@ The document contains only the remote `/v1` mobile contract. It excludes local
 all documentation URLs. Protected operations use the opaque access credential
 as a Bearer token.
 
-`/v1/events` is described through the OpenAPI `x-websocket` extension with its
-subscribe, acknowledgement, event, error, close-code, and replay-cursor
-schemas. Swagger UI displays this protocol but does not execute WebSocket
-messages.
+The OpenAPI `x-websocket` extensions describe two isolated protocols:
+`/v1/tasks/{taskId}/sdk` exchanges raw `SDKUserMessage` and `SDKMessage`
+objects owned by `@anthropic-ai/claude-agent-sdk@0.3.210`, while `/v1/events`
+carries only PocketPilot task and approval controls. SDK reconnect uses the
+optional `afterUuid` query parameter; the control stream retains its
+subscription cursor. Swagger UI displays these protocols but does not execute
+WebSocket messages.
 
 ## Connectivity
 

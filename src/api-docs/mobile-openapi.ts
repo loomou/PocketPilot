@@ -13,6 +13,12 @@ import {
   taskEventRouteDocumentation,
 } from "../remote-api/task-event-routes.js";
 import type { TaskRouteManager } from "../remote-api/task-routes.js";
+import {
+  sdkUserMessageTransportSchema,
+  sdkWebSocketClose,
+  type TaskSdkRouteOptions,
+  taskSdkRouteDocumentation,
+} from "../remote-api/task-sdk-routes.js";
 
 type WebSocketExtension = {
   "x-websocket": {
@@ -21,14 +27,12 @@ type WebSocketExtension = {
       stage: "handshake";
     };
     clientMessages: {
-      subscribe: object;
+      [name: string]: object;
     };
     closeCodes: Record<string, string>;
     notes: readonly string[];
     serverMessages: {
-      error: object;
-      event: object;
-      subscribed: object;
+      [name: string]: object;
     };
   };
 };
@@ -44,14 +48,19 @@ export async function buildMobileOpenApiDocument(): Promise<MobileOpenApiDocumen
     if (!isOpenApi31Document(document)) {
       throw new Error("The generated mobile API document is not OpenAPI 3.1.");
     }
-    addWebSocketExtension(document);
+    addWebSocketExtensions(document);
     return document;
   } finally {
     await app.close();
   }
 }
 
-function addWebSocketExtension(document: MobileOpenApiDocument): void {
+function addWebSocketExtensions(document: MobileOpenApiDocument): void {
+  addControlWebSocketExtension(document);
+  addSdkWebSocketExtension(document);
+}
+
+function addControlWebSocketExtension(document: MobileOpenApiDocument): void {
   const path = document.paths["/v1/events"];
   const operation = path?.get ?? {
     ...taskEventRouteDocumentation,
@@ -71,11 +80,13 @@ function addWebSocketExtension(document: MobileOpenApiDocument): void {
         "4003": "Authentication failed or the paired device was revoked.",
       },
       notes: [
-        "afterCursor replays retained active-turn events before live delivery.",
+        "This stream carries PocketPilot control events only and never carries Claude SDK conversation messages.",
+        "afterCursor replays retained active-turn control events before live delivery.",
         "A mobile disconnect never pauses or cancels task work.",
         "Swagger UI displays this contract but does not execute WebSocket messages.",
       ],
       serverMessages: {
+        approvalRequested: approvalRequestedControlEventSchema,
         error: z.toJSONSchema(eventErrorMessageSchema),
         event: z.toJSONSchema(eventDeliveryMessageSchema),
         subscribed: z.toJSONSchema(eventSubscribedMessageSchema),
@@ -83,6 +94,91 @@ function addWebSocketExtension(document: MobileOpenApiDocument): void {
     },
   };
   document.paths["/v1/events"] = { ...path, get: extendedOperation };
+}
+
+const approvalRequestedControlEventSchema = {
+  additionalProperties: false,
+  description:
+    "PocketPilot control envelope carrying every serializable CanUseTool callback argument. AbortSignal remains local.",
+  properties: {
+    event: {
+      additionalProperties: false,
+      properties: {
+        kind: { const: "approval.requested" },
+        payload: {
+          additionalProperties: false,
+          properties: {
+            input: { additionalProperties: true, type: "object" },
+            options: {
+              additionalProperties: true,
+              properties: {
+                agentID: { type: "string" },
+                blockedPath: { type: "string" },
+                decisionReason: { type: "string" },
+                description: { type: "string" },
+                displayName: { type: "string" },
+                requestId: { type: "string" },
+                suggestions: { items: {}, type: "array" },
+                title: { type: "string" },
+                toolUseID: { type: "string" },
+              },
+              required: ["toolUseID", "requestId"],
+              type: "object",
+            },
+            toolName: { type: "string" },
+          },
+          required: ["toolName", "input", "options"],
+          type: "object",
+        },
+      },
+      required: ["kind", "payload"],
+      type: "object",
+    },
+  },
+  required: ["event"],
+  type: "object",
+};
+
+function addSdkWebSocketExtension(document: MobileOpenApiDocument): void {
+  const route = "/v1/tasks/{taskId}/sdk";
+  const path = document.paths[route];
+  const operation = path?.get ?? {
+    ...taskSdkRouteDocumentation,
+    responses: {
+      101: { description: "WebSocket protocol switch accepted." },
+    },
+  };
+  const sdkMessageSchema = {
+    additionalProperties: true,
+    description:
+      "Raw SDKMessage JSON object. The installed SDK package is the source of truth for all variants and fields.",
+    properties: { type: { type: "string" } },
+    required: ["type"],
+    type: "object",
+  };
+  const sdkUserMessageSchema = z.toJSONSchema(sdkUserMessageTransportSchema);
+
+  const extendedOperation: OpenAPIV3.OperationObject<WebSocketExtension> = {
+    ...operation,
+    "x-websocket": {
+      authentication: { scheme: "bearerAuth", stage: "handshake" },
+      clientMessages: { sdkUserMessage: sdkUserMessageSchema },
+      closeCodes: Object.fromEntries(
+        Object.values(sdkWebSocketClose).map(({ code, reason }) => [
+          String(code),
+          reason,
+        ]),
+      ),
+      notes: [
+        "Wire types are owned by @anthropic-ai/claude-agent-sdk@0.3.210.",
+        "Client frames are raw SDKUserMessage objects and server frames are raw SDKMessage objects with no PocketPilot wrapper.",
+        "afterUuid resumes after a retained SDK UUID; a missing or unknown value replays the current active turn from its beginning.",
+        "Swagger UI displays this contract but does not execute WebSocket messages.",
+      ],
+      serverMessages: { sdkMessage: sdkMessageSchema },
+    },
+  };
+  document.paths[route] = { ...path, get: extendedOperation };
 }
 
 function isOpenApi31Document(
@@ -104,7 +200,8 @@ const documentationDeviceAuthService: RemoteApiDeviceAuthService = {
   registerPairingDevice: unavailableDocumentationHandler,
 };
 
-const documentationTaskManager: TaskRouteManager = {
+const documentationTaskManager: TaskRouteManager &
+  TaskSdkRouteOptions["taskManager"] = {
   closeTask: unavailableDocumentationHandler,
   createTask: unavailableDocumentationHandler,
   getTask: unavailableDocumentationHandler,
@@ -114,7 +211,7 @@ const documentationTaskManager: TaskRouteManager = {
   resumeTask: unavailableDocumentationHandler,
   setModel: unavailableDocumentationHandler,
   setPermissionMode: unavailableDocumentationHandler,
-  submitInstruction: unavailableDocumentationHandler,
+  submitSdkMessage: unavailableDocumentationHandler,
   supportedPermissionModes: unavailableDocumentationHandler,
 };
 
@@ -125,7 +222,8 @@ const documentationDependencies = {
   },
   deviceAuthService: documentationDeviceAuthService,
   eventJournal: {
-    subscribe: unavailableDocumentationHandler,
+    subscribeControl: unavailableDocumentationHandler,
+    subscribeSdk: unavailableDocumentationHandler,
   },
   taskManager: documentationTaskManager,
 };

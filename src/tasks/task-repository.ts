@@ -168,6 +168,26 @@ export class TaskRepository {
     return row === undefined ? undefined : parseOperationResult(row.resultJson);
   }
 
+  public recordAudit(input: {
+    deviceId: string;
+    occurredAt: number;
+    operation: string;
+    result: string;
+    taskId: string;
+  }): void {
+    this.database
+      .insert(auditRecords)
+      .values({
+        deviceId: input.deviceId,
+        id: randomUUID(),
+        occurredAt: input.occurredAt,
+        operation: input.operation,
+        result: input.result,
+        taskId: input.taskId,
+      })
+      .run();
+  }
+
   public require(id: string): TaskSnapshot {
     const task = this.find(id);
     if (task === undefined) {

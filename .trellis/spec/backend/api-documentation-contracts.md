@@ -3,7 +3,7 @@
 ## 1. Scope / Trigger
 
 Apply this contract when changing a remote `/v1` HTTP route, its Zod schemas,
-Bearer authentication metadata, the task-event WebSocket protocol, local
+Bearer authentication metadata, either WebSocket protocol, local
 Swagger delivery, or packaged production assets. The executable Fastify/Zod
 contracts must remain the single source of truth for mobile integration docs.
 
@@ -18,6 +18,8 @@ eventSubscriptionMessageSchema: ZodType;
 eventSubscribedMessageSchema: ZodType;
 eventDeliveryMessageSchema: ZodType;
 eventErrorMessageSchema: ZodType;
+sdkUserMessageTransportSchema: ZodType;
+sdkWebSocketClose: Record<string, { code: number; reason: string }>;
 ```
 
 Documentation endpoints are local-only: `GET /documentation/`,
@@ -41,10 +43,22 @@ emits `dist/openapi/mobile-v1.json`.
 - The remote app owns the Swagger generator decorator but registers no Swagger
   UI or documentation route. The local app registers the supplied document in
   static mode and serves Swagger UI only on its loopback listener.
-- `/v1/events` uses the exported runtime Zod schemas for both socket parsing /
-  sending and OpenAPI `x-websocket` message schemas. The extension records
-  Bearer handshake authentication, close code `4003`, `afterCursor` replay,
-  live handoff, and Swagger UI's non-executable limitation.
+- Document two isolated WebSockets. `/v1/events` uses exported runtime Zod
+  schemas for PocketPilot subscribe/subscribed/event/error messages and never
+  claims to carry SDK conversation data. `/v1/tasks/{taskId}/sdk` carries raw
+  `SDKUserMessage` client frames and raw `SDKMessage` server frames.
+- The SDK WebSocket extension identifies
+  `@anthropic-ai/claude-agent-sdk@0.3.210` as the wire-contract owner. Reuse the
+  exported `sdkUserMessageTransportSchema` for the documented base guard;
+  describe SDK output as an open SDK-owned object instead of hand-copying its
+  evolving union into Zod.
+- Document `afterUuid`, absent/unknown replay fallback, no PocketPilot wrapper,
+  and close codes `4000`, `4003`, `4004`, `4009`, and `4011`. Keep
+  `afterCursor` and `EVENT_SUBSCRIPTION_INVALID` specific to the control
+  socket.
+- Document approval controls with every serializable `CanUseTool` option and
+  the HTTP response's complete `PermissionResult`; explicitly state that
+  `AbortSignal` remains local.
 - `pnpm build` writes deterministic, pretty-printed JSON. The packed tarball
   includes the same artifact and all Swagger runtime dependencies.
 
@@ -59,18 +73,21 @@ emits `dist/openapi/mobile-v1.json`.
 | Generated path begins with `/admin/` or `/_internal/` | Quality check fails; do not ship the document. |
 | WebSocket handshake authentication/revocation fails | Close with `4003`, as recorded in `x-websocket`. |
 | WebSocket subscription message is malformed | Send the shared `EVENT_SUBSCRIPTION_INVALID` error message. |
+| Raw SDK frame fails the exported base schema | Close `4000 / SDK_MESSAGE_INVALID`; emit no JSON error frame. |
+| SDK task is missing or unavailable | Close `4004 / TASK_NOT_FOUND` or `4009 / TASK_SESSION_UNAVAILABLE`. |
+| SDK transport fails unexpectedly | Close `4011 / SDK_TRANSPORT_FAILED`; expose no internal exception text. |
 | Repeated generation from unchanged source differs byte-for-byte | Treat as a build-quality failure. |
 
 ## 5. Good / Base / Bad Cases
 
-- Good: changing a route's Zod response updates runtime validation, local
-  Swagger, and the packaged JSON through one contract owner.
+- Good: changing the raw SDK input base guard updates runtime validation,
+  `x-websocket`, local Swagger, and packaged JSON from the exported Zod owner.
 - Base: the unbound remote app without domain dependencies exposes only health
   at runtime and no documentation route; the documentation factory supplies
   no-op dependencies to register the complete `/v1` graph.
-- Bad: maintaining a second handwritten path/schema list, registering Swagger
-  UI on the tunneled listener, or documenting WebSocket payloads separately
-  from the parser/sender schemas.
+- Bad: documenting `{ kind: "sdk", payload }`, maintaining a hand-copied SDK
+  union, registering Swagger UI remotely, or documenting input separately from
+  the exported transport schema.
 
 ## 6. Tests Required
 
@@ -79,7 +96,13 @@ emits `dist/openapi/mobile-v1.json`.
 - Assert generated JSON contains no `/admin/*`, `/_internal/*`, master/Claude
   key names, runtime-control credential, prompt, task output, or tool data.
 - Validate representative WebSocket messages with the exported runtime Zod
-  schemas and reject malformed subscriptions.
+  schemas; reject malformed control subscriptions and invalid/binary SDK
+  frames.
+- Assert the complete path set contains `/v1/tasks/{taskId}/sdk`, omits
+  `/v1/tasks/{taskId}/instruction`, and names the approval parameter
+  `requestId`.
+- Assert control docs contain no SDK server message, raw SDK docs contain no
+  PocketPilot wrapper, and all approval fields and stable close codes appear.
 - Local-app injection must return Swagger UI and the exact raw document while
   remote-app injection returns 404 for the same paths.
 - `pnpm build`, tarball inspection, and the Windows packed-install smoke test
@@ -103,6 +126,7 @@ parallel schema that can drift from runtime validation.
 route.schema.response = { 200: taskSnapshotSchema };
 const document = await buildMobileOpenApiDocument();
 await localApp.register(fastifySwaggerUi, { routePrefix: "/documentation" });
+const sdkInput = z.toJSONSchema(sdkUserMessageTransportSchema);
 ```
 
 The route reuses its domain Zod schema, one generator builds the document, and

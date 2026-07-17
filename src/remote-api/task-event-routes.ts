@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { DeviceConnectionRegistry } from "../auth/device-auth-service.js";
 import { readBearerAccessToken } from "../auth/http.js";
 import type { TaskEventJournal } from "../tasks/task-event-journal.js";
-import { taskEventEnvelopeSchema } from "../tasks/task-events.js";
+import { taskControlEventEnvelopeSchema } from "../tasks/task-events.js";
 
 export const eventSubscriptionMessageSchema = z.object({
   afterCursor: z.number().int().min(-1).default(-1),
@@ -18,7 +18,7 @@ export const eventSubscribedMessageSchema = z.object({
 });
 
 export const eventDeliveryMessageSchema = z.object({
-  event: taskEventEnvelopeSchema,
+  event: taskControlEventEnvelopeSchema,
   type: z.literal("event"),
 });
 
@@ -35,7 +35,7 @@ const eventServerMessageSchema = z.discriminatedUnion("type", [
 
 export const taskEventRouteDocumentation = {
   description:
-    "Authenticated WebSocket subscription for active-turn replay and live task events. See x-websocket in the generated OpenAPI document.",
+    "Authenticated WebSocket subscription for PocketPilot task/control events only. Claude SDK messages use the task-specific SDK WebSocket.",
   operationId: "subscribeTaskEvents",
   security: [{ bearerAuth: [] }],
   summary: "Subscribe to task events",
@@ -50,7 +50,7 @@ export type TaskEventRouteOptions = {
     ): () => void;
   };
   deviceAuthService: AccessDeviceAuthenticator;
-  eventJournal: Pick<TaskEventJournal, "subscribe">;
+  eventJournal: Pick<TaskEventJournal, "subscribeControl">;
 };
 
 export type AccessDeviceAuthenticator = {
@@ -94,7 +94,7 @@ export function registerTaskEventRoutes(
         }
 
         unsubscribeTask?.();
-        unsubscribeTask = options.eventJournal.subscribe(
+        unsubscribeTask = options.eventJournal.subscribeControl(
           subscription.taskId,
           subscription.afterCursor,
           {

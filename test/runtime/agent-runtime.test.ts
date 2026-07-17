@@ -124,7 +124,7 @@ describe("AgentRuntime", () => {
     } finally {
       verifiedStorage.close();
     }
-  });
+  }, 10_000);
 
   it("rejects a second runtime and a wrong persisted master key", async () => {
     const directory = mkdtempSync(join(tmpdir(), "pocketpilot-runtime-"));

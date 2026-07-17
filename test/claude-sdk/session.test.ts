@@ -8,7 +8,6 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
-import { createSdkUserMessage } from "../../src/claude-sdk/input.js";
 import {
   type ClaudeSdkQuery,
   openClaudeSdkSession,
@@ -74,7 +73,7 @@ describe("Claude SDK session adapter", () => {
       },
     );
 
-    session.submit(createSdkUserMessage("later instruction"));
+    session.submit(sdkUserMessage("later instruction"));
     await session.setModel("sonnet");
     await session.setPermissionMode("plan");
     await session.interrupt();
@@ -100,20 +99,75 @@ describe("Claude SDK session adapter", () => {
     ]);
   });
 
-  it("normalizes only relayable output and lifecycle events", async () => {
+  it("yields every SDK message unchanged", async () => {
+    const userMessage = {
+      type: "user",
+      message: { role: "user", content: "raw SDK input echo" },
+      parent_tool_use_id: null,
+      priority: "next",
+      shouldQuery: false,
+      future_transport_field: { preserved: true },
+    } as SDKMessage;
+    const assistantMessage = {
+      type: "assistant",
+      message: { content: [], role: "assistant" },
+      parent_tool_use_id: null,
+      session_id: "session-1",
+      uuid: "00000000-0000-0000-0000-000000000002",
+    } as unknown as SDKMessage;
+    const streamMessage = {
+      type: "stream_event",
+      event: { type: "content_block_delta" },
+      parent_tool_use_id: null,
+      session_id: "session-1",
+      uuid: "00000000-0000-0000-0000-000000000003",
+    } as unknown as SDKMessage;
+    const toolProgressMessage = {
+      type: "tool_progress",
+      elapsed_time_seconds: 1,
+      parent_tool_use_id: null,
+      session_id: "session-1",
+      tool_name: "Read",
+      tool_use_id: "tool-1",
+      uuid: "00000000-0000-0000-0000-000000000004",
+    } as SDKMessage;
+    const resultMessage = {
+      type: "result",
+      subtype: "success",
+      result: "done",
+      session_id: "session-1",
+      uuid: "00000000-0000-0000-0000-000000000005",
+    } as unknown as SDKMessage;
+    const openSdkVariant = {
+      type: "system",
+      subtype: "status",
+      status: "requesting",
+      session_id: "session-1",
+      uuid: "00000000-0000-0000-0000-000000000006",
+      future_status_field: true,
+    } as unknown as SDKMessage;
+    const messages = [
+      userMessage,
+      assistantMessage,
+      streamMessage,
+      stateChangeMessage,
+      toolProgressMessage,
+      resultMessage,
+      openSdkVariant,
+      userMessage,
+    ];
     const session = openClaudeSdkSession(
       {
         cwd: process.cwd(),
       },
-      () => createFakeQuery(),
+      () => createFakeQuery(messages),
     );
 
-    await expect(collectAsync(session.events())).resolves.toEqual([
-      {
-        kind: "session.state-changed",
-        message: stateChangeMessage,
-      },
-    ]);
+    const received = await collectAsync(session.events());
+    expect(received).toEqual(messages);
+    expect(
+      received.every((message, index) => message === messages[index]),
+    ).toBe(true);
     expect(session.sessionId).toBe("session-1");
   });
 
@@ -167,3 +221,12 @@ describe("Claude SDK session adapter", () => {
     expect(permissionMode).toBe("plan");
   });
 });
+
+function sdkUserMessage(content: string): SDKUserMessage {
+  return {
+    type: "user",
+    message: { role: "user", content },
+    parent_tool_use_id: null,
+    origin: { kind: "human" },
+  };
+}

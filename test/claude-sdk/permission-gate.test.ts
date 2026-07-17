@@ -1,4 +1,7 @@
-import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  CanUseTool,
+  PermissionResult,
+} from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,7 +12,18 @@ import {
 
 function createApprovalRequest(signal: AbortSignal): Parameters<CanUseTool>[2] {
   return {
+    agentID: "agent-1",
+    blockedPath: "README.md",
+    decisionReason: "The path requires explicit approval.",
     signal,
+    suggestions: [
+      {
+        behavior: "allow",
+        destination: "session",
+        rules: [{ toolName: "Read", ruleContent: "README.md" }],
+        type: "addRules",
+      },
+    ],
     toolUseID: "tool-use-1",
     requestId: "request-1",
     title: "Claude wants to read README.md",
@@ -31,11 +45,35 @@ describe("Claude SDK tool approval gate", () => {
       createApprovalRequest(new AbortController().signal),
     );
 
-    expect(pending?.requestId).toBe("request-1");
+    expect(pending?.options).toEqual({
+      agentID: "agent-1",
+      blockedPath: "README.md",
+      decisionReason: "The path requires explicit approval.",
+      description: "Read access is needed to answer the request.",
+      displayName: "Read file",
+      requestId: "request-1",
+      suggestions: [
+        {
+          behavior: "allow",
+          destination: "session",
+          rules: [{ toolName: "Read", ruleContent: "README.md" }],
+          type: "addRules",
+        },
+      ],
+      title: "Claude wants to read README.md",
+      toolUseID: "tool-use-1",
+    });
     expect(pending?.toolName).toBe("Read");
-    pending?.approve();
+    const result = {
+      behavior: "allow",
+      decisionClassification: "user_temporary",
+      toolUseID: "tool-use-1",
+      updatedInput: { file_path: "README.md" },
+      updatedPermissions: pending?.options.suggestions ?? [],
+    } satisfies PermissionResult;
+    pending?.resolve(result);
 
-    await expect(decision).resolves.toEqual({ behavior: "allow" });
+    await expect(decision).resolves.toBe(result);
   });
 
   it("rejects a pending approval when the SDK aborts it", async () => {
@@ -70,7 +108,7 @@ describe("Claude SDK tool approval gate", () => {
     );
 
     pending?.cancel("Task was closed.");
-    pending?.approve();
+    pending?.resolve({ behavior: "allow" });
 
     await expect(decision).rejects.toMatchObject({
       message: "Task was closed.",

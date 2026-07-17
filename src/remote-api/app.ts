@@ -17,16 +17,23 @@ import {
   type TaskRouteDeviceAuthService,
   type TaskRouteManager,
 } from "./task-routes.js";
+import {
+  registerTaskSdkRoutes,
+  type TaskSdkRouteOptions,
+} from "./task-sdk-routes.js";
 
 export type RemoteApiDeviceAuthService = RemoteDeviceAuthRouteService &
   TaskRouteDeviceAuthService &
-  TaskEventRouteOptions["deviceAuthService"];
+  TaskEventRouteOptions["deviceAuthService"] &
+  TaskSdkRouteOptions["deviceAuthService"];
 
 export type RemoteApiAppOptions = {
-  connectionRegistry?: TaskEventRouteOptions["connectionRegistry"];
+  connectionRegistry?: TaskEventRouteOptions["connectionRegistry"] &
+    TaskSdkRouteOptions["connectionRegistry"];
   deviceAuthService?: RemoteApiDeviceAuthService;
-  eventJournal?: TaskEventRouteOptions["eventJournal"];
-  taskManager?: TaskRouteManager;
+  eventJournal?: TaskEventRouteOptions["eventJournal"] &
+    TaskSdkRouteOptions["eventJournal"];
+  taskManager?: TaskRouteManager & TaskSdkRouteOptions["taskManager"];
 };
 
 /**
@@ -60,7 +67,12 @@ export async function buildRemoteApiApp(
       },
       openapi: "3.1.0",
       servers: [],
-      tags: [{ name: "Authentication" }, { name: "Tasks" }, { name: "Events" }],
+      tags: [
+        { name: "Authentication" },
+        { name: "Tasks" },
+        { name: "Events" },
+        { name: "SDK" },
+      ],
     },
     transform: jsonSchemaTransform,
   });
@@ -83,6 +95,19 @@ export async function buildRemoteApiApp(
       connectionRegistry: options.connectionRegistry,
       deviceAuthService: options.deviceAuthService,
       eventJournal: options.eventJournal,
+    });
+  }
+  if (
+    options.connectionRegistry !== undefined &&
+    options.deviceAuthService !== undefined &&
+    options.eventJournal !== undefined &&
+    options.taskManager !== undefined
+  ) {
+    registerTaskSdkRoutes(app, {
+      connectionRegistry: options.connectionRegistry,
+      deviceAuthService: options.deviceAuthService,
+      eventJournal: options.eventJournal,
+      taskManager: options.taskManager,
     });
   }
   return app;

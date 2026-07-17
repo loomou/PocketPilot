@@ -7,12 +7,12 @@ import type {
   PermissionMode,
   PermissionResult,
   SDKControlInterruptResponse,
+  SDKMessage,
   SDKSessionStateChangedMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { NormalizedClaudeSdkEvent } from "../../src/claude-sdk/event-normalizer.js";
 import { ToolApprovalCancelledError } from "../../src/claude-sdk/permission-gate.js";
 import type { OpenClaudeSdkSessionOptions } from "../../src/claude-sdk/session.js";
 import {
@@ -21,6 +21,11 @@ import {
 } from "../../src/storage/database.js";
 import { SettingsRepository } from "../../src/storage/settings-repository.js";
 import { writeTaskRuntimeSettings } from "../../src/tasks/settings.js";
+import type {
+  TaskControlEvent,
+  TaskControlEventEnvelope,
+  TaskEventSink,
+} from "../../src/tasks/task-events.js";
 import {
   TaskManager,
   type TaskSdkSession,
@@ -80,9 +85,9 @@ describe("TaskManager", () => {
 
     expect(first.task.state).toBe("idle");
     expect(second.task.initialCwd).toBe(first.task.initialCwd);
-    await manager.submitInstruction(instructionInput(first.task.id));
-    await manager.submitInstruction(instructionInput(second.task.id));
-    await manager.submitInstruction(instructionInput(third.task.id));
+    await manager.submitSdkMessage(sdkInput(first.task.id));
+    await manager.submitSdkMessage(sdkInput(second.task.id));
+    await manager.submitSdkMessage(sdkInput(third.task.id));
 
     await expect(
       manager.createTask(
@@ -128,6 +133,32 @@ describe("TaskManager", () => {
     ).toEqual([{ resultJson: JSON.stringify(first) }]);
   });
 
+  it("appends shouldQuery false while idle without inventing a turn", async () => {
+    const fixture = createFixture(connections, temporaryDirectories, managers);
+    const created = await fixture.manager.createTask(
+      createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
+    );
+    const appendOnly = sdkInput(created.task.id, "context only", {
+      priority: "later",
+      shouldQuery: false,
+    });
+
+    const appended = await fixture.manager.submitSdkMessage(appendOnly);
+    const session = fixture.sessionFor(created.task.id);
+
+    expect(appended.state).toBe("idle");
+    expect(session.submissions).toEqual([appendOnly.message]);
+    expect(fixture.eventSink.begunTurns).toEqual([]);
+
+    const querying = sdkInput(created.task.id, "now answer", {
+      priority: "next",
+    });
+    const executing = await fixture.manager.submitSdkMessage(querying);
+    expect(executing.state).toBe("executing");
+    expect(session.submissions).toEqual([appendOnly.message, querying.message]);
+    expect(fixture.eventSink.begunTurns).toEqual([created.task.id]);
+  });
+
   it("cancels a pending approval on interrupt and rejects its stale response", async () => {
     const fixture = createFixture(connections, temporaryDirectories, managers);
     const created = await fixture.manager.createTask(
@@ -136,7 +167,7 @@ describe("TaskManager", () => {
         workspaceRiskAccepted: true,
       }),
     );
-    await fixture.manager.submitInstruction(instructionInput(created.task.id));
+    await fixture.manager.submitSdkMessage(sdkInput(created.task.id));
     const session = fixture.sessionFor(created.task.id);
 
     expect(session.options.model).toBe("haiku");
@@ -156,13 +187,13 @@ describe("TaskManager", () => {
     await expect(
       fixture.manager.resolveApproval({
         ...operationInput(created.task.id),
-        approvalId: "approval-1",
-        decision: "approve",
+        requestId: "approval-1",
+        result: { behavior: "allow" },
       }),
     ).rejects.toMatchObject({ code: "STALE_APPROVAL" });
 
-    await fixture.manager.submitInstruction(
-      instructionInput(created.task.id, "continue"),
+    await fixture.manager.submitSdkMessage(
+      sdkInput(created.task.id, "continue"),
     );
     expect(session.submissions).toHaveLength(2);
   });
@@ -172,7 +203,7 @@ describe("TaskManager", () => {
     const created = await fixture.manager.createTask(
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
     );
-    await fixture.manager.submitInstruction(instructionInput(created.task.id));
+    await fixture.manager.submitSdkMessage(sdkInput(created.task.id));
     const session = fixture.sessionFor(created.task.id);
 
     await expect(
@@ -206,7 +237,7 @@ describe("TaskManager", () => {
     const created = await fixture.manager.createTask(
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
     );
-    await fixture.manager.submitInstruction(instructionInput(created.task.id));
+    await fixture.manager.submitSdkMessage(sdkInput(created.task.id));
     fixture.sessionFor(created.task.id).emitState("running");
     await waitFor(
       () => fixture.manager.getTask(created.task.id).sdkSessionId !== null,
@@ -230,13 +261,147 @@ describe("TaskManager", () => {
     expect(recovered.recoverFromUnexpectedRestart()).toBe(1);
     expect(recovered.getTask(created.task.id).state).toBe("interrupted");
     await expect(
-      recovered.submitInstruction(instructionInput(created.task.id)),
+      recovered.submitSdkMessage(sdkInput(created.task.id)),
     ).rejects.toMatchObject({ code: "TASK_INTERRUPTED" });
 
     const resumed = await recovered.resumeTask(operationInput(created.task.id));
     expect(resumed.task.state).toBe("idle");
     expect(recoveredSessions[0]?.options.resume).toBe(
       fixture.manager.getTask(created.task.id).sdkSessionId,
+    );
+  });
+
+  it("preserves raw SDK scheduling fields and complete approval contracts", async () => {
+    const fixture = createFixture(connections, temporaryDirectories, managers);
+    const created = await fixture.manager.createTask(
+      createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
+    );
+    const first = sdkInput(created.task.id, "first", {
+      priority: "next",
+      shouldQuery: true,
+      timestamp: "2026-07-17T00:00:00.000Z",
+      uuid: "00000000-0000-4000-8000-000000000010",
+    });
+
+    await fixture.manager.submitSdkMessage(first);
+    const session = fixture.sessionFor(created.task.id);
+    expect(session.submissions[0]).toBe(first.message);
+
+    const decision = session.requestApproval("approval-full", {
+      agentID: "agent-1",
+      blockedPath: "README.md",
+      decisionReason: "Workspace permission is required.",
+      description: "Read access is needed.",
+      displayName: "Read file",
+      suggestions: [
+        {
+          behavior: "allow",
+          destination: "session",
+          rules: [{ ruleContent: "README.md", toolName: "Read" }],
+          type: "addRules",
+        },
+      ],
+      title: "Claude wants to read README.md",
+    });
+    await waitFor(
+      () =>
+        fixture.manager.getTask(created.task.id).state === "awaiting_approval",
+    );
+
+    const later = sdkInput(created.task.id, "later", {
+      priority: "now",
+      shouldQuery: false,
+    });
+    await expect(
+      fixture.manager.submitSdkMessage(later),
+    ).resolves.toMatchObject({ state: "awaiting_approval" });
+    expect(session.submissions[1]).toBe(later.message);
+
+    const approvalEvent = fixture.eventSink.controlEvents.find(
+      (event) => event.event.kind === "approval.requested",
+    );
+    expect(approvalEvent?.event.payload).toEqual({
+      input: { file_path: "README.md" },
+      options: {
+        agentID: "agent-1",
+        blockedPath: "README.md",
+        decisionReason: "Workspace permission is required.",
+        description: "Read access is needed.",
+        displayName: "Read file",
+        requestId: "approval-full",
+        suggestions: [
+          {
+            behavior: "allow",
+            destination: "session",
+            rules: [{ ruleContent: "README.md", toolName: "Read" }],
+            type: "addRules",
+          },
+        ],
+        title: "Claude wants to read README.md",
+        toolUseID: "tool-approval-full",
+      },
+      toolName: "Read",
+    });
+
+    const result = {
+      behavior: "allow",
+      decisionClassification: "user_permanent",
+      toolUseID: "tool-approval-full",
+      updatedInput: { file_path: "README.md" },
+      updatedPermissions: [
+        {
+          behavior: "allow",
+          destination: "session",
+          rules: [{ ruleContent: "README.md", toolName: "Read" }],
+          type: "addRules",
+        },
+      ],
+    } satisfies PermissionResult;
+    await fixture.manager.resolveApproval({
+      ...operationInput(created.task.id),
+      requestId: "approval-full",
+      result,
+    });
+    await expect(decision).resolves.toBe(result);
+
+    expect(
+      fixture.connection.sqlite
+        .prepare(
+          "SELECT operation, result FROM audit_records WHERE operation = 'task.sdk-message-submitted' ORDER BY occurred_at",
+        )
+        .all(),
+    ).toEqual([
+      { operation: "task.sdk-message-submitted", result: "accepted" },
+      {
+        operation: "task.sdk-message-submitted",
+        result: "accepted-without-query",
+      },
+    ]);
+    expect(
+      fixture.connection.sqlite
+        .prepare("SELECT COUNT(*) AS count FROM operation_results")
+        .get(),
+    ).toEqual({ count: 2 });
+  });
+
+  it("keeps queued SDK queries active until their result boundaries", async () => {
+    const fixture = createFixture(connections, temporaryDirectories, managers);
+    const created = await fixture.manager.createTask(
+      createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
+    );
+    await fixture.manager.submitSdkMessage(sdkInput(created.task.id, "first"));
+    const session = fixture.sessionFor(created.task.id);
+    await fixture.manager.submitSdkMessage(
+      sdkInput(created.task.id, "queued", { priority: "next" }),
+    );
+
+    session.emitResult();
+    await waitFor(() => fixture.eventSink.begunTurns.length === 2);
+    expect(fixture.manager.getTask(created.task.id).state).toBe("executing");
+
+    session.emitResult();
+    await waitFor(
+      () => fixture.manager.getTask(created.task.id).state === "idle",
     );
   });
 
@@ -248,7 +413,7 @@ describe("TaskManager", () => {
     const second = await fixture.manager.createTask(
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
     );
-    await fixture.manager.submitInstruction(instructionInput(first.task.id));
+    await fixture.manager.submitSdkMessage(sdkInput(first.task.id));
     const session = fixture.sessionFor(first.task.id);
 
     const closed = await fixture.manager.closeTask(
@@ -264,7 +429,7 @@ describe("TaskManager", () => {
 });
 
 class FakeTaskSession implements TaskSdkSession {
-  readonly #events = new AsyncEventQueue<NormalizedClaudeSdkEvent>();
+  readonly #events = new AsyncEventQueue<SDKMessage>();
   readonly options: OpenClaudeSdkSessionOptions;
   closed = false;
   interruptCalls = 0;
@@ -284,7 +449,7 @@ class FakeTaskSession implements TaskSdkSession {
     this.#events.close();
   }
 
-  public async *events(): AsyncGenerator<NormalizedClaudeSdkEvent> {
+  public async *events(): AsyncGenerator<SDKMessage> {
     yield* this.#events;
   }
 
@@ -307,18 +472,33 @@ class FakeTaskSession implements TaskSdkSession {
 
   public emitState(state: SDKSessionStateChangedMessage["state"]): void {
     this.#events.push({
-      kind: "session.state-changed",
-      message: {
-        session_id: this.sessionId,
-        state,
-        subtype: "session_state_changed",
-        type: "system",
-        uuid: randomUUID(),
-      },
+      session_id: this.sessionId,
+      state,
+      subtype: "session_state_changed",
+      type: "system",
+      uuid: randomUUID(),
     });
   }
 
-  public requestApproval(approvalId: string): Promise<PermissionResult | null> {
+  public emitResult(): void {
+    this.#events.push({
+      result: "done",
+      session_id: this.sessionId,
+      subtype: "success",
+      type: "result",
+      uuid: randomUUID(),
+    } as unknown as SDKMessage);
+  }
+
+  public requestApproval(
+    approvalId: string,
+    options: Partial<
+      Omit<
+        Parameters<NonNullable<OpenClaudeSdkSessionOptions["canUseTool"]>>[2],
+        "requestId" | "signal" | "toolUseID"
+      >
+    > = {},
+  ): Promise<PermissionResult | null> {
     const canUseTool = this.options.canUseTool;
     if (canUseTool === undefined) {
       throw new Error(
@@ -333,6 +513,7 @@ class FakeTaskSession implements TaskSdkSession {
         requestId: approvalId,
         signal: controller.signal,
         toolUseID: `tool-${approvalId}`,
+        ...options,
       },
     );
   }
@@ -383,6 +564,38 @@ class AsyncEventQueue<T> implements AsyncIterable<T> {
   }
 }
 
+class RecordingTaskEventSink implements TaskEventSink {
+  readonly begunTurns: string[] = [];
+  readonly controlEvents: TaskControlEventEnvelope[] = [];
+  readonly sdkMessages: SDKMessage[] = [];
+  #nextCursor = 0;
+
+  public beginTurn(taskId: string): void {
+    this.begunTurns.push(taskId);
+  }
+
+  public endTurn(_taskId: string): void {}
+
+  public publishControlEvent(
+    taskId: string,
+    event: TaskControlEvent,
+  ): TaskControlEventEnvelope {
+    const envelope = {
+      cursor: this.#nextCursor,
+      event,
+      occurredAt: 1,
+      taskId,
+    };
+    this.#nextCursor += 1;
+    this.controlEvents.push(envelope);
+    return envelope;
+  }
+
+  public publishSdkMessage(_taskId: string, message: SDKMessage): void {
+    this.sdkMessages.push(message);
+  }
+}
+
 function createFixture(
   connections: StorageConnection[],
   temporaryDirectories: string[],
@@ -390,6 +603,7 @@ function createFixture(
 ): {
   connection: StorageConnection;
   directory: string;
+  eventSink: RecordingTaskEventSink;
   manager: TaskManager;
   sessionFor(taskId: string): FakeTaskSession;
   settingsRepository: SettingsRepository;
@@ -413,12 +627,14 @@ function createFixture(
   });
   const sessionsByTask = new Map<string, FakeTaskSession>();
   const unassignedSessions: FakeTaskSession[] = [];
+  const eventSink = new RecordingTaskEventSink();
   const manager = new TaskManager({
     createSession: (options) => {
       const session = new FakeTaskSession(options, `sdk-${randomUUID()}`);
       unassignedSessions.push(session);
       return session;
     },
+    eventSink,
     settingsRepository,
     sqlite: connection.database,
   });
@@ -442,6 +658,7 @@ function createFixture(
   return {
     connection,
     directory,
+    eventSink,
     manager,
     sessionFor,
     settingsRepository,
@@ -475,16 +692,25 @@ function createTaskInput(
   };
 }
 
-function instructionInput(
+function sdkInput(
   taskId: string,
-  instruction = "hello",
+  content = "hello",
+  overrides: Partial<SDKUserMessage> = {},
 ): {
   deviceId: string;
-  instruction: string;
-  operationId: string;
+  message: SDKUserMessage;
   taskId: string;
 } {
-  return { ...operationInput(taskId), instruction };
+  return {
+    deviceId,
+    message: {
+      type: "user",
+      message: { role: "user", content },
+      parent_tool_use_id: null,
+      ...overrides,
+    },
+    taskId,
+  };
 }
 
 function operationInput(taskId: string): {

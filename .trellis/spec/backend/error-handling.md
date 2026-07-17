@@ -44,6 +44,11 @@ output.
   verifier, signature, or crypto-library details.
 - Keep task errors metadata-only: do not put an instruction, model output, tool
   input, or SDK process details in a `TaskError` message.
+- The raw SDK WebSocket never sends PocketPilot error JSON. Translate invalid
+  input, authentication, missing task, unavailable session, and unexpected
+  transport failure to stable close code/reason pairs `4000`, `4003`, `4004`,
+  `4009`, and `4011`. Never use raw SDK input or exception text as a close
+  reason.
 
 ## Common Mistakes
 

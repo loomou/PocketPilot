@@ -20,13 +20,13 @@ const expectedPaths = [
   "/v1/pair/{pairingId}/register",
   "/v1/tasks",
   "/v1/tasks/{taskId}",
-  "/v1/tasks/{taskId}/approvals/{approvalId}",
+  "/v1/tasks/{taskId}/approvals/{requestId}",
   "/v1/tasks/{taskId}/close",
-  "/v1/tasks/{taskId}/instruction",
   "/v1/tasks/{taskId}/interrupt",
   "/v1/tasks/{taskId}/model",
   "/v1/tasks/{taskId}/permission-mode",
   "/v1/tasks/{taskId}/resume",
+  "/v1/tasks/{taskId}/sdk",
 ] as const;
 
 const websocketExtensionSchema = z.object({
@@ -35,14 +35,10 @@ const websocketExtensionSchema = z.object({
       scheme: z.literal("bearerAuth"),
       stage: z.literal("handshake"),
     }),
-    clientMessages: z.object({ subscribe: z.object({}) }),
-    closeCodes: z.object({ "4003": z.string().min(1) }),
+    clientMessages: z.record(z.string(), z.object({})),
+    closeCodes: z.record(z.string(), z.string().min(1)),
     notes: z.array(z.string().min(1)).min(1),
-    serverMessages: z.object({
-      error: z.object({}),
-      event: z.object({}),
-      subscribed: z.object({}),
-    }),
+    serverMessages: z.record(z.string(), z.object({})),
   }),
 });
 
@@ -95,14 +91,68 @@ describe("mobile OpenAPI generation", () => {
     ]) {
       expect(serialized).not.toContain(forbidden);
     }
+    const approvalOperation =
+      first.paths["/v1/tasks/{taskId}/approvals/{requestId}"]?.post;
+    const approvalSerialized = JSON.stringify(approvalOperation);
+    for (const field of [
+      "result",
+      "updatedInput",
+      "updatedPermissions",
+      "toolUseID",
+      "decisionClassification",
+      "message",
+      "interrupt",
+    ]) {
+      expect(approvalSerialized).toContain(field);
+    }
   });
 
   it("documents WebSocket messages from the runtime Zod contracts", async () => {
     const document = await buildMobileOpenApiDocument();
-    const operation = document.paths["/v1/events"]?.get;
-    const parsed = websocketExtensionSchema.parse(operation);
+    const controlOperation = document.paths["/v1/events"]?.get;
+    const parsed = websocketExtensionSchema.parse(controlOperation);
 
     expect(parsed["x-websocket"].notes.join(" ")).toContain("afterCursor");
+    expect(parsed["x-websocket"].notes.join(" ")).toContain(
+      "control events only",
+    );
+    expect(parsed["x-websocket"].serverMessages).not.toHaveProperty(
+      "sdkMessage",
+    );
+    expect(parsed["x-websocket"].serverMessages).toHaveProperty(
+      "approvalRequested",
+    );
+    const controlSerialized = JSON.stringify(controlOperation);
+    for (const field of [
+      "suggestions",
+      "blockedPath",
+      "decisionReason",
+      "title",
+      "displayName",
+      "description",
+      "toolUseID",
+      "agentID",
+      "requestId",
+    ]) {
+      expect(controlSerialized).toContain(field);
+    }
+
+    const sdkOperation = document.paths["/v1/tasks/{taskId}/sdk"]?.get;
+    const sdk = websocketExtensionSchema.parse(sdkOperation)["x-websocket"];
+    expect(sdk.clientMessages).toHaveProperty("sdkUserMessage");
+    expect(sdk.serverMessages).toHaveProperty("sdkMessage");
+    expect(sdk.closeCodes).toEqual({
+      "4000": "SDK_MESSAGE_INVALID",
+      "4003": "AUTHENTICATION_FAILED",
+      "4004": "TASK_NOT_FOUND",
+      "4009": "TASK_SESSION_UNAVAILABLE",
+      "4011": "SDK_TRANSPORT_FAILED",
+    });
+    expect(sdk.notes.join(" ")).toContain(
+      "@anthropic-ai/claude-agent-sdk@0.3.210",
+    );
+    expect(sdk.notes.join(" ")).toContain("no PocketPilot wrapper");
+    expect(sdk.notes.join(" ")).toContain("afterUuid");
     expect(
       eventSubscriptionMessageSchema.safeParse({
         afterCursor: 3,

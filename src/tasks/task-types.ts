@@ -27,7 +27,6 @@ export type TaskSnapshot = z.infer<typeof taskSnapshotSchema>;
 
 export const taskOperationActionSchema = z.enum([
   "created",
-  "instruction-submitted",
   "interrupted",
   "closed",
   "resumed",
@@ -41,7 +40,7 @@ export type TaskOperationAction = z.infer<typeof taskOperationActionSchema>;
 
 /**
  * Persisted idempotency results intentionally contain only task metadata.
- * Instructions, model output, tool inputs, and approval details stay outside
+ * SDK messages, model output, tool inputs, and approval details stay outside
  * this table so it can never become a second Claude transcript.
  */
 export const taskOperationResultSchema = z.object({

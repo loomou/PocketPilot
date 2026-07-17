@@ -6,7 +6,7 @@ type InputWaiter = (result: IteratorResult<SDKUserMessage>) => void;
  * A single, task-scoped input source for one long-lived SDK Query.
  *
  * Query.streamInput() closes the CLI's stdin when its supplied iterable ends.
- * A task must therefore enqueue every later instruction on this same iterable,
+ * A task must therefore enqueue every later SDK user message on this iterable,
  * instead of calling Query.streamInput() again for each conversation turn.
  */
 export class ClaudeSdkInputStream implements AsyncIterable<SDKUserMessage> {
@@ -28,7 +28,7 @@ export class ClaudeSdkInputStream implements AsyncIterable<SDKUserMessage> {
   public push(message: SDKUserMessage): void {
     if (this.#closed) {
       throw new Error(
-        "Cannot add an instruction to a closed Claude SDK input stream.",
+        "Cannot add a message to a closed Claude SDK input stream.",
       );
     }
 
@@ -78,31 +78,4 @@ export class ClaudeSdkInputStream implements AsyncIterable<SDKUserMessage> {
       this.#waiting = undefined;
     }
   }
-}
-
-/**
- * Builds a human instruction in the shape expected by the Claude Agent SDK.
- *
- * Task-level validation belongs to the future task runtime. This boundary only
- * translates an already-accepted instruction into the SDK protocol.
- */
-export function createSdkUserMessage(instruction: string): SDKUserMessage {
-  return {
-    type: "user",
-    message: {
-      role: "user",
-      content: instruction,
-    },
-    parent_tool_use_id: null,
-    origin: {
-      kind: "human",
-    },
-  };
-}
-
-/** Produces a finite SDK input stream for a single conversation turn. */
-export async function* singleTurnInput(
-  instruction: string,
-): AsyncIterable<SDKUserMessage> {
-  yield createSdkUserMessage(instruction);
 }

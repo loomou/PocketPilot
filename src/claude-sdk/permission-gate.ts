@@ -29,37 +29,29 @@ function createDeferred<T>(): Deferred<T> {
 }
 
 export type PendingToolApproval = {
-  readonly blockedPath: string | undefined;
-  readonly description: string | undefined;
-  readonly displayName: string | undefined;
   readonly input: Record<string, unknown>;
-  readonly requestId: string;
-  readonly suggestions: Parameters<CanUseTool>[2]["suggestions"];
-  readonly title: string | undefined;
+  readonly options: SerializableCanUseToolOptions;
   readonly toolName: string;
-  readonly toolUseId: string;
-  approve(
-    result?: Omit<Extract<PermissionResult, { behavior: "allow" }>, "behavior">,
-  ): void;
   cancel(message?: string): void;
-  deny(message: string, interrupt?: boolean): void;
+  resolve(result: PermissionResult): void;
 };
 
 type ApprovalRequest = Parameters<CanUseTool>[2];
+export type SerializableCanUseToolOptions = Omit<ApprovalRequest, "signal">;
+
+export type SerializableCanUseToolRequest = {
+  input: Parameters<CanUseTool>[1];
+  options: SerializableCanUseToolOptions;
+  toolName: Parameters<CanUseTool>[0];
+};
 
 class PendingToolApprovalImpl implements PendingToolApproval {
   readonly #decision = createDeferred<PermissionResult>();
   #settled = false;
 
-  public readonly blockedPath: string | undefined;
-  public readonly description: string | undefined;
-  public readonly displayName: string | undefined;
   public readonly input: Record<string, unknown>;
-  public readonly requestId: string;
-  public readonly suggestions: ApprovalRequest["suggestions"];
-  public readonly title: string | undefined;
+  public readonly options: SerializableCanUseToolOptions;
   public readonly toolName: string;
-  public readonly toolUseId: string;
 
   public constructor(
     toolName: string,
@@ -68,34 +60,16 @@ class PendingToolApprovalImpl implements PendingToolApproval {
   ) {
     this.toolName = toolName;
     this.input = input;
-    this.requestId = options.requestId;
-    this.toolUseId = options.toolUseID;
-    this.suggestions = options.suggestions;
-    this.blockedPath = options.blockedPath;
-    this.title = options.title;
-    this.displayName = options.displayName;
-    this.description = options.description;
-  }
-
-  public approve(
-    result: Omit<
-      Extract<PermissionResult, { behavior: "allow" }>,
-      "behavior"
-    > = {},
-  ): void {
-    this.resolve({ behavior: "allow", ...result });
+    const { signal: _signal, ...serializableOptions } = options;
+    this.options = serializableOptions;
   }
 
   public cancel(message = "Tool approval was cancelled."): void {
     this.reject(new ToolApprovalCancelledError(message));
   }
 
-  public deny(message: string, interrupt?: boolean): void {
-    this.resolve({
-      behavior: "deny",
-      message,
-      ...(interrupt === undefined ? {} : { interrupt }),
-    });
+  public resolve(result: PermissionResult): void {
+    this.settle(result);
   }
 
   public waitForDecision(signal: AbortSignal): Promise<PermissionResult> {
@@ -123,7 +97,7 @@ class PendingToolApprovalImpl implements PendingToolApproval {
     this.#decision.reject(reason);
   }
 
-  private resolve(result: PermissionResult): void {
+  private settle(result: PermissionResult): void {
     if (this.#settled) {
       return;
     }

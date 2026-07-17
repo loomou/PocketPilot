@@ -2,12 +2,16 @@ import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
-import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  PermissionMode,
+  PermissionResult,
+  SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import { createSdkUserMessage } from "../claude-sdk/input.js";
 import {
   createToolApprovalHandler,
   type PendingToolApproval,
+  type SerializableCanUseToolRequest,
 } from "../claude-sdk/permission-gate.js";
 import {
   type ClaudeSdkSession,
@@ -42,7 +46,7 @@ const createTaskInputSchema = operationIdentitySchema.extend({
 });
 
 const taskIdSchema = z.uuid();
-const instructionSchema = z.string().min(1).max(1_000_000);
+const deviceIdSchema = z.uuid();
 
 export type TaskOperationIdentity = z.infer<typeof operationIdentitySchema>;
 export type CreateTaskInput = z.infer<typeof createTaskInputSchema>;
@@ -80,8 +84,9 @@ type LiveTask = {
   closed: boolean;
   eventLoop: Promise<void> | undefined;
   interrupting: boolean;
+  pendingQueryCount: number;
   pendingApproval:
-    | { approval: PendingToolApproval; approvalId: string }
+    | { approval: PendingToolApproval; requestId: string }
     | undefined;
   session: TaskSdkSession | undefined;
 };
@@ -94,8 +99,8 @@ type OperationExecution = {
 
 /**
  * Serializes per-task controls, owns only live SDK resources, and persists
- * task/session metadata. It deliberately never stores instructions or SDK
- * output: the SDK remains the canonical conversation owner.
+ * task/session metadata. It deliberately never stores SDK input or output:
+ * the SDK remains the canonical conversation owner.
  */
 export class TaskManager {
   readonly #capacityLane = new SerialExecutor();
@@ -200,62 +205,35 @@ export class TaskManager {
     );
   }
 
-  public async submitInstruction(
-    input: {
-      instruction: string;
-      taskId: string;
-    } & TaskOperationIdentity,
-  ): Promise<TaskOperationResult> {
-    const identity = this.parseOperationIdentity(input);
-    this.assertTaskId(input.taskId);
-    if (!instructionSchema.safeParse(input.instruction).success) {
+  public async submitSdkMessage(input: {
+    deviceId: string;
+    message: SDKUserMessage;
+    taskId: string;
+  }): Promise<TaskSnapshot> {
+    if (!deviceIdSchema.safeParse(input.deviceId).success) {
       throw invalidTaskOperationError();
     }
+    this.assertTaskId(input.taskId);
 
-    return this.executeIdempotent(identity, async () =>
-      this.runTaskLane(input.taskId, async () =>
-        this.#capacityLane.run(async () => {
-          this.assertAcceptingWork();
-          const task = this.requireTask(input.taskId);
-          this.assertTaskCanAcceptInstruction(task);
-          const settings = readTaskRuntimeSettings(this.#settingsRepository);
-          if (
-            this.#repository.countActiveTasks() >=
-            settings.concurrentTaskCapacity
-          ) {
-            throw new TaskError(
-              "CONCURRENT_TASK_LIMIT_REACHED",
-              409,
-              "The configured concurrent-task capacity has been reached.",
-            );
-          }
+    return this.runTaskLane(input.taskId, async () => {
+      this.assertAcceptingWork();
+      const task = this.requireTask(input.taskId);
+      this.assertTaskCanAcceptSdkMessage(task);
+      const startsQuery = input.message.shouldQuery !== false;
 
-          const session = this.ensureSession(task);
-          this.#eventSink?.beginTurn(task.id);
-          const executing = this.#repository.update(task.id, {
-            state: "executing",
-            updatedAt: this.#now(),
-          });
-          try {
-            session.submit(createSdkUserMessage(input.instruction));
-            this.publishTaskState(executing);
-          } catch (error) {
-            const idle = this.#repository.update(task.id, {
-              state: "idle",
-              updatedAt: this.#now(),
-            });
-            this.publishTaskState(idle);
-            this.#eventSink?.endTurn(task.id);
-            throw error;
-          }
-          return {
-            action: "instruction-submitted",
-            auditResult: "accepted",
-            task: executing,
-          };
-        }),
-      ),
-    );
+      if (task.state === "idle" && startsQuery) {
+        return this.#capacityLane.run(() =>
+          this.startSdkTurn(input.deviceId, task.id, input.message),
+        );
+      }
+
+      this.submitToSession(task, input.message);
+      if (startsQuery) {
+        this.liveTask(task.id).pendingQueryCount += 1;
+      }
+      this.recordSdkInputAudit(input.deviceId, task.id, startsQuery);
+      return task;
+    });
   }
 
   /** User interruption bypasses ordinary control lanes and completes before reuse. */
@@ -275,6 +253,7 @@ export class TaskManager {
       }
       const liveTask = this.liveTask(task.id);
       this.cancelPendingApproval(liveTask, "The user interrupted this task.");
+      liveTask.pendingQueryCount = 0;
       liveTask.interrupting = true;
 
       try {
@@ -316,6 +295,7 @@ export class TaskManager {
       const liveTask = this.liveTask(task.id);
       liveTask.closed = true;
       this.cancelPendingApproval(liveTask, "The user closed this task.");
+      liveTask.pendingQueryCount = 0;
       const terminal = this.#repository.update(task.id, {
         state: "terminal",
         terminalAt: this.#now(),
@@ -369,14 +349,14 @@ export class TaskManager {
 
   public async resolveApproval(
     input: {
-      approvalId: string;
-      decision: "approve" | "deny";
+      requestId: string;
+      result: PermissionResult;
       taskId: string;
     } & TaskOperationIdentity,
   ): Promise<TaskOperationResult> {
     const identity = this.parseOperationIdentity(input);
     this.assertTaskId(input.taskId);
-    if (input.approvalId.trim().length === 0) {
+    if (input.requestId.trim().length === 0) {
       throw invalidTaskOperationError();
     }
 
@@ -389,7 +369,7 @@ export class TaskManager {
         if (
           task.state !== "awaiting_approval" ||
           pending === undefined ||
-          pending.approvalId !== input.approvalId
+          pending.requestId !== input.requestId
         ) {
           throw new TaskError(
             "STALE_APPROVAL",
@@ -398,11 +378,7 @@ export class TaskManager {
           );
         }
 
-        if (input.decision === "approve") {
-          pending.approval.approve();
-        } else {
-          pending.approval.deny("The user denied this tool request.");
-        }
+        pending.approval.resolve(input.result);
         liveTask.pendingApproval = undefined;
         const executing = this.#repository.update(task.id, {
           state: "executing",
@@ -411,10 +387,10 @@ export class TaskManager {
         this.publishTaskState(executing);
         return {
           action:
-            input.decision === "approve"
+            input.result.behavior === "allow"
               ? "approval-approved"
               : "approval-denied",
-          auditResult: input.decision,
+          auditResult: input.result.behavior,
           task: executing,
         };
       }),
@@ -530,6 +506,7 @@ export class TaskManager {
     for (const [taskId, liveTask] of this.#liveTasks) {
       liveTask.closed = true;
       this.cancelPendingApproval(liveTask, "The Agent is shutting down.");
+      liveTask.pendingQueryCount = 0;
       this.#eventSink?.endTurn(taskId);
       if (liveTask.session !== undefined) {
         const interrupt = this.interruptSession(liveTask.session);
@@ -581,7 +558,7 @@ export class TaskManager {
     liveTask.pendingApproval = undefined;
   }
 
-  private completeActiveTurn(taskId: string): void {
+  private completeActiveTurn(taskId: string, allQueriesIdle: boolean): void {
     const task = this.#repository.find(taskId);
     if (
       task === undefined ||
@@ -591,6 +568,12 @@ export class TaskManager {
     }
 
     const liveTask = this.liveTask(taskId);
+    if (!allQueriesIdle && liveTask.pendingQueryCount > 1) {
+      liveTask.pendingQueryCount -= 1;
+      this.#eventSink?.beginTurn(taskId);
+      return;
+    }
+    liveTask.pendingQueryCount = 0;
     this.cancelPendingApproval(liveTask, "The Claude turn has already ended.");
     const idle = this.#repository.update(taskId, {
       state: "idle",
@@ -606,19 +589,21 @@ export class TaskManager {
   ): Promise<void> {
     return (async () => {
       try {
-        for await (const event of session.events()) {
+        for await (const message of session.events()) {
           this.persistSessionId(taskId, session);
-          this.#eventSink?.publish(taskId, { kind: "sdk", payload: event });
-          if (
-            event.kind === "turn.result" ||
-            (event.kind === "session.state-changed" &&
-              event.message.state === "idle")
+          this.#eventSink?.publishSdkMessage(taskId, message);
+          if (message.type === "result") {
+            this.completeActiveTurn(taskId, false);
+          } else if (
+            message.type === "system" &&
+            message.subtype === "session_state_changed" &&
+            message.state === "idle"
           ) {
-            this.completeActiveTurn(taskId);
+            this.completeActiveTurn(taskId, true);
           }
         }
       } catch {
-        this.completeActiveTurn(taskId);
+        this.completeActiveTurn(taskId, true);
       } finally {
         const liveTask = this.#liveTasks.get(taskId);
         if (liveTask?.session === session) {
@@ -719,6 +704,7 @@ export class TaskManager {
         eventLoop: undefined,
         interrupting: false,
         pendingApproval: undefined,
+        pendingQueryCount: 0,
         session: undefined,
       };
       this.#liveTasks.set(taskId, liveTask);
@@ -785,22 +771,21 @@ export class TaskManager {
     );
     liveTask.pendingApproval = {
       approval,
-      approvalId: approval.requestId,
+      requestId: approval.options.requestId,
     };
     const awaitingApproval = this.#repository.update(taskId, {
       state: "awaiting_approval",
       updatedAt: this.#now(),
     });
     this.publishTaskState(awaitingApproval);
-    this.#eventSink?.publish(taskId, {
+    const request: SerializableCanUseToolRequest = {
+      input: approval.input,
+      options: approval.options,
+      toolName: approval.toolName,
+    };
+    this.#eventSink?.publishControlEvent(taskId, {
       kind: "approval.requested",
-      payload: {
-        approvalId: approval.requestId,
-        description: approval.description,
-        displayName: approval.displayName,
-        title: approval.title,
-        toolName: approval.toolName,
-      },
+      payload: request,
     });
   }
 
@@ -834,13 +819,18 @@ export class TaskManager {
     }
   }
 
-  private assertTaskCanAcceptInstruction(task: TaskSnapshot): void {
+  private assertTaskCanAcceptSdkMessage(task: TaskSnapshot): void {
     this.assertTaskNotTerminal(task);
     if (task.state === "interrupted") {
       throw interruptedTaskError();
     }
-    if (task.state !== "idle") {
-      throw taskBusyError();
+    const liveTask = this.#liveTasks.get(task.id);
+    if (liveTask?.interrupting === true) {
+      throw new TaskError(
+        "TASK_SESSION_UNAVAILABLE",
+        409,
+        "The task's Claude SDK session is currently unavailable.",
+      );
     }
   }
 
@@ -861,10 +851,86 @@ export class TaskManager {
   }
 
   private publishTaskState(task: TaskSnapshot): void {
-    this.#eventSink?.publish(task.id, {
+    this.#eventSink?.publishControlEvent(task.id, {
       kind: "task.state",
       payload: { state: task.state },
     });
+  }
+
+  private recordSdkInputAudit(
+    deviceId: string,
+    taskId: string,
+    startsQuery: boolean,
+  ): void {
+    this.#repository.recordAudit({
+      deviceId,
+      occurredAt: this.#now(),
+      operation: "task.sdk-message-submitted",
+      result: startsQuery ? "accepted" : "accepted-without-query",
+      taskId,
+    });
+  }
+
+  private startSdkTurn(
+    deviceId: string,
+    taskId: string,
+    message: SDKUserMessage,
+  ): TaskSnapshot {
+    const task = this.requireTask(taskId);
+    this.assertTaskCanAcceptSdkMessage(task);
+    if (task.state !== "idle") {
+      this.submitToSession(task, message);
+      this.liveTask(task.id).pendingQueryCount += 1;
+      this.recordSdkInputAudit(deviceId, task.id, true);
+      return task;
+    }
+
+    const settings = readTaskRuntimeSettings(this.#settingsRepository);
+    if (
+      this.#repository.countActiveTasks() >= settings.concurrentTaskCapacity
+    ) {
+      throw new TaskError(
+        "CONCURRENT_TASK_LIMIT_REACHED",
+        409,
+        "The configured concurrent-task capacity has been reached.",
+      );
+    }
+
+    this.#eventSink?.beginTurn(task.id);
+    const executing = this.#repository.update(task.id, {
+      state: "executing",
+      updatedAt: this.#now(),
+    });
+    try {
+      this.submitToSession(executing, message);
+    } catch (error) {
+      const idle = this.#repository.update(task.id, {
+        state: "idle",
+        updatedAt: this.#now(),
+      });
+      this.publishTaskState(idle);
+      this.#eventSink?.endTurn(task.id);
+      throw error;
+    }
+    this.liveTask(task.id).pendingQueryCount += 1;
+    this.recordSdkInputAudit(deviceId, task.id, true);
+    this.publishTaskState(executing);
+    return executing;
+  }
+
+  private submitToSession(task: TaskSnapshot, message: SDKUserMessage): void {
+    try {
+      this.ensureSession(task).submit(message);
+    } catch (error) {
+      if (error instanceof TaskError) {
+        throw error;
+      }
+      throw new TaskError(
+        "TASK_SESSION_UNAVAILABLE",
+        409,
+        "The task's Claude SDK session cannot accept SDK input.",
+      );
+    }
   }
 
   private interruptSession(
