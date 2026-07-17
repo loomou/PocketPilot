@@ -9,6 +9,8 @@ Agent and is not a second mobile/task control application.
 ## 2. Signatures
 
 - `App(): JSX.Element` composes `AdministrationPage`.
+- `AdminSection` is the closed navigation union: `overview`, `configuration`,
+  `devices`, `audit`, and `maintenance`.
 - `loadLocalAdminSnapshot(): Promise<LocalAdminSnapshot>` owns initial reads.
 - Browser mutations: `saveRuntimeSettings`, `saveTaskSettings`,
   `createPairing`, `approvePairing`, and `revokeDevice`.
@@ -43,6 +45,15 @@ Agent and is not a second mobile/task control application.
 - `App.tsx` remains composition-only. Stateful application behavior lives in
   `features/administration`; shadcn-style primitives remain under
   `components/ui`.
+- The production console is desktop-only with a persistent sidebar and a
+  minimum 1080px application width. Section navigation uses local React state;
+  do not add a router for these five views.
+- User-facing console labels follow the approved Simplified Chinese interface.
+  Server-returned operation names, identifiers, URLs, and command strings stay
+  unchanged rather than being rewritten in components.
+- Configuration edits remain a local draft with an explicit dirty-state save
+  bar. Runtime and task settings are saved together through the two existing
+  validated writes; there is no autosave.
 - The page never calls `/v1`, starts/stops the Agent, controls a Claude task, or
   reads/writes Claude credentials and configuration.
 - Vite emits production assets to `dist/local-admin`, which is part of the
@@ -83,6 +94,10 @@ Agent and is not a second mobile/task control application.
 
 - Testing Library renders loaded configuration values plus pairing, device,
   status, and audit sections from mocked local API responses.
+- Component tests navigate through the five section buttons using their
+  accessible names and verify the approved observable view structure.
+- Configuration tests change the local draft, assert the dirty-state save
+  action, and verify the save notice appears only after both validated writes.
 - Save behavior asserts both PUT requests contain the fetched CSRF token and
   JSON content type.
 - Pairing tests assert that QR generation and code entry make no approval
