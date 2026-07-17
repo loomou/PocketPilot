@@ -10,7 +10,10 @@ import {
   buildLocalAdminApp,
   type LocalAdminStatus,
 } from "../local-admin/app.js";
+import { DirectorySelectionService } from "../local-admin/directory-selection-service.js";
+import { WindowsDirectoryPicker } from "../local-admin/windows-directory-picker.js";
 import { buildRemoteApiApp } from "../remote-api/app.js";
+import { InMemoryTaskSdkConnectionRegistry } from "../remote-api/task-sdk-connection-registry.js";
 import { openStorage, type StorageConnection } from "../storage/database.js";
 import {
   clearTransientEventOverflow,
@@ -52,6 +55,8 @@ export type AgentRuntimeOptions = {
 export class AgentRuntime {
   private readonly deviceConnectionRegistry =
     new InMemoryDeviceConnectionRegistry();
+  private readonly taskSdkConnectionRegistry =
+    new InMemoryTaskSdkConnectionRegistry();
   private controlStatePath: string;
   private deviceAuthService: DeviceAuthService | undefined;
   private localAdminApp:
@@ -107,6 +112,7 @@ export class AgentRuntime {
         sqlite: this.storage.sqlite,
       });
       this.taskManager = new TaskManager({
+        closeTaskSdkConnections: this.taskSdkConnectionRegistry,
         eventSink: this.taskEventJournal,
         settingsRepository,
         sqlite: this.storage.database,
@@ -148,6 +154,9 @@ export class AgentRuntime {
     const mobileOpenApiDocument = await buildMobileOpenApiDocument();
     this.shutdownControlToken = shutdownControlToken;
     this.localAdminApp = await buildLocalAdminApp({
+      ...(this.taskManager === undefined
+        ? {}
+        : { authorizedDirectoryManager: this.taskManager }),
       csrfProtection: {
         expectedOrigin: () => {
           const port = this.localAdminListener?.port ?? this.localAdminPort;
@@ -156,6 +165,9 @@ export class AgentRuntime {
         token: csrfToken,
       },
       deviceAuthService,
+      directorySelectionService: new DirectorySelectionService(
+        new WindowsDirectoryPicker(),
+      ),
       settingsRepository: new SettingsRepository(storage.database),
       staticRoot: resolveLocalAdminStaticRoot(),
       getStatus: () => this.currentStatus(settings),
@@ -177,6 +189,7 @@ export class AgentRuntime {
       ...(this.taskManager === undefined
         ? {}
         : { taskManager: this.taskManager }),
+      taskSdkConnectionRegistry: this.taskSdkConnectionRegistry,
     });
 
     await this.localAdminApp.listen({

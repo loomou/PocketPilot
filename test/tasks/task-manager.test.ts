@@ -26,7 +26,11 @@ import {
   type StorageConnection,
 } from "../../src/storage/database.js";
 import { SettingsRepository } from "../../src/storage/settings-repository.js";
-import { writeTaskRuntimeSettings } from "../../src/tasks/settings.js";
+import {
+  readTaskRuntimeSettings,
+  writeTaskCapacitySettings,
+  writeTaskRuntimeSettings,
+} from "../../src/tasks/settings.js";
 import type {
   TaskControlEvent,
   TaskControlEventEnvelope,
@@ -421,6 +425,205 @@ describe("TaskManager", () => {
     await fixture.manager.shutdown();
     expect(fixture.manager.getTask(second.task.id).state).toBe("terminal");
   });
+
+  it("normalizes parent roots and P0-revokes every uncovered task", async () => {
+    const closedTaskIds: string[] = [];
+    const fixture = createFixture(connections, temporaryDirectories, managers, {
+      closeTaskConnections(taskId) {
+        closedTaskIds.push(taskId);
+      },
+    });
+    const child = join(fixture.workspace, "child");
+    const independent = join(fixture.directory, "independent");
+    mkdirSync(child);
+    mkdirSync(independent);
+    writeTaskRuntimeSettings(fixture.settingsRepository, {
+      concurrentTaskCapacity: 3,
+      workspaceRoots: [child, independent],
+    });
+    const created = await fixture.manager.createTask(
+      createTaskInput(child, { workspaceRiskAccepted: true }),
+    );
+
+    const added = await fixture.manager.addAuthorizedDirectory({
+      selectedPath: fixture.workspace,
+      volumeRootRiskAccepted: false,
+    });
+    expect(added).toMatchObject({
+      removedRedundantPaths: [child],
+      result: "added",
+    });
+    expect(fixture.manager.getTask(created.task.id).state).toBe("idle");
+    expect(
+      readTaskRuntimeSettings(fixture.settingsRepository).workspaceRoots,
+    ).toEqual([independent, fixture.workspace]);
+
+    const parent = added.snapshot.directories.find(
+      (directory) => directory.path === fixture.workspace,
+    );
+    if (parent === undefined) {
+      throw new Error("The normalized parent root is missing.");
+    }
+    expect(parent.nonTerminalRuntimeCount).toBe(1);
+    const removed = await fixture.manager.removeAuthorizedDirectory({
+      expectedNonTerminalRuntimeCount: 1,
+      path: parent.path,
+      revision: added.snapshot.revision,
+      runtimeStopAccepted: true,
+    });
+
+    expect(removed.stoppedTaskCount).toBe(1);
+    expect(fixture.manager.getTask(created.task.id).state).toBe("terminal");
+    expect(closedTaskIds).toEqual([created.task.id]);
+    expect(
+      readTaskRuntimeSettings(fixture.settingsRepository).workspaceRoots,
+    ).toEqual([independent]);
+    expect(
+      fixture.connection.sqlite
+        .prepare(
+          "SELECT result FROM audit_records WHERE operation = 'workspace.authorization-updated' ORDER BY occurred_at",
+        )
+        .all()
+        .some((row) => JSON.stringify(row).includes(fixture.workspace)),
+    ).toBe(false);
+
+    await fixture.manager.addAuthorizedDirectory({
+      selectedPath: child,
+      volumeRootRiskAccepted: false,
+    });
+    expect(fixture.manager.getTask(created.task.id).state).toBe("terminal");
+  });
+
+  it("preserves a concurrent capacity save while adding a root", async () => {
+    const fixture = createFixture(connections, temporaryDirectories, managers);
+    const additionalRoot = join(fixture.directory, "additional");
+    mkdirSync(additionalRoot);
+    const projectionGate = new Deferred();
+    const projectionStarted = new Deferred();
+    let resolutionCount = 0;
+    const manager = new TaskManager({
+      directoryResolver: {
+        async canonicalizeDirectory(path) {
+          resolutionCount += 1;
+          if (resolutionCount > 1) {
+            projectionStarted.markStarted();
+            await projectionGate.promise;
+          }
+          return path;
+        },
+      },
+      settingsRepository: fixture.settingsRepository,
+      sqlite: fixture.connection.database,
+    });
+    managers.push(manager);
+
+    const addition = manager.addAuthorizedDirectory({
+      selectedPath: additionalRoot,
+      volumeRootRiskAccepted: false,
+    });
+    await projectionStarted.control.started;
+    writeTaskCapacitySettings(fixture.settingsRepository, {
+      concurrentTaskCapacity: 9,
+    });
+    projectionGate.control.release();
+    await addition;
+
+    expect(readTaskRuntimeSettings(fixture.settingsRepository)).toEqual({
+      concurrentTaskCapacity: 9,
+      workspaceRoots: [fixture.workspace, additionalRoot],
+    });
+  });
+
+  it("requires explicit risk acceptance before authorizing a volume root", async () => {
+    const fixture = createFixture(connections, temporaryDirectories, managers);
+    const manager = new TaskManager({
+      directoryResolver: {
+        async canonicalizeDirectory(path) {
+          return path;
+        },
+      },
+      settingsRepository: fixture.settingsRepository,
+      sqlite: fixture.connection.database,
+    });
+    managers.push(manager);
+
+    await expect(
+      manager.addAuthorizedDirectory({
+        selectedPath: "C:\\",
+        volumeRootRiskAccepted: false,
+      }),
+    ).rejects.toMatchObject({ code: "VOLUME_ROOT_RISK_NOT_ACCEPTED" });
+  });
+
+  it("invalidates queued P2 controls and persists superseded retries", async () => {
+    const fixture = createFixture(connections, temporaryDirectories, managers);
+    const created = await fixture.manager.createTask(
+      createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
+    );
+    await fixture.manager.submitSdkMessage(sdkInput(created.task.id));
+    const session = fixture.sessionFor(created.task.id);
+    const modelGate = session.deferNextModel();
+    const modelInput = {
+      ...operationInput(created.task.id),
+      model: "opus",
+    };
+    const permissionInput = {
+      ...operationInput(created.task.id),
+      permissionMode: "plan",
+    };
+
+    const model = fixture.manager.setModel(modelInput);
+    await modelGate.started;
+    const permission = fixture.manager.setPermissionMode(permissionInput);
+    const interrupted = await fixture.manager.interruptTask(
+      operationInput(created.task.id),
+    );
+
+    expect(interrupted.task.state).toBe("idle");
+    await expect(permission).rejects.toMatchObject({
+      code: "TASK_OPERATION_SUPERSEDED",
+    });
+    await expect(
+      fixture.manager.setPermissionMode({
+        ...operationInput(created.task.id),
+        permissionMode: "acceptEdits",
+      }),
+    ).resolves.toMatchObject({ action: "permission-mode-changed" });
+    expect(session.permissionModes).toEqual(["acceptEdits"]);
+    modelGate.release();
+    await expect(model).rejects.toMatchObject({
+      code: "TASK_OPERATION_SUPERSEDED",
+    });
+    await expect(
+      fixture.manager.setPermissionMode(permissionInput),
+    ).rejects.toMatchObject({ code: "TASK_OPERATION_SUPERSEDED" });
+    expect(session.permissionModes).toEqual(["acceptEdits"]);
+  });
+
+  it("lets P0 close win an in-flight P1 interrupt", async () => {
+    const fixture = createFixture(connections, temporaryDirectories, managers);
+    const created = await fixture.manager.createTask(
+      createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
+    );
+    await fixture.manager.submitSdkMessage(sdkInput(created.task.id));
+    const session = fixture.sessionFor(created.task.id);
+    const interruptGate = session.deferNextInterrupt();
+
+    const interrupt = fixture.manager.interruptTask(
+      operationInput(created.task.id),
+    );
+    await interruptGate.started;
+    expect(fixture.manager.getTask(created.task.id).state).toBe("interrupted");
+    const closed = await fixture.manager.closeTask(
+      operationInput(created.task.id),
+    );
+    interruptGate.release();
+    const interrupted = await interrupt;
+
+    expect(closed.task.state).toBe("terminal");
+    expect(interrupted.task.state).toBe("terminal");
+    expect(fixture.manager.getTask(created.task.id).state).toBe("terminal");
+  });
 });
 
 class FakeTaskSession implements TaskSdkSession {
@@ -432,6 +635,8 @@ class FakeTaskSession implements TaskSdkSession {
   models: Array<string | undefined> = [];
   permissionModes: PermissionMode[] = [];
   readonly submissions: SDKUserMessage[] = [];
+  #interruptGate: Deferred | undefined;
+  #modelGate: Deferred | undefined;
 
   public constructor(
     options: OpenClaudeSdkSessionOptions,
@@ -451,6 +656,12 @@ class FakeTaskSession implements TaskSdkSession {
 
   public async interrupt(): Promise<SDKControlInterruptResponse | undefined> {
     this.interruptCalls += 1;
+    const gate = this.#interruptGate;
+    this.#interruptGate = undefined;
+    if (gate !== undefined) {
+      gate.markStarted();
+      await gate.promise;
+    }
     return undefined;
   }
 
@@ -467,6 +678,12 @@ class FakeTaskSession implements TaskSdkSession {
 
   public async setModel(model: string | undefined): Promise<void> {
     this.models.push(model);
+    const gate = this.#modelGate;
+    this.#modelGate = undefined;
+    if (gate !== undefined) {
+      gate.markStarted();
+      await gate.promise;
+    }
   }
 
   public async setPermissionMode(mode: PermissionMode): Promise<void> {
@@ -475,6 +692,18 @@ class FakeTaskSession implements TaskSdkSession {
 
   public submit(message: SDKUserMessage): void {
     this.submissions.push(message);
+  }
+
+  public deferNextInterrupt(): DeferredControl {
+    const gate = new Deferred();
+    this.#interruptGate = gate;
+    return gate.control;
+  }
+
+  public deferNextModel(): DeferredControl {
+    const gate = new Deferred();
+    this.#modelGate = gate;
+    return gate.control;
   }
 
   public emitState(state: SDKSessionStateChangedMessage["state"]): void {
@@ -523,6 +752,36 @@ class FakeTaskSession implements TaskSdkSession {
         ...options,
       },
     );
+  }
+}
+
+type DeferredControl = {
+  release(): void;
+  started: Promise<void>;
+};
+
+class Deferred {
+  readonly control: DeferredControl;
+  readonly promise: Promise<void>;
+  readonly #markStarted: () => void;
+  readonly #release: () => void;
+
+  public constructor() {
+    let markStarted = (): void => undefined;
+    let release = (): void => undefined;
+    this.promise = new Promise((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    this.#markStarted = markStarted;
+    this.#release = release;
+    this.control = { release: () => this.#release(), started };
+  }
+
+  public markStarted(): void {
+    this.#markStarted();
   }
 }
 
@@ -607,6 +866,7 @@ function createFixture(
   connections: StorageConnection[],
   temporaryDirectories: string[],
   managers: TaskManager[],
+  closeTaskSdkConnections?: { closeTaskConnections(taskId: string): void },
 ): {
   connection: StorageConnection;
   directory: string;
@@ -636,6 +896,9 @@ function createFixture(
   const unassignedSessions: FakeTaskSession[] = [];
   const eventSink = new RecordingTaskEventSink();
   const manager = new TaskManager({
+    ...(closeTaskSdkConnections === undefined
+      ? {}
+      : { closeTaskSdkConnections }),
     createSession: (options) => {
       const session = new FakeTaskSession(options, `sdk-${randomUUID()}`);
       unassignedSessions.push(session);

@@ -9,11 +9,15 @@ import { TaskError } from "../tasks/errors.js";
 import type { TaskEventJournal } from "../tasks/task-event-journal.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { AccessDeviceAuthenticator } from "./task-event-routes.js";
+import {
+  type TaskSdkWebSocket,
+  taskSdkSessionUnavailableClose,
+} from "./task-sdk-connection-registry.js";
 
 export const sdkWebSocketClose = {
   authenticationFailed: { code: 4_003, reason: "AUTHENTICATION_FAILED" },
   messageInvalid: { code: 4_000, reason: "SDK_MESSAGE_INVALID" },
-  sessionUnavailable: { code: 4_009, reason: "TASK_SESSION_UNAVAILABLE" },
+  sessionUnavailable: taskSdkSessionUnavailableClose,
   taskNotFound: { code: 4_004, reason: "TASK_NOT_FOUND" },
   transportFailed: { code: 4_011, reason: "SDK_TRANSPORT_FAILED" },
 } as const;
@@ -64,6 +68,9 @@ export type TaskSdkRouteOptions = {
   };
   deviceAuthService: AccessDeviceAuthenticator;
   eventJournal: Pick<TaskEventJournal, "subscribeSdk">;
+  taskConnectionRegistry: {
+    add(taskId: string, socket: TaskSdkWebSocket): () => void;
+  };
   taskManager: Pick<
     TaskManager,
     "activateSdkSession" | "getTask" | "submitSdkMessage"
@@ -116,6 +123,7 @@ export function registerTaskSdkRoutes(
 
       let closed = false;
       const unregisterDevice = options.connectionRegistry.add(deviceId, socket);
+      const unregisterTask = options.taskConnectionRegistry.add(taskId, socket);
       let unsubscribeSdk = (): void => {};
       const cleanup = (): void => {
         if (closed) {
@@ -123,6 +131,7 @@ export function registerTaskSdkRoutes(
         }
         closed = true;
         unsubscribeSdk();
+        unregisterTask();
         unregisterDevice();
       };
       const terminate = (failure: WebSocketFailure): void => {

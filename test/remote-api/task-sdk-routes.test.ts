@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { InMemoryDeviceConnectionRegistry } from "../../src/auth/device-connection-registry.js";
 import { createHttpApp } from "../../src/http/create-http-app.js";
+import { InMemoryTaskSdkConnectionRegistry } from "../../src/remote-api/task-sdk-connection-registry.js";
 import {
   parseSdkUserMessageFrame,
   registerTaskSdkRoutes,
@@ -177,6 +178,25 @@ describe("task SDK WebSocket", () => {
       reason: "Device session revoked.",
     });
   });
+
+  it("closes a terminal task SDK socket without closing control sockets", async () => {
+    const fixture = await createFixture(apps);
+    let controlSocketClosed = false;
+    fixture.connectionRegistry.add(deviceId, {
+      close(): void {
+        controlSocketClosed = true;
+      },
+    });
+    const client = await fixture.app.injectWS(`/v1/tasks/${taskId}/sdk`, {
+      headers: { authorization: "Bearer access-token" },
+    });
+    const closed = nextClose(client);
+
+    fixture.taskConnectionRegistry.closeTaskConnections(taskId);
+
+    await expect(closed).resolves.toEqual(sdkWebSocketClose.sessionUnavailable);
+    expect(controlSocketClosed).toBe(false);
+  });
 });
 
 async function createFixture(
@@ -192,12 +212,14 @@ async function createFixture(
   connectionRegistry: InMemoryDeviceConnectionRegistry;
   journal: RecordingSdkJournal;
   submissions: SDKUserMessage[];
+  taskConnectionRegistry: InMemoryTaskSdkConnectionRegistry;
 }> {
   const app = await createHttpApp({ websocket: true });
   const connectionRegistry = new InMemoryDeviceConnectionRegistry();
   const journal = new RecordingSdkJournal();
   const submissions: SDKUserMessage[] = [];
   const activationObservedSubscriber: boolean[] = [];
+  const taskConnectionRegistry = new InMemoryTaskSdkConnectionRegistry();
   registerTaskSdkRoutes(app, {
     connectionRegistry,
     deviceAuthService: {
@@ -209,6 +231,7 @@ async function createFixture(
       },
     },
     eventJournal: journal,
+    taskConnectionRegistry,
     taskManager: {
       async activateSdkSession(): Promise<void> {
         activationObservedSubscriber.push(journal.subscriber !== undefined);
@@ -237,6 +260,7 @@ async function createFixture(
     connectionRegistry,
     journal,
     submissions,
+    taskConnectionRegistry,
   };
 }
 

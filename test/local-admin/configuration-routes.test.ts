@@ -12,7 +12,10 @@ import {
   type StorageConnection,
 } from "../../src/storage/database.js";
 import { SettingsRepository } from "../../src/storage/settings-repository.js";
-import { readTaskRuntimeSettings } from "../../src/tasks/settings.js";
+import {
+  readTaskRuntimeSettings,
+  writeTaskRuntimeSettings,
+} from "../../src/tasks/settings.js";
 
 const csrfHeaders = {
   origin: "http://127.0.0.1:43183",
@@ -45,7 +48,7 @@ describe("local administration configuration routes", () => {
       runtime: {
         remoteListener: { host: "127.0.0.1", port: 43_182 },
       },
-      tasks: { concurrentTaskCapacity: 3, workspaceRoots: [] },
+      tasks: { concurrentTaskCapacity: 3 },
     });
   });
 
@@ -59,9 +62,12 @@ describe("local administration configuration routes", () => {
       mobileBaseUrl: "https://pocketpilot.example.test",
       remoteListener: { host: "0.0.0.0", port: 44_000 },
     };
+    writeTaskRuntimeSettings(settingsRepository, {
+      concurrentTaskCapacity: 3,
+      workspaceRoots: ["C:\\code", "D:\\work"],
+    });
     const taskSettings = {
       concurrentTaskCapacity: 6,
-      workspaceRoots: ["C:\\code", "D:\\work"],
     };
 
     const rejected = await app.inject({
@@ -89,7 +95,10 @@ describe("local administration configuration routes", () => {
     expect(savedRuntime.statusCode).toBe(200);
     expect(savedTasks.statusCode).toBe(200);
     expect(readRuntimeSettings(settingsRepository)).toEqual(runtimeSettings);
-    expect(readTaskRuntimeSettings(settingsRepository)).toEqual(taskSettings);
+    expect(readTaskRuntimeSettings(settingsRepository)).toEqual({
+      ...taskSettings,
+      workspaceRoots: ["C:\\code", "D:\\work"],
+    });
   });
 
   it("returns metadata-only audits and keeps admin routes off the remote app", async () => {

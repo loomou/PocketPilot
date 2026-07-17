@@ -11,8 +11,8 @@ import {
 import type { SettingsRepository } from "../storage/settings-repository.js";
 import {
   readTaskRuntimeSettings,
-  taskRuntimeSettingsSchema,
-  writeTaskRuntimeSettings,
+  taskCapacitySettingsSchema,
+  writeTaskCapacitySettings,
 } from "../tasks/settings.js";
 
 const auditRecordSchema = z.object({
@@ -39,14 +39,16 @@ export function registerConfigurationRoutes(
         response: {
           200: z.object({
             runtime: runtimeSettingsSchema,
-            tasks: taskRuntimeSettingsSchema,
+            tasks: taskCapacitySettingsSchema,
           }),
         },
       },
     },
     async () => ({
       runtime: readRuntimeSettings(options.settingsRepository),
-      tasks: readTaskRuntimeSettings(options.settingsRepository),
+      tasks: taskCapacitySettingsSchema.parse(
+        readTaskRuntimeSettings(options.settingsRepository),
+      ),
     }),
   );
   typed.put(
@@ -66,13 +68,15 @@ export function registerConfigurationRoutes(
     "/admin/configuration/tasks",
     {
       schema: {
-        body: taskRuntimeSettingsSchema,
-        response: { 200: taskRuntimeSettingsSchema },
+        body: taskCapacitySettingsSchema,
+        response: { 200: taskCapacitySettingsSchema },
       },
     },
     async (request) => {
-      writeTaskRuntimeSettings(options.settingsRepository, request.body);
-      return request.body;
+      return writeTaskCapacitySettings(
+        options.settingsRepository,
+        request.body,
+      );
     },
   );
   typed.get(

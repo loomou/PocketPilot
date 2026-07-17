@@ -12,7 +12,43 @@ const runtimeSettingsSchema = z.object({
 
 const taskSettingsSchema = z.object({
   concurrentTaskCapacity: z.number().int().min(1).max(1_024),
-  workspaceRoots: z.array(z.string().min(1).max(4_096)).max(1_024),
+});
+
+const authorizedDirectorySchema = z.object({
+  nonTerminalRuntimeCount: z.number().int().min(0),
+  path: z.string().min(1).max(4_096),
+  status: z.enum(["available", "unavailable"]),
+  volumeRoot: z.boolean(),
+});
+
+const authorizedDirectorySnapshotSchema = z.object({
+  directories: z.array(authorizedDirectorySchema).max(1_024),
+  revision: z.number().int().min(0),
+});
+
+const directoryPickResponseSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("cancelled") }),
+  z.object({
+    expiresAt: z.number().int(),
+    path: z.string().min(1).max(4_096),
+    selectionId: z.uuid(),
+    status: z.literal("selected"),
+    volumeRoot: z.boolean(),
+  }),
+]);
+
+const addAuthorizedDirectoryResponseSchema = z.object({
+  coveringPath: z.string().min(1).max(4_096).optional(),
+  removedRedundantPaths: z.array(z.string().min(1).max(4_096)),
+  result: z.enum(["added", "already-covered"]),
+  selectedPath: z.string().min(1).max(4_096),
+  snapshot: authorizedDirectorySnapshotSchema,
+});
+
+const removeAuthorizedDirectoryResponseSchema = z.object({
+  removedPath: z.string().min(1).max(4_096),
+  snapshot: authorizedDirectorySnapshotSchema,
+  stoppedTaskCount: z.number().int().min(0),
 });
 
 const configurationSchema = z.object({
@@ -74,6 +110,10 @@ const errorResponseSchema = z.object({
 const revokedResponseSchema = z.object({ revoked: z.boolean() });
 
 export type AgentStatus = z.infer<typeof agentStatusSchema>;
+export type AuthorizedDirectory = z.infer<typeof authorizedDirectorySchema>;
+export type AuthorizedDirectorySnapshot = z.infer<
+  typeof authorizedDirectorySnapshotSchema
+>;
 export type AuditRecord = z.infer<typeof auditRecordSchema>;
 export type Configuration = z.infer<typeof configurationSchema>;
 export type CreatedPairing = z.infer<typeof createdPairingSchema>;
@@ -84,6 +124,7 @@ export type TaskSettings = z.infer<typeof taskSettingsSchema>;
 
 export type LocalAdminSnapshot = {
   audits: AuditRecord[];
+  authorizedDirectories: AuthorizedDirectorySnapshot;
   configuration: Configuration;
   csrfToken: string;
   devices: Device[];
@@ -102,24 +143,84 @@ export class LocalAdminApiError extends Error {
 }
 
 export async function loadLocalAdminSnapshot(): Promise<LocalAdminSnapshot> {
-  const [csrf, configuration, status, pendingPairings, devices, audits] =
-    await Promise.all([
-      getJson("/admin/csrf", csrfSchema),
-      getJson("/admin/configuration", configurationSchema),
-      getJson("/admin/status", agentStatusSchema),
-      getJson("/admin/pairings/pending", z.array(pendingPairingSchema)),
-      getJson("/admin/devices", z.array(deviceSchema)),
-      getJson("/admin/audits", z.array(auditRecordSchema)),
-    ]);
+  const [
+    csrf,
+    configuration,
+    status,
+    pendingPairings,
+    devices,
+    audits,
+    authorizedDirectories,
+  ] = await Promise.all([
+    getJson("/admin/csrf", csrfSchema),
+    getJson("/admin/configuration", configurationSchema),
+    getJson("/admin/status", agentStatusSchema),
+    getJson("/admin/pairings/pending", z.array(pendingPairingSchema)),
+    getJson("/admin/devices", z.array(deviceSchema)),
+    getJson("/admin/audits", z.array(auditRecordSchema)),
+    getJson("/admin/authorized-directories", authorizedDirectorySnapshotSchema),
+  ]);
 
   return {
     audits,
+    authorizedDirectories,
     configuration,
     csrfToken: csrf.token,
     devices,
     pendingPairings,
     status,
   };
+}
+
+export function loadAuthorizedDirectories(): Promise<AuthorizedDirectorySnapshot> {
+  return getJson(
+    "/admin/authorized-directories",
+    authorizedDirectorySnapshotSchema,
+  );
+}
+
+export function pickAuthorizedDirectory(
+  csrfToken: string,
+): Promise<z.infer<typeof directoryPickResponseSchema>> {
+  return mutateJson(
+    "/admin/authorized-directories/pick",
+    "POST",
+    csrfToken,
+    undefined,
+    directoryPickResponseSchema,
+  );
+}
+
+export function addAuthorizedDirectory(
+  csrfToken: string,
+  selectionId: string,
+  volumeRootRiskAccepted: boolean,
+): Promise<z.infer<typeof addAuthorizedDirectoryResponseSchema>> {
+  return mutateJson(
+    "/admin/authorized-directories",
+    "POST",
+    csrfToken,
+    { selectionId, volumeRootRiskAccepted },
+    addAuthorizedDirectoryResponseSchema,
+  );
+}
+
+export function removeAuthorizedDirectory(
+  csrfToken: string,
+  input: {
+    expectedNonTerminalRuntimeCount: number;
+    path: string;
+    revision: number;
+    runtimeStopAccepted: true;
+  },
+): Promise<z.infer<typeof removeAuthorizedDirectoryResponseSchema>> {
+  return mutateJson(
+    "/admin/authorized-directories/remove",
+    "POST",
+    csrfToken,
+    input,
+    removeAuthorizedDirectoryResponseSchema,
+  );
 }
 
 export function saveRuntimeSettings(

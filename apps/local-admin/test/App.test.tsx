@@ -19,7 +19,10 @@ describe("App", () => {
     expect(
       await screen.findByDisplayValue("https://agent.example.test"),
     ).toBeInTheDocument();
-    expect(screen.getByDisplayValue("C:\\code")).toBeInTheDocument();
+    expect(screen.getByText("C:\\code")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Authorized directories" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "Pair a mobile device" }),
     ).toBeInTheDocument();
@@ -67,6 +70,98 @@ describe("App", () => {
     expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(screen.queryByText("Pair a mobile device")).not.toBeInTheDocument();
   });
+
+  it("adds a picker-selected directory without saving staged capacity", async () => {
+    const addedSnapshot = {
+      directories: [
+        ...snapshot.authorizedDirectories.directories,
+        {
+          nonTerminalRuntimeCount: 0,
+          path: "D:\\new-project",
+          status: "available",
+          volumeRoot: false,
+        },
+      ],
+      revision: 1,
+    } as const;
+    const fetchMock = installFetchMock(
+      new Map<string, unknown>([
+        [
+          "POST /admin/authorized-directories/pick",
+          {
+            expiresAt: 1_900_000_000_000,
+            path: "D:\\new-project",
+            selectionId: "00000000-0000-4000-8000-000000000020",
+            status: "selected",
+            volumeRoot: false,
+          },
+        ],
+        [
+          "POST /admin/authorized-directories",
+          {
+            removedRedundantPaths: [],
+            result: "added",
+            selectedPath: "D:\\new-project",
+            snapshot: addedSnapshot,
+          },
+        ],
+      ]),
+    );
+    render(<App />);
+
+    const capacity = await screen.findByLabelText("Concurrent task capacity");
+    fireEvent.change(capacity, { target: { value: "9" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add directory" }));
+
+    expect(await screen.findByText("D:\\new-project")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("9")).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        (call) =>
+          requestPath(call[0]) === "/admin/configuration/tasks" &&
+          call[1]?.method === "PUT",
+      ),
+    ).toBe(false);
+  });
+
+  it("removes a confirmed directory through its current revision", async () => {
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => true),
+    );
+    const fetchMock = installFetchMock(
+      new Map<string, unknown>([
+        [
+          "POST /admin/authorized-directories/remove",
+          {
+            removedPath: "C:\\code",
+            snapshot: { directories: [], revision: 1 },
+            stoppedTaskCount: 0,
+          },
+        ],
+      ]),
+    );
+    render(<App />);
+
+    await screen.findByText("C:\\code");
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+    expect(
+      await screen.findByText(
+        "Directory authorization removed. 0 open sessions were stopped.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("C:\\code")).not.toBeInTheDocument();
+    const removal = fetchMock.mock.calls.find(
+      (call) => requestPath(call[0]) === "/admin/authorized-directories/remove",
+    );
+    expect(JSON.parse(String(removal?.[1]?.body))).toEqual({
+      expectedNonTerminalRuntimeCount: 0,
+      path: "C:\\code",
+      revision: 0,
+      runtimeStopAccepted: true,
+    });
+  });
 });
 
 function installFetchMock(overrides = new Map<string, unknown>()) {
@@ -80,9 +175,12 @@ function installFetchMock(overrides = new Map<string, unknown>()) {
             : snapshot.configuration.tasks,
         );
       }
-      const response = overrides.has(path)
-        ? overrides.get(path)
-        : responses.get(path);
+      const methodPath = `${init?.method ?? "GET"} ${path}`;
+      const response = overrides.has(methodPath)
+        ? overrides.get(methodPath)
+        : overrides.has(path)
+          ? overrides.get(path)
+          : responses.get(path);
       if (response === undefined) {
         return jsonResponse(
           { code: "NOT_FOUND", message: "No mocked response." },
@@ -124,7 +222,18 @@ const snapshot = {
       mobileBaseUrl: "https://agent.example.test",
       remoteListener: { host: "127.0.0.1", port: 43_182 },
     },
-    tasks: { concurrentTaskCapacity: 5, workspaceRoots: ["C:\\code"] },
+    tasks: { concurrentTaskCapacity: 5 },
+  },
+  authorizedDirectories: {
+    directories: [
+      {
+        nonTerminalRuntimeCount: 0,
+        path: "C:\\code",
+        status: "available",
+        volumeRoot: false,
+      },
+    ],
+    revision: 0,
   },
   csrf: { token: "csrf-token" },
   devices: [
@@ -158,4 +267,5 @@ const responses = new Map<string, unknown>([
   ["/admin/pairings/pending", snapshot.pairings],
   ["/admin/devices", snapshot.devices],
   ["/admin/audits", snapshot.audits],
+  ["/admin/authorized-directories", snapshot.authorizedDirectories],
 ]);

@@ -20,6 +20,7 @@ output.
 | `EnvironmentConfigurationError` | `DOTENV_READ_FAILED`, `ENVIRONMENT_VALUE_INVALID` | Safe startup-directory dotenv read and allowlisted value validation failures. |
 | `DeviceAuthError` | Pairing, device-proof, challenge, opaque-token, and revocation codes | HTTP-safe device authentication failure. |
 | `TaskError` | Task lifecycle/policy codes plus `CLAUDE_SESSION_NOT_FOUND`, `CLAUDE_SESSION_CONFLICT`, `CLAUDE_HISTORY_UNAVAILABLE`, and `HISTORY_CURSOR_STALE` | Validated mobile task, SDK-session, history, and control failures. |
+| `LocalAdminError` | Directory picker/selection/authorization management codes | HTTP-safe loopback directory-management failures. |
 
 ## Patterns
 
@@ -44,6 +45,10 @@ output.
   verifier, signature, or crypto-library details.
 - Keep task errors metadata-only: do not put an instruction, model output, tool
   input, or SDK process details in a `TaskError` message.
+- Scoped authorized-directory routes preserve Fastify validation errors, map
+  `LocalAdminError`/`TaskError` to their stable status/code, and map every other
+  failure to `500 LOCAL_ADMIN_OPERATION_FAILED`. Never return raw PowerShell,
+  filesystem, SQLite, or SDK exception text from this surface.
 - Map missing/out-of-policy session metadata to the same safe
   `CLAUDE_SESSION_NOT_FOUND` response. Map transcript parse/read failure to
   retryable `CLAUDE_HISTORY_UNAVAILABLE` and a disappeared UUID anchor to
@@ -63,6 +68,8 @@ output.
   raw setting JSON that could later contain a secret.
 - Do not expose internal error messages directly through the remote API; that
   mapping belongs to the future validated API boundary.
+- Do not use `reply.send(error)` for an unknown authorized-directory failure;
+  only schema-validation errors may retain Fastify's normal 400 translation.
 - Do not delete a runtime-control file merely because a new startup failed;
   only the runtime that owns its random control token may remove it.
 - Do not open SQLite for reset until the literal confirmation has been

@@ -1,9 +1,21 @@
 import { randomUUID } from "node:crypto";
 
 import { and, eq, inArray, ne } from "drizzle-orm";
+import { z } from "zod";
 import type { StorageDatabase } from "../storage/database.js";
 import { StorageDataError } from "../storage/errors.js";
-import { auditRecords, operationResults, tasks } from "../storage/schema.js";
+import {
+  agentSettings,
+  auditRecords,
+  operationResults,
+  tasks,
+} from "../storage/schema.js";
+import type { TaskErrorCode } from "./errors.js";
+import {
+  TASK_RUNTIME_SETTINGS_KEY,
+  type TaskRuntimeSettings,
+  taskRuntimeSettingsSchema,
+} from "./settings.js";
 import {
   type TaskOperationResult,
   type TaskOrigin,
@@ -34,6 +46,25 @@ type PersistOperationInput = {
   resultLabel: string;
   taskId: string;
 };
+
+type PersistOperationErrorInput = {
+  createdAt: number;
+  deviceId: string;
+  expiresAt: number;
+  operationId: string;
+  taskId: string | null;
+};
+
+export type TaskOperationOutcome =
+  | { kind: "error"; code: TaskErrorCode; message: string; statusCode: 409 }
+  | { kind: "result"; result: TaskOperationResult };
+
+const persistedSupersededOutcomeSchema = z.object({
+  code: z.literal("TASK_OPERATION_SUPERSEDED"),
+  kind: z.literal("error"),
+  message: z.string(),
+  statusCode: z.literal(409),
+});
 
 /** Owns task metadata, operation-id results, and metadata-only audit rows. */
 export class TaskRepository {
@@ -143,7 +174,13 @@ export class TaskRepository {
         )
         .get();
       if (existing !== undefined) {
-        return parseOperationResult(existing.resultJson);
+        const outcome = parseOperationOutcome(existing.resultJson);
+        if (outcome.kind === "result") {
+          return outcome.result;
+        }
+        throw new StorageDataError(
+          "An operation error already owns this idempotency key.",
+        );
       }
 
       transaction
@@ -174,7 +211,7 @@ export class TaskRepository {
   public readOperation(
     deviceId: string,
     operationId: string,
-  ): TaskOperationResult | undefined {
+  ): TaskOperationOutcome | undefined {
     const row = this.database
       .select({ resultJson: operationResults.resultJson })
       .from(operationResults)
@@ -185,15 +222,66 @@ export class TaskRepository {
         ),
       )
       .get();
-    return row === undefined ? undefined : parseOperationResult(row.resultJson);
+    return row === undefined
+      ? undefined
+      : parseOperationOutcome(row.resultJson);
+  }
+
+  public persistSupersededOperation(
+    input: PersistOperationErrorInput,
+  ): TaskOperationOutcome {
+    return this.database.transaction((transaction) => {
+      const existing = transaction
+        .select({ resultJson: operationResults.resultJson })
+        .from(operationResults)
+        .where(
+          and(
+            eq(operationResults.deviceId, input.deviceId),
+            eq(operationResults.operationId, input.operationId),
+          ),
+        )
+        .get();
+      if (existing !== undefined) {
+        return parseOperationOutcome(existing.resultJson);
+      }
+
+      const outcome = {
+        code: "TASK_OPERATION_SUPERSEDED",
+        kind: "error",
+        message: "A higher-priority task operation superseded this request.",
+        statusCode: 409,
+      } as const;
+      transaction
+        .insert(operationResults)
+        .values({
+          createdAt: input.createdAt,
+          deviceId: input.deviceId,
+          expiresAt: input.expiresAt,
+          operationId: input.operationId,
+          resultJson: JSON.stringify(outcome),
+        })
+        .run();
+      transaction
+        .insert(auditRecords)
+        .values({
+          deviceId: input.deviceId,
+          id: randomUUID(),
+          occurredAt: input.createdAt,
+          operation: "task.operation-superseded",
+          result: "superseded",
+          taskId: input.taskId,
+        })
+        .run();
+      return outcome;
+    });
   }
 
   public recordAudit(input: {
-    deviceId: string;
+    deviceId: string | null;
     occurredAt: number;
     operation: string;
     result: string;
-    taskId: string;
+    taskId: string | null;
   }): void {
     this.database
       .insert(auditRecords)
@@ -206,6 +294,62 @@ export class TaskRepository {
         taskId: input.taskId,
       })
       .run();
+  }
+
+  /** Commits a workspace-policy change and its P0 task rows together. */
+  public replaceWorkspaceRootsAndTerminalize(input: {
+    auditResult: string;
+    settings: TaskRuntimeSettings;
+    taskIds: readonly string[];
+    updatedAt: number;
+  }): TaskSnapshot[] {
+    const settings = taskRuntimeSettingsSchema.parse(input.settings);
+    const valueJson = JSON.stringify(settings);
+    this.database.transaction((transaction) => {
+      transaction
+        .insert(agentSettings)
+        .values({
+          key: TASK_RUNTIME_SETTINGS_KEY,
+          updatedAt: input.updatedAt,
+          valueJson,
+        })
+        .onConflictDoUpdate({
+          target: agentSettings.key,
+          set: { updatedAt: input.updatedAt, valueJson },
+        })
+        .run();
+
+      if (input.taskIds.length > 0) {
+        transaction
+          .update(tasks)
+          .set({
+            state: "terminal",
+            terminalAt: input.updatedAt,
+            updatedAt: input.updatedAt,
+          })
+          .where(
+            and(
+              inArray(tasks.id, [...input.taskIds]),
+              ne(tasks.state, "terminal"),
+            ),
+          )
+          .run();
+      }
+
+      transaction
+        .insert(auditRecords)
+        .values({
+          deviceId: null,
+          id: randomUUID(),
+          occurredAt: input.updatedAt,
+          operation: "workspace.authorization-updated",
+          result: input.auditResult,
+          taskId: null,
+        })
+        .run();
+    });
+
+    return input.taskIds.map((taskId) => this.require(taskId));
   }
 
   public require(id: string): TaskSnapshot {
@@ -222,7 +366,7 @@ export class TaskRepository {
   }
 }
 
-function parseOperationResult(valueJson: string): TaskOperationResult {
+function parseOperationOutcome(valueJson: string): TaskOperationOutcome {
   let value: unknown;
   try {
     value = JSON.parse(valueJson);
@@ -230,13 +374,15 @@ function parseOperationResult(valueJson: string): TaskOperationResult {
     throw new StorageDataError("An operation result contains invalid JSON.");
   }
 
-  const result = taskOperationResultSchema.safeParse(value);
-  if (!result.success) {
-    throw new StorageDataError(
-      "An operation result does not match its schema.",
-    );
+  const legacyResult = taskOperationResultSchema.safeParse(value);
+  if (legacyResult.success) {
+    return { kind: "result", result: legacyResult.data };
   }
-  return result.data;
+  const error = persistedSupersededOutcomeSchema.safeParse(value);
+  if (error.success) {
+    return error.data;
+  }
+  throw new StorageDataError("An operation result does not match its schema.");
 }
 
 function parseTaskRow(row: typeof tasks.$inferSelect): TaskSnapshot {

@@ -22,11 +22,11 @@ This directory records the conventions for the PocketPilot TypeScript Agent.
 | [Database Guidelines](./database-guidelines.md) | SQLite, encryption, retention, and migration contracts | Established |
 | [Device Authentication and Pairing Contracts](./device-auth-contracts.md) | QR pairing, device proof, credential rotation, and revocation | Established |
 | [Error Handling](./error-handling.md) | Error types, handling strategies | Established |
-| [Process and Listener Runtime Contracts](./process-runtime-contracts.md) | Manual start/stop, listener isolation, local CSRF, and shutdown | Established |
+| [Process and Listener Runtime Contracts](./process-runtime-contracts.md) | Manual start/stop, listener isolation, native picker composition, and shutdown | Established |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Established |
-| [Task Runtime Contracts](./task-runtime-contracts.md) | Persistent lifecycle, split SDK/control transports, replay, policy, and recovery | Established |
+| [Task Runtime Contracts](./task-runtime-contracts.md) | Persistent lifecycle, workspace authorization, P0-P3 priority, transports, and recovery | Established |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | Established |
-| [Local Administration Contracts](./local-admin-contracts.md) | Local configuration APIs, static assets, audits, and isolation | Established |
+| [Local Administration Contracts](./local-admin-contracts.md) | Local configuration, directory authorization, audits, static assets, and isolation | Established |
 
 ---
 

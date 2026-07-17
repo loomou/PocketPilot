@@ -14,7 +14,7 @@ This directory records conventions for the local-only PocketPilot configuration 
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Local Admin Application Contracts](./scaffold-contracts.md) | Browser API, configuration, pairing, device, and audit UI contract | Established |
+| [Local Admin Application Contracts](./scaffold-contracts.md) | Browser API, configuration, directory authorization, pairing, device, and audit UI contract | Established |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | Established |
 | [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | Established |
 | [Hook Guidelines](./hook-guidelines.md) | Effect, callback, and data-fetching patterns | Established |

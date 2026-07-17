@@ -74,6 +74,35 @@ describe("Claude session-centric task manager", () => {
     ]);
   });
 
+  it("returns no session metadata when P0 revokes an in-flight catalog read", async () => {
+    const fixture = createFixture(fixtures);
+    fixture.catalog.sessions = [sdkSession("inside", fixture.workspace)];
+    const gate = fixture.catalog.deferNextList();
+    const snapshot = await fixture.manager.authorizedDirectorySnapshot();
+    const root = snapshot.directories[0];
+    if (root === undefined) {
+      throw new Error("The fixture has no authorized root.");
+    }
+
+    const pending = fixture.manager.listClaudeSessions({
+      workspace: fixture.workspace,
+    });
+    await gate.started;
+    await expect(
+      fixture.manager.removeAuthorizedDirectory({
+        expectedNonTerminalRuntimeCount: 0,
+        path: root.path,
+        revision: snapshot.revision,
+        runtimeStopAccepted: true,
+      }),
+    ).resolves.toMatchObject({ stoppedTaskCount: 0 });
+    gate.release();
+
+    await expect(pending).rejects.toMatchObject({
+      code: "WORKSPACE_NOT_AUTHORIZED",
+    });
+  });
+
   it("returns latest and older unchanged history pages and serializes reads", async () => {
     const fixture = createFixture(fixtures);
     const session = sdkSession("history-session", fixture.workspace);
@@ -276,6 +305,13 @@ class FakeCatalog implements ClaudeSessionCatalog {
   readonly messages = new Map<string, SessionMessage[]>();
   readDelayMilliseconds = 0;
   sessions: SDKSessionInfo[] = [];
+  #listGate: Deferred | undefined;
+
+  public deferNextList(): DeferredControl {
+    const gate = new Deferred();
+    this.#listGate = gate;
+    return gate.control;
+  }
 
   public async getInfo(
     sessionId: string,
@@ -311,6 +347,12 @@ class FakeCatalog implements ClaudeSessionCatalog {
 
   public async list(options: unknown): Promise<SDKSessionInfo[]> {
     this.listCalls.push(options);
+    const gate = this.#listGate;
+    this.#listGate = undefined;
+    if (gate !== undefined) {
+      gate.markStarted();
+      await gate.promise;
+    }
     return this.sessions;
   }
 
@@ -320,6 +362,34 @@ class FakeCatalog implements ClaudeSessionCatalog {
       provenance: {},
       sources: [],
     };
+  }
+}
+
+type DeferredControl = {
+  release(): void;
+  started: Promise<void>;
+};
+
+class Deferred {
+  readonly control: DeferredControl;
+  readonly promise: Promise<void>;
+  readonly #markStarted: () => void;
+
+  public constructor() {
+    let markStarted = (): void => undefined;
+    let release = (): void => undefined;
+    this.promise = new Promise((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    this.#markStarted = markStarted;
+    this.control = { release, started };
+  }
+
+  public markStarted(): void {
+    this.#markStarted();
   }
 }
 

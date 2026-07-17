@@ -12,6 +12,8 @@ Agent and is not a second mobile/task control application.
 - `loadLocalAdminSnapshot(): Promise<LocalAdminSnapshot>` owns initial reads.
 - Browser mutations: `saveRuntimeSettings`, `saveTaskSettings`,
   `createPairing`, `approvePairing`, and `revokeDevice`.
+- Directory mutations: `pickAuthorizedDirectory`, `addAuthorizedDirectory`,
+  `removeAuthorizedDirectory`, and `loadAuthorizedDirectories`.
 - Workspace commands: `pnpm dev:admin` and `pnpm build:admin`.
 
 ## 3. Contracts
@@ -19,11 +21,17 @@ Agent and is not a second mobile/task control application.
 - `src/api/local-admin.ts` is the single owner of `/admin/*` payload schemas.
   Every `response.json()` value is `unknown` until a Zod schema accepts it.
 - Initial load obtains CSRF, configuration, status, pending pairings, devices,
-  and audits. Writes include `x-pocketpilot-csrf-token`; configuration writes
-  use JSON request bodies.
+  audits, and the authorized-directory snapshot. Writes include
+  `x-pocketpilot-csrf-token`; configuration writes use JSON request bodies.
 - The page exposes Agent status, listener/base URL settings, workspace roots,
   concurrency, QR generation, pairing approval, device revocation, audit
   metadata, and terminal-only rekey/reset guidance.
+- Workspace roots render in a separate **Authorized directories** security
+  section and are never a text field. Add opens the Agent-native picker and
+  commits its opaque selection ID; Remove sends the displayed path, snapshot
+  revision, affected-runtime count, and explicit confirmation. Both replace
+  only the returned directory snapshot and preserve unsaved configuration
+  form edits.
 - QR rendering encodes the complete server-returned `qrPayload` as JSON. The
   UI never invents an Agent ID, pairing ID, base URL, or expiry.
 - `App.tsx` remains composition-only. Stateful application behavior lives in
@@ -42,6 +50,9 @@ Agent and is not a second mobile/task control application.
 | A local API returns `{ code, message }` with non-2xx status | Show its safe message and keep current state. |
 | Initial load fails | Keep the page shell visible and show an error notice. |
 | Configuration save succeeds | Update the typed snapshot and state that listener changes apply on next start. |
+| Native picker returns `cancelled` | Show a no-change notice; make no add request. |
+| Selected row is a volume root | Require browser confirmation before sending `volumeRootRiskAccepted: true`. |
+| Removal returns `AUTHORIZED_DIRECTORY_SNAPSHOT_STALE` | Reload only directories, keep form edits, and require a new confirmation. |
 | Pairing approval code is not six digits | Keep the Approve action disabled. |
 | Device is already revoked | Show revoked state and no revoke action. |
 
@@ -49,11 +60,15 @@ Agent and is not a second mobile/task control application.
 
 - Good: one API decoder validates server data, the feature consumes inferred
   types, and a save sends the current typed settings with the CSRF token.
+- Good: capacity is edited to `9`, Add returns a new directory snapshot, and
+  the visible capacity remains `9` without a configuration PUT.
+- Base: cancelling the picker or removal confirmation leaves server and form
+  state unchanged.
 - Base: empty pending/device/audit arrays render explicit empty rows while the
   configuration form stays usable.
 - Bad: casting `await response.json()` to a component-local interface,
-  constructing a QR from partial fields, or adding mobile task operations to
-  the localhost page.
+  sending a manually typed directory path, refreshing the whole snapshot after
+  Add/Remove, or adding mobile task operations to the localhost page.
 
 ## 6. Tests Required
 
@@ -61,6 +76,8 @@ Agent and is not a second mobile/task control application.
   status, and audit sections from mocked local API responses.
 - Save behavior asserts both PUT requests contain the fetched CSRF token and
   JSON content type.
+- Add/Remove tests assert picker-selected payloads, volume/stale confirmation,
+  current revision/count, and preservation of staged capacity/runtime values.
 - Backend/static integration separately proves the bundle is never served by
   the remote listener; a component test cannot establish listener isolation.
 - Root lint, type-check, test, and production build include the workspace.
@@ -84,3 +101,5 @@ const configuration = configurationSchema.parse(payload);
 ```
 
 The API boundary validates once and exports the inferred type to the feature.
+Directory responses follow the same rule; components never recreate their
+interfaces or accept arbitrary add paths.

@@ -2,6 +2,8 @@ import {
   Ban,
   Check,
   CircleAlert,
+  FolderLock,
+  FolderPlus,
   KeyRound,
   Laptop,
   QrCode,
@@ -9,16 +11,23 @@ import {
   Save,
   ShieldCheck,
   Smartphone,
+  Trash2,
 } from "lucide-react";
 import QRCode from "qrcode";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 
 import {
+  type AuthorizedDirectory,
+  addAuthorizedDirectory,
   approvePairing,
   createPairing,
+  LocalAdminApiError,
   type LocalAdminSnapshot,
+  loadAuthorizedDirectories,
   loadLocalAdminSnapshot,
+  pickAuthorizedDirectory,
   type RuntimeSettings,
+  removeAuthorizedDirectory,
   revokeDevice,
   saveRuntimeSettings,
   saveTaskSettings,
@@ -130,6 +139,100 @@ export function AdministrationPage() {
     } finally {
       setBusyAction(undefined);
     }
+  };
+
+  const addDirectory = async (): Promise<void> => {
+    if (snapshot === undefined) return;
+    setBusyAction("directory:add");
+    try {
+      const selection = await pickAuthorizedDirectory(snapshot.csrfToken);
+      if (selection.status === "cancelled") {
+        setNotice({
+          kind: "success",
+          message: "Directory selection cancelled.",
+        });
+        return;
+      }
+      const volumeRootRiskAccepted =
+        !selection.volumeRoot ||
+        window.confirm(
+          `Authorize the entire volume ${selection.path}? Every directory on this volume will become accessible to paired devices.`,
+        );
+      if (!volumeRootRiskAccepted) {
+        setNotice({
+          kind: "success",
+          message: "Directory was not authorized.",
+        });
+        return;
+      }
+      const result = await addAuthorizedDirectory(
+        snapshot.csrfToken,
+        selection.selectionId,
+        volumeRootRiskAccepted,
+      );
+      updateAuthorizedDirectories(result.snapshot);
+      setNotice({
+        kind: "success",
+        message:
+          result.result === "already-covered"
+            ? `Directory is already covered by ${result.coveringPath ?? "an authorized parent"}.`
+            : "Authorized directory added.",
+      });
+    } catch (error) {
+      setNotice({ kind: "error", message: errorMessage(error) });
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
+  const removeDirectory = async (
+    directory: AuthorizedDirectory,
+  ): Promise<void> => {
+    if (snapshot === undefined) return;
+    const count = directory.nonTerminalRuntimeCount;
+    const confirmed = window.confirm(
+      count === 0
+        ? `Remove authorization for ${directory.path}?`
+        : `Remove authorization for ${directory.path} and stop ${count} open session${count === 1 ? "" : "s"}? Claude transcripts will not be deleted.`,
+    );
+    if (!confirmed) return;
+
+    setBusyAction(`directory:remove:${directory.path}`);
+    try {
+      const result = await removeAuthorizedDirectory(snapshot.csrfToken, {
+        expectedNonTerminalRuntimeCount: count,
+        path: directory.path,
+        revision: snapshot.authorizedDirectories.revision,
+        runtimeStopAccepted: true,
+      });
+      updateAuthorizedDirectories(result.snapshot);
+      setNotice({
+        kind: "success",
+        message: `Directory authorization removed. ${result.stoppedTaskCount} open session${result.stoppedTaskCount === 1 ? " was" : "s were"} stopped.`,
+      });
+    } catch (error) {
+      if (
+        error instanceof LocalAdminApiError &&
+        error.code === "AUTHORIZED_DIRECTORY_SNAPSHOT_STALE"
+      ) {
+        try {
+          updateAuthorizedDirectories(await loadAuthorizedDirectories());
+        } catch {
+          // Keep the original actionable conflict message.
+        }
+      }
+      setNotice({ kind: "error", message: errorMessage(error) });
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
+  const updateAuthorizedDirectories = (
+    authorizedDirectories: LocalAdminSnapshot["authorizedDirectories"],
+  ): void => {
+    setSnapshot((current) =>
+      current === undefined ? current : { ...current, authorizedDirectories },
+    );
   };
 
   const updateConfiguration = (
@@ -272,33 +375,70 @@ export function AdministrationPage() {
                     value={snapshot.configuration.tasks.concurrentTaskCapacity}
                   />
                 </Field>
-                <Field
-                  className="sm:col-span-2"
-                  id="workspace-roots"
-                  label="Workspace roots"
-                >
-                  <textarea
-                    className={`${inputClassName} min-h-28 resize-y`}
-                    id="workspace-roots"
-                    onChange={(event) =>
-                      updateConfiguration({
-                        ...snapshot.configuration,
-                        tasks: {
-                          ...snapshot.configuration.tasks,
-                          workspaceRoots: parseWorkspaceRoots(
-                            event.target.value,
-                          ),
-                        },
-                      })
-                    }
-                    placeholder="C:\\code"
-                    value={snapshot.configuration.tasks.workspaceRoots.join(
-                      "\n",
-                    )}
-                  />
-                </Field>
               </div>
             </form>
+
+            <section
+              aria-labelledby="authorized-directories-title"
+              className="space-y-5"
+            >
+              <SectionHeading
+                action={
+                  <Button
+                    disabled={busyAction !== undefined}
+                    onClick={() => void addDirectory()}
+                    type="button"
+                  >
+                    <FolderPlus aria-hidden="true" className="size-4" />
+                    Add directory
+                  </Button>
+                }
+                description="Only directories approved on this computer are visible to paired devices. Changes apply immediately."
+                id="authorized-directories-title"
+                title="Authorized directories"
+              />
+              <div className="border-y border-slate-200 bg-white">
+                {snapshot.authorizedDirectories.directories.length === 0 ? (
+                  <EmptyRow label="No directories are authorized." />
+                ) : (
+                  snapshot.authorizedDirectories.directories.map(
+                    (directory) => (
+                      <div
+                        className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 px-5 py-4 last:border-b-0"
+                        key={`${directory.status}:${directory.path}`}
+                      >
+                        <div className="flex min-w-0 flex-1 items-start gap-3">
+                          <FolderLock
+                            aria-hidden="true"
+                            className="mt-0.5 size-5 shrink-0 text-slate-500"
+                          />
+                          <div className="min-w-0">
+                            <p className="break-all font-mono text-sm font-medium">
+                              {directory.path}
+                            </p>
+                            <p className="mt-1 text-xs text-slate-500">
+                              {directory.status === "unavailable"
+                                ? "Currently unavailable; it cannot authorize new work."
+                                : `${directory.nonTerminalRuntimeCount} open session${directory.nonTerminalRuntimeCount === 1 ? "" : "s"}`}
+                              {directory.volumeRoot ? " · Entire volume" : ""}
+                            </p>
+                          </div>
+                        </div>
+                        <Button
+                          disabled={busyAction !== undefined}
+                          onClick={() => void removeDirectory(directory)}
+                          type="button"
+                          variant="outline"
+                        >
+                          <Trash2 aria-hidden="true" className="size-4" />
+                          Remove
+                        </Button>
+                      </div>
+                    ),
+                  )
+                )}
+              </div>
+            </section>
 
             <section aria-labelledby="pairing-title" className="space-y-5">
               <SectionHeading
@@ -684,13 +824,6 @@ function withMobileBaseUrl(
   return trimmed === ""
     ? settingsWithoutUrl
     : { ...settingsWithoutUrl, mobileBaseUrl: trimmed };
-}
-
-function parseWorkspaceRoots(value: string): string[] {
-  return value
-    .split("\n")
-    .map((root) => root.trim())
-    .filter((root) => root !== "");
 }
 
 function formatListener(listener: { host: string; port: number }): string {

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { resolve } from "node:path";
 
 import type {
   EffortLevel,
@@ -34,12 +34,24 @@ import type { SettingsRepository } from "../storage/settings-repository.js";
 import { TaskError } from "./errors.js";
 import { readTaskRuntimeSettings } from "./settings.js";
 import type { TaskEventSink } from "./task-events.js";
+import {
+  type TaskOperationLease,
+  TaskOperationScheduler,
+} from "./task-operation-scheduler.js";
 import { TaskRepository } from "./task-repository.js";
 import type {
   TaskOperationAction,
   TaskOperationResult,
   TaskSnapshot,
 } from "./task-types.js";
+import {
+  addCanonicalRoot,
+  canonicalPathsEqual,
+  isPathWithinRoot,
+  isVolumeRoot,
+  nodeWorkspaceDirectoryResolver,
+  type WorkspaceDirectoryResolver,
+} from "./workspace-path-policy.js";
 
 const OPERATION_RESULT_LIFETIME_MILLISECONDS = 24 * 60 * 60 * 1000;
 
@@ -104,6 +116,32 @@ export type TaskComposerOptions = {
   supportedPermissionModes: PermissionMode[];
 };
 
+export type AuthorizedDirectory = {
+  nonTerminalRuntimeCount: number;
+  path: string;
+  status: "available" | "unavailable";
+  volumeRoot: boolean;
+};
+
+export type AuthorizedDirectorySnapshot = {
+  directories: AuthorizedDirectory[];
+  revision: number;
+};
+
+export type AddAuthorizedDirectoryResult = {
+  coveringPath?: string;
+  removedRedundantPaths: string[];
+  result: "added" | "already-covered";
+  selectedPath: string;
+  snapshot: AuthorizedDirectorySnapshot;
+};
+
+export type RemoveAuthorizedDirectoryResult = {
+  removedPath: string;
+  snapshot: AuthorizedDirectorySnapshot;
+  stoppedTaskCount: number;
+};
+
 export type TaskPathResolver = {
   canonicalize(path: string): Promise<string>;
 };
@@ -127,7 +165,9 @@ export type TaskSdkSessionFactory = (
 
 export type TaskManagerOptions = {
   claudeSessionCatalog?: ClaudeSessionCatalog;
+  closeTaskSdkConnections?: { closeTaskConnections(taskId: string): void };
   createSession?: TaskSdkSessionFactory;
+  directoryResolver?: WorkspaceDirectoryResolver;
   eventSink?: TaskEventSink;
   now?: () => number;
   pathResolver?: TaskPathResolver;
@@ -156,6 +196,17 @@ type OperationExecution = {
   task: TaskSnapshot;
 };
 
+type ResolvedConfiguredRoot = {
+  path: string;
+  status: "available" | "unavailable";
+  storedPaths: string[];
+};
+
+type ResolvedRootProjection = {
+  available: ResolvedConfiguredRoot[];
+  unavailable: ResolvedConfiguredRoot[];
+};
+
 /**
  * Serializes per-task controls, owns only live SDK resources, and persists
  * task/session metadata. It deliberately never stores SDK input or output:
@@ -165,7 +216,11 @@ export class TaskManager {
   readonly #attachmentLane = new SerialExecutor();
   readonly #capacityLane = new SerialExecutor();
   readonly #claudeSessionCatalog: ClaudeSessionCatalog;
+  readonly #closeTaskSdkConnections: {
+    closeTaskConnections(taskId: string): void;
+  };
   readonly #createSession: TaskSdkSessionFactory;
+  readonly #directoryResolver: WorkspaceDirectoryResolver;
   readonly #eventSink: TaskEventSink | undefined;
   readonly #inFlightOperations = new Map<
     string,
@@ -178,13 +233,19 @@ export class TaskManager {
   readonly #repository: TaskRepository;
   readonly #settingsRepository: SettingsRepository;
   readonly #supportedPermissionModes: readonly PermissionMode[];
-  readonly #taskLanes = new Map<string, SerialExecutor>();
+  readonly #taskLanes = new Map<string, TaskOperationScheduler>();
+  #authorizationRevision = 0;
   #shuttingDown = false;
 
   public constructor(options: TaskManagerOptions) {
     this.#claudeSessionCatalog =
       options.claudeSessionCatalog ?? installedClaudeSessionCatalog;
+    this.#closeTaskSdkConnections = options.closeTaskSdkConnections ?? {
+      closeTaskConnections: () => undefined,
+    };
     this.#createSession = options.createSession ?? openClaudeSdkSession;
+    this.#directoryResolver =
+      options.directoryResolver ?? nodeWorkspaceDirectoryResolver;
     this.#eventSink = options.eventSink;
     this.#now = options.now ?? Date.now;
     this.#pathResolver = options.pathResolver ?? nodeTaskPathResolver;
@@ -211,6 +272,215 @@ export class TaskManager {
     return [
       ...readTaskRuntimeSettings(this.#settingsRepository).workspaceRoots,
     ];
+  }
+
+  public async authorizedDirectorySnapshot(): Promise<AuthorizedDirectorySnapshot> {
+    for (;;) {
+      const revision = this.#authorizationRevision;
+      const settings = readTaskRuntimeSettings(this.#settingsRepository);
+      const projection = await this.resolveRootProjection(
+        settings.workspaceRoots,
+      );
+      if (
+        revision === this.#authorizationRevision &&
+        sameStringArray(
+          settings.workspaceRoots,
+          readTaskRuntimeSettings(this.#settingsRepository).workspaceRoots,
+        )
+      ) {
+        return this.buildAuthorizedDirectorySnapshot(projection, revision);
+      }
+    }
+  }
+
+  public async addAuthorizedDirectory(input: {
+    selectedPath: string;
+    volumeRootRiskAccepted: boolean;
+  }): Promise<AddAuthorizedDirectoryResult> {
+    let selectedPath: string;
+    try {
+      selectedPath = await this.#directoryResolver.canonicalizeDirectory(
+        input.selectedPath,
+      );
+    } catch {
+      throw authorizedDirectoryInvalidError();
+    }
+    if (!canonicalPathsEqual(selectedPath, input.selectedPath)) {
+      throw authorizedDirectoryInvalidError();
+    }
+    if (isVolumeRoot(selectedPath) && !input.volumeRootRiskAccepted) {
+      throw new TaskError(
+        "VOLUME_ROOT_RISK_NOT_ACCEPTED",
+        422,
+        "Authorizing an entire volume requires explicit high-risk confirmation.",
+      );
+    }
+
+    for (;;) {
+      this.assertAcceptingWork();
+      const revision = this.#authorizationRevision;
+      const settings = readTaskRuntimeSettings(this.#settingsRepository);
+      const projection = await this.resolveRootProjection(
+        settings.workspaceRoots,
+      );
+      const currentSettings = readTaskRuntimeSettings(this.#settingsRepository);
+      if (
+        revision !== this.#authorizationRevision ||
+        !sameStringArray(
+          settings.workspaceRoots,
+          currentSettings.workspaceRoots,
+        )
+      ) {
+        continue;
+      }
+
+      const currentAvailableRoots = projection.available.map(
+        (root) => root.path,
+      );
+      const addResult = addCanonicalRoot(currentAvailableRoots, selectedPath);
+      const normalizedRoots = [
+        ...addResult.roots,
+        ...projection.unavailable.flatMap((root) => root.storedPaths),
+      ];
+      const changed = !sameStringArray(
+        settings.workspaceRoots,
+        normalizedRoots,
+      );
+      if (changed) {
+        const now = this.#now();
+        this.#repository.replaceWorkspaceRootsAndTerminalize({
+          auditResult: `added:replaced-${
+            addResult.kind === "added"
+              ? addResult.removedRedundantRoots.length
+              : 0
+          }`,
+          settings: { ...currentSettings, workspaceRoots: normalizedRoots },
+          taskIds: [],
+          updatedAt: now,
+        });
+        this.#authorizationRevision += 1;
+      }
+
+      const snapshot = await this.authorizedDirectorySnapshot();
+      return addResult.kind === "already-covered"
+        ? {
+            coveringPath: addResult.coveringRoot,
+            removedRedundantPaths: [],
+            result: "already-covered",
+            selectedPath,
+            snapshot,
+          }
+        : {
+            removedRedundantPaths: addResult.removedRedundantRoots,
+            result: "added",
+            selectedPath,
+            snapshot,
+          };
+    }
+  }
+
+  public async removeAuthorizedDirectory(input: {
+    expectedNonTerminalRuntimeCount: number;
+    path: string;
+    revision: number;
+    runtimeStopAccepted: boolean;
+  }): Promise<RemoveAuthorizedDirectoryResult> {
+    if (!input.runtimeStopAccepted) {
+      throw authorizedDirectoryInvalidError();
+    }
+    if (input.revision !== this.#authorizationRevision) {
+      throw authorizedDirectorySnapshotStaleError();
+    }
+
+    const settings = readTaskRuntimeSettings(this.#settingsRepository);
+    const projection = await this.resolveRootProjection(
+      settings.workspaceRoots,
+    );
+    const currentSettings = readTaskRuntimeSettings(this.#settingsRepository);
+    if (
+      input.revision !== this.#authorizationRevision ||
+      !sameStringArray(settings.workspaceRoots, currentSettings.workspaceRoots)
+    ) {
+      throw authorizedDirectorySnapshotStaleError();
+    }
+
+    const selectedAvailable = projection.available.find((root) =>
+      canonicalPathsEqual(root.path, input.path),
+    );
+    const selectedUnavailable = projection.unavailable.find((root) =>
+      canonicalPathsEqual(root.path, input.path),
+    );
+    const selected = selectedAvailable ?? selectedUnavailable;
+    if (selected === undefined) {
+      throw new TaskError(
+        "AUTHORIZED_DIRECTORY_NOT_FOUND",
+        404,
+        "The authorized directory was not found.",
+      );
+    }
+
+    const remainingAvailable = projection.available.filter(
+      (root) => root !== selected,
+    );
+    const remainingUnavailable = projection.unavailable.filter(
+      (root) => root !== selected,
+    );
+    const affectedTasks =
+      selected.status === "available"
+        ? this.nonTerminalTasksLosingAuthorization(
+            selected.path,
+            remainingAvailable.map((root) => root.path),
+          )
+        : [];
+    if (
+      affectedTasks.length !== input.expectedNonTerminalRuntimeCount ||
+      input.revision !== this.#authorizationRevision
+    ) {
+      throw authorizedDirectorySnapshotStaleError();
+    }
+
+    const nextWorkspaceRoots = [
+      ...remainingAvailable.map((root) => root.path),
+      ...remainingUnavailable.flatMap((root) => root.storedPaths),
+    ];
+    const now = this.#now();
+    const terminalTasks = this.#repository.replaceWorkspaceRootsAndTerminalize({
+      auditResult: `removed:stopped-${affectedTasks.length}`,
+      settings: { ...currentSettings, workspaceRoots: nextWorkspaceRoots },
+      taskIds: affectedTasks.map((task) => task.id),
+      updatedAt: now,
+    });
+    this.#authorizationRevision += 1;
+
+    const interruptions: Promise<unknown>[] = [];
+    for (const terminalTask of terminalTasks) {
+      const liveTask = this.#liveTasks.get(terminalTask.id);
+      if (liveTask !== undefined) {
+        liveTask.closed = true;
+        liveTask.interrupting = false;
+        this.#taskLanes.get(terminalTask.id)?.invalidate();
+        this.cancelPendingApproval(
+          liveTask,
+          "Authorization for this task's workspace was removed.",
+        );
+        liveTask.pendingQueryCount = 0;
+        const interrupt = this.interruptSession(liveTask.session);
+        if (interrupt !== undefined) {
+          interruptions.push(interrupt);
+        }
+        this.closeSession(liveTask.session);
+      }
+      this.publishTaskState(terminalTask);
+      this.#eventSink?.endTurn(terminalTask.id);
+      this.#closeTaskSdkConnections.closeTaskConnections(terminalTask.id);
+    }
+    await Promise.allSettled(interruptions);
+
+    return {
+      removedPath: selected.path,
+      snapshot: await this.authorizedDirectorySnapshot(),
+      stoppedTaskCount: terminalTasks.length,
+    };
   }
 
   public getTask(taskId: string): TaskSnapshot {
@@ -242,7 +512,10 @@ export class TaskManager {
         limit: parsed.data.limit,
         offset: parsed.data.offset,
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof TaskError) {
+        throw error;
+      }
       throw taskSessionUnavailableError(
         "Claude sessions are currently unavailable.",
       );
@@ -258,13 +531,13 @@ export class TaskManager {
       }
     }
 
-    return {
+    return this.withCurrentWorkspaceAuthorization(workspace, () => ({
       nextOffset:
         sdkSessions.length < parsed.data.limit
           ? null
           : parsed.data.offset + sdkSessions.length,
       sessions,
-    };
+    }));
   }
 
   public async readClaudeSessionHistory(input: {
@@ -307,32 +580,34 @@ export class TaskManager {
         );
       }
 
-      const end =
-        parsed.data.beforeUuid === undefined
-          ? messages.length
-          : messages.findIndex(
-              (message) => message.uuid === parsed.data.beforeUuid,
-            );
-      if (end < 0) {
-        throw new TaskError(
-          "HISTORY_CURSOR_STALE",
-          409,
-          "The history cursor is stale; reload the latest history page.",
-        );
-      }
-      const start = Math.max(0, end - parsed.data.limit);
-      const pageMessages = messages.slice(start, end);
-      const hasMoreBefore = start > 0;
-      return {
-        messages: pageMessages,
-        page: {
-          beforeUuid:
-            hasMoreBefore && pageMessages[0] !== undefined
-              ? pageMessages[0].uuid
-              : null,
-          hasMoreBefore,
-        },
-      };
+      return this.withCurrentWorkspaceAuthorization(workspace, () => {
+        const end =
+          parsed.data.beforeUuid === undefined
+            ? messages.length
+            : messages.findIndex(
+                (message) => message.uuid === parsed.data.beforeUuid,
+              );
+        if (end < 0) {
+          throw new TaskError(
+            "HISTORY_CURSOR_STALE",
+            409,
+            "The history cursor is stale; reload the latest history page.",
+          );
+        }
+        const start = Math.max(0, end - parsed.data.limit);
+        const pageMessages = messages.slice(start, end);
+        const hasMoreBefore = start > 0;
+        return {
+          messages: pageMessages,
+          page: {
+            beforeUuid:
+              hasMoreBefore && pageMessages[0] !== undefined
+                ? pageMessages[0].uuid
+                : null,
+            hasMoreBefore,
+          },
+        };
+      });
     });
   }
 
@@ -353,21 +628,23 @@ export class TaskManager {
           parsed.data.workspace,
           settings.workspaceRoots,
         );
-        const now = this.#now();
-        const task = this.#repository.create({
-          createdAt: now,
-          id: randomUUID(),
-          initialCwd,
-          model: null,
-          origin: "claude-session",
-          permissionMode: null,
-          sdkSessionId: null,
+        return this.withCurrentWorkspaceAuthorization(initialCwd, () => {
+          const now = this.#now();
+          const task = this.#repository.create({
+            createdAt: now,
+            id: randomUUID(),
+            initialCwd,
+            model: null,
+            origin: "claude-session",
+            permissionMode: null,
+            sdkSessionId: null,
+          });
+          return {
+            action: "created" as const,
+            auditResult: "workspace-risk-accepted",
+            task,
+          };
         });
-        return {
-          action: "created",
-          auditResult: "workspace-risk-accepted",
-          task,
-        };
       }),
     );
   }
@@ -394,18 +671,20 @@ export class TaskManager {
           parsed.data.sessionId,
         );
 
-        const existing = this.#repository.findNonTerminalBySdkSessionId(
-          parsed.data.sessionId,
-        );
-        const task =
-          existing === undefined
-            ? this.createAttachedTask(initialCwd, parsed.data.sessionId)
-            : this.adoptAttachedTask(existing);
-        return {
-          action: "attached",
-          auditResult: "workspace-risk-accepted",
-          task,
-        };
+        return this.withCurrentWorkspaceAuthorization(initialCwd, () => {
+          const existing = this.#repository.findNonTerminalBySdkSessionId(
+            parsed.data.sessionId,
+          );
+          const task =
+            existing === undefined
+              ? this.createAttachedTask(initialCwd, parsed.data.sessionId)
+              : this.adoptAttachedTask(existing);
+          return {
+            action: "attached" as const,
+            auditResult: "workspace-risk-accepted",
+            task,
+          };
+        });
       }),
     );
   }
@@ -413,7 +692,7 @@ export class TaskManager {
   /** Activates only session-centric runtimes after the raw subscriber exists. */
   public async activateSdkSession(taskId: string): Promise<void> {
     this.assertTaskId(taskId);
-    await this.runTaskLane(taskId, async () => {
+    await this.runTaskLane(taskId, async (lease) => {
       this.assertAcceptingWork();
       let task = this.requireTask(taskId);
       this.assertTaskNotTerminal(task);
@@ -429,7 +708,7 @@ export class TaskManager {
       }
       const liveTask = this.liveTask(task.id);
       const session = this.ensureSession(task);
-      await this.initializeComposer(task, liveTask, session);
+      await this.initializeComposer(task, liveTask, session, lease);
     });
   }
 
@@ -437,7 +716,7 @@ export class TaskManager {
     taskId: string,
   ): Promise<TaskComposerOptions> {
     this.assertTaskId(taskId);
-    return this.runTaskLane(taskId, async () => {
+    return this.runTaskLane(taskId, async (lease) => {
       const task = this.requireTask(taskId);
       this.assertTaskNotTerminal(task);
       if (task.state === "interrupted") {
@@ -450,7 +729,8 @@ export class TaskManager {
           "Connect the raw SDK stream before requesting composer options.",
         );
       }
-      await this.initializeComposer(task, liveTask, session);
+      await this.initializeComposer(task, liveTask, session, lease);
+      lease.assertCurrent();
       return {
         effortLevel: liveTask.effortLevel,
         models: [...liveTask.supportedModels],
@@ -493,20 +773,22 @@ export class TaskManager {
           parsed.data.initialCwd,
           settings.workspaceRoots,
         );
-        const now = this.#now();
-        const task = this.#repository.create({
-          createdAt: now,
-          id: randomUUID(),
-          initialCwd,
-          model: parsed.data.model ?? null,
-          origin: "pocketpilot",
-          permissionMode: parsed.data.permissionMode,
+        return this.withCurrentWorkspaceAuthorization(initialCwd, () => {
+          const now = this.#now();
+          const task = this.#repository.create({
+            createdAt: now,
+            id: randomUUID(),
+            initialCwd,
+            model: parsed.data.model ?? null,
+            origin: "pocketpilot",
+            permissionMode: parsed.data.permissionMode,
+          });
+          return {
+            action: "created" as const,
+            auditResult: "workspace-risk-accepted",
+            task,
+          };
         });
-        return {
-          action: "created",
-          auditResult: "workspace-risk-accepted",
-          task,
-        };
       }),
     );
   }
@@ -521,18 +803,25 @@ export class TaskManager {
     }
     this.assertTaskId(input.taskId);
 
-    return this.runTaskLane(input.taskId, async () => {
+    return this.runTaskLane(input.taskId, async (lease) => {
       this.assertAcceptingWork();
       const task = this.requireTask(input.taskId);
       this.assertTaskCanAcceptSdkMessage(task);
       const startsQuery = input.message.shouldQuery !== false;
 
       if (task.state === "idle" && startsQuery) {
-        return this.#capacityLane.run(() =>
-          this.startSdkTurn(input.deviceId, task.id, input.message),
-        );
+        return this.#capacityLane.run(() => {
+          lease.assertCurrent();
+          return this.startSdkTurn(
+            input.deviceId,
+            task.id,
+            input.message,
+            lease,
+          );
+        });
       }
 
+      lease.assertCurrent();
       this.submitToSession(task, input.message);
       if (startsQuery) {
         this.liveTask(task.id).pendingQueryCount += 1;
@@ -558,29 +847,36 @@ export class TaskManager {
         throw interruptedTaskError();
       }
       const liveTask = this.liveTask(task.id);
+      liveTask.interrupting = true;
+      this.#taskLanes.get(task.id)?.invalidate();
       this.cancelPendingApproval(liveTask, "The user interrupted this task.");
       liveTask.pendingQueryCount = 0;
-      liveTask.interrupting = true;
+      const wasIdle = task.state === "idle";
+      const interrupted = this.#repository.update(task.id, {
+        interruptedAt: this.#now(),
+        state: "interrupted",
+        updatedAt: this.#now(),
+      });
+      this.publishTaskState(interrupted);
+      this.#eventSink?.endTurn(task.id);
 
-      try {
-        await liveTask.session?.interrupt();
-      } finally {
-        liveTask.interrupting = false;
-      }
+      const interrupt = this.interruptSession(liveTask.session);
+      await Promise.allSettled(interrupt === undefined ? [] : [interrupt]);
+      liveTask.interrupting = false;
 
       const current = this.requireTask(task.id);
       const updated =
         current.state === "terminal"
           ? current
           : this.#repository.update(task.id, {
+              interruptedAt: null,
               state: "idle",
               updatedAt: this.#now(),
             });
       this.publishTaskState(updated);
-      this.#eventSink?.endTurn(task.id);
       return {
         action: "interrupted",
-        auditResult: current.state === "idle" ? "already-idle" : "interrupted",
+        auditResult: wasIdle ? "already-idle" : "interrupted",
         task: updated,
       };
     });
@@ -600,6 +896,8 @@ export class TaskManager {
       this.assertTaskNotTerminal(task);
       const liveTask = this.liveTask(task.id);
       liveTask.closed = true;
+      liveTask.interrupting = false;
+      this.#taskLanes.get(task.id)?.invalidate();
       this.cancelPendingApproval(liveTask, "The user closed this task.");
       liveTask.pendingQueryCount = 0;
       const terminal = this.#repository.update(task.id, {
@@ -609,6 +907,7 @@ export class TaskManager {
       });
       this.publishTaskState(terminal);
       this.#eventSink?.endTurn(task.id);
+      this.#closeTaskSdkConnections.closeTaskConnections(task.id);
       const interrupt = this.interruptSession(liveTask.session);
       this.closeSession(liveTask.session);
       await Promise.allSettled(interrupt === undefined ? [] : [interrupt]);
@@ -625,7 +924,7 @@ export class TaskManager {
     this.assertTaskId(input.taskId);
 
     return this.executeIdempotent(identity, async () =>
-      this.runTaskLane(input.taskId, () => {
+      this.runTaskLane(input.taskId, (lease) => {
         this.assertAcceptingWork();
         const task = this.requireTask(input.taskId);
         if (task.state !== "interrupted") {
@@ -643,7 +942,9 @@ export class TaskManager {
           );
         }
 
+        lease.assertCurrent();
         this.ensureSession(task);
+        lease.assertCurrent();
         const resumed = this.#repository.update(task.id, {
           state: "idle",
           updatedAt: this.#now(),
@@ -667,7 +968,7 @@ export class TaskManager {
     }
 
     return this.executeIdempotent(identity, async () =>
-      this.runTaskLane(input.taskId, () => {
+      this.runTaskLane(input.taskId, (lease) => {
         const task = this.requireTask(input.taskId);
         this.assertTaskNotTerminal(task);
         const liveTask = this.liveTask(task.id);
@@ -684,8 +985,10 @@ export class TaskManager {
           );
         }
 
+        lease.assertCurrent();
         pending.approval.resolve(input.result);
         liveTask.pendingApproval = undefined;
+        lease.assertCurrent();
         const executing = this.#repository.update(task.id, {
           state: "executing",
           updatedAt: this.#now(),
@@ -716,7 +1019,7 @@ export class TaskManager {
     }
 
     return this.executeIdempotent(identity, async () =>
-      this.runTaskLane(input.taskId, async () => {
+      this.runTaskLane(input.taskId, async (lease) => {
         const task = this.requireTask(input.taskId);
         this.assertTaskNotTerminal(task);
         if (task.state === "interrupted") {
@@ -724,20 +1027,16 @@ export class TaskManager {
         }
         const liveTask = this.liveTask(task.id);
         if (liveTask.session !== undefined) {
+          lease.assertCurrent();
           await liveTask.session.setModel(input.model);
+          lease.assertCurrent();
         } else if (task.origin === "claude-session") {
           throw taskSessionUnavailableError(
             "Connect the raw SDK stream before changing the model.",
           );
         }
+        lease.assertCurrent();
         const current = this.requireTask(task.id);
-        if (current.state === "terminal") {
-          return {
-            action: "model-changed",
-            auditResult: "task-closed",
-            task: current,
-          };
-        }
         const updated =
           task.origin === "claude-session"
             ? current
@@ -772,7 +1071,7 @@ export class TaskManager {
     }
 
     return this.executeIdempotent(identity, async () =>
-      this.runTaskLane(input.taskId, async () => {
+      this.runTaskLane(input.taskId, async (lease) => {
         const task = this.requireTask(input.taskId);
         this.assertTaskNotTerminal(task);
         if (task.state === "interrupted") {
@@ -781,20 +1080,16 @@ export class TaskManager {
 
         const liveTask = this.liveTask(task.id);
         if (liveTask.session !== undefined) {
+          lease.assertCurrent();
           await liveTask.session.setPermissionMode(permissionMode);
+          lease.assertCurrent();
         } else if (task.origin === "claude-session") {
           throw taskSessionUnavailableError(
             "Connect the raw SDK stream before changing the permission mode.",
           );
         }
+        lease.assertCurrent();
         const current = this.requireTask(task.id);
-        if (current.state === "terminal") {
-          return {
-            action: "permission-mode-changed",
-            auditResult: "task-closed",
-            task: current,
-          };
-        }
         const updated =
           task.origin === "claude-session"
             ? current
@@ -827,7 +1122,7 @@ export class TaskManager {
     }
 
     return this.executeIdempotent(identity, async () =>
-      this.runTaskLane(input.taskId, async () => {
+      this.runTaskLane(input.taskId, async (lease) => {
         const task = this.requireTask(input.taskId);
         this.assertTaskNotTerminal(task);
         if (task.state === "interrupted") {
@@ -839,14 +1134,14 @@ export class TaskManager {
             "Connect the raw SDK stream before changing the effort level.",
           );
         }
+        lease.assertCurrent();
         await liveTask.session.setEffortLevel(input.effortLevel);
+        lease.assertCurrent();
         const current = this.requireTask(task.id);
-        if (current.state !== "terminal") {
-          liveTask.effortLevel = input.effortLevel;
-        }
+        liveTask.effortLevel = input.effortLevel;
         return {
           action: "effort-changed",
-          auditResult: current.state === "terminal" ? "task-closed" : "changed",
+          auditResult: "changed",
           task: current,
         };
       }),
@@ -860,23 +1155,36 @@ export class TaskManager {
     }
     this.#shuttingDown = true;
 
+    const now = this.#now();
+    const nonTerminalTasks = this.#repository
+      .list()
+      .filter((task) => task.state !== "terminal");
+    this.#repository.markNonTerminalTasksTerminal(now);
     const interruptions: Promise<unknown>[] = [];
-    for (const [taskId, liveTask] of this.#liveTasks) {
-      liveTask.closed = true;
-      this.cancelPendingApproval(liveTask, "The Agent is shutting down.");
-      liveTask.pendingQueryCount = 0;
-      this.#eventSink?.endTurn(taskId);
-      if (liveTask.session !== undefined) {
-        const interrupt = this.interruptSession(liveTask.session);
-        if (interrupt !== undefined) {
-          interruptions.push(interrupt);
+    for (const task of nonTerminalTasks) {
+      const liveTask = this.#liveTasks.get(task.id);
+      this.#taskLanes.get(task.id)?.invalidate();
+      if (liveTask !== undefined) {
+        liveTask.closed = true;
+        liveTask.interrupting = false;
+        this.cancelPendingApproval(liveTask, "The Agent is shutting down.");
+        liveTask.pendingQueryCount = 0;
+        if (liveTask.session !== undefined) {
+          const interrupt = this.interruptSession(liveTask.session);
+          if (interrupt !== undefined) {
+            interruptions.push(interrupt);
+          }
+          this.closeSession(liveTask.session);
         }
-        this.closeSession(liveTask.session);
       }
+      const terminal = this.requireTask(task.id);
+      this.publishTaskState(terminal);
+      this.#eventSink?.endTurn(task.id);
+      this.#closeTaskSdkConnections.closeTaskConnections(task.id);
     }
     await Promise.allSettled(interruptions);
-    this.#repository.markNonTerminalTasksTerminal(this.#now());
     this.#liveTasks.clear();
+    this.#taskLanes.clear();
   }
 
   private adoptAttachedTask(task: TaskSnapshot): TaskSnapshot {
@@ -942,6 +1250,7 @@ export class TaskManager {
     task: TaskSnapshot,
     liveTask: LiveTask,
     session: TaskSdkSession,
+    lease: TaskOperationLease,
   ): Promise<void> {
     if (liveTask.composerInitialized) {
       return;
@@ -950,7 +1259,11 @@ export class TaskManager {
     let initialization: ClaudeSdkInitialization;
     try {
       initialization = await session.initialize();
-    } catch {
+      lease.assertCurrent();
+    } catch (error) {
+      if (error instanceof TaskError) {
+        throw error;
+      }
       throw taskSessionUnavailableError(
         "Claude session initialization is currently unavailable.",
       );
@@ -961,6 +1274,7 @@ export class TaskManager {
       const settings = await this.#claudeSessionCatalog.resolveSettings({
         cwd: task.initialCwd,
       });
+      lease.assertCurrent();
       const configuredEffort = settings.effective.effortLevel;
       if (
         configuredEffort !== undefined &&
@@ -968,7 +1282,10 @@ export class TaskManager {
       ) {
         effortLevel = configuredEffort;
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof TaskError) {
+        throw error;
+      }
       // Query initialization remains authoritative and usable when optional
       // settings projection is unavailable.
     }
@@ -1074,6 +1391,115 @@ export class TaskManager {
     );
   }
 
+  private async withCurrentWorkspaceAuthorization<T>(
+    workspace: string,
+    operation: () => T,
+  ): Promise<T> {
+    for (;;) {
+      const revision = this.#authorizationRevision;
+      const settings = readTaskRuntimeSettings(this.#settingsRepository);
+      await this.authorizeInitialWorkspace(workspace, settings.workspaceRoots);
+      if (revision === this.#authorizationRevision) {
+        return operation();
+      }
+    }
+  }
+
+  private buildAuthorizedDirectorySnapshot(
+    projection: ResolvedRootProjection,
+    revision: number,
+  ): AuthorizedDirectorySnapshot {
+    const directories: AuthorizedDirectory[] = projection.available.map(
+      (root) => ({
+        nonTerminalRuntimeCount: this.nonTerminalTasksLosingAuthorization(
+          root.path,
+          projection.available
+            .filter((candidate) => candidate !== root)
+            .map((candidate) => candidate.path),
+        ).length,
+        path: root.path,
+        status: "available",
+        volumeRoot: isVolumeRoot(root.path),
+      }),
+    );
+    directories.push(
+      ...projection.unavailable.map((root) => ({
+        nonTerminalRuntimeCount: 0,
+        path: root.path,
+        status: "unavailable" as const,
+        volumeRoot: isVolumeRoot(root.path),
+      })),
+    );
+    return { directories, revision };
+  }
+
+  private nonTerminalTasksLosingAuthorization(
+    removedRoot: string,
+    remainingRoots: readonly string[],
+  ): TaskSnapshot[] {
+    return this.#repository
+      .list()
+      .filter(
+        (task) =>
+          task.state !== "terminal" &&
+          isPathWithinRoot(removedRoot, task.initialCwd) &&
+          !remainingRoots.some((root) =>
+            isPathWithinRoot(root, task.initialCwd),
+          ),
+      );
+  }
+
+  private async resolveRootProjection(
+    storedRoots: readonly string[],
+  ): Promise<ResolvedRootProjection> {
+    const available: ResolvedConfiguredRoot[] = [];
+    const unavailable: ResolvedConfiguredRoot[] = [];
+    for (const storedPath of storedRoots) {
+      let path: string;
+      try {
+        path = await this.#directoryResolver.canonicalizeDirectory(storedPath);
+      } catch {
+        const duplicate = unavailable.find((root) =>
+          canonicalPathsEqual(root.path, storedPath),
+        );
+        if (duplicate === undefined) {
+          unavailable.push({
+            path: storedPath,
+            status: "unavailable",
+            storedPaths: [storedPath],
+          });
+        } else {
+          duplicate.storedPaths.push(storedPath);
+        }
+        continue;
+      }
+
+      const coveringRoot = available.find((root) =>
+        isPathWithinRoot(root.path, path),
+      );
+      if (coveringRoot !== undefined) {
+        coveringRoot.storedPaths.push(storedPath);
+        continue;
+      }
+
+      const coveredRoots = available.filter((root) =>
+        isPathWithinRoot(path, root.path),
+      );
+      for (const coveredRoot of coveredRoots) {
+        available.splice(available.indexOf(coveredRoot), 1);
+      }
+      available.push({
+        path,
+        status: "available",
+        storedPaths: [
+          storedPath,
+          ...coveredRoots.flatMap((root) => root.storedPaths),
+        ],
+      });
+    }
+    return { available, unavailable };
+  }
+
   private cancelPendingApproval(liveTask: LiveTask, message: string): void {
     liveTask.pendingApproval?.approval.cancel(message);
     liveTask.pendingApproval = undefined;
@@ -1089,6 +1515,9 @@ export class TaskManager {
     }
 
     const liveTask = this.liveTask(taskId);
+    if (liveTask.closed || liveTask.interrupting) {
+      return;
+    }
     if (!allQueriesIdle && liveTask.pendingQueryCount > 1) {
       liveTask.pendingQueryCount -= 1;
       this.#eventSink?.beginTurn(taskId);
@@ -1111,6 +1540,17 @@ export class TaskManager {
     return (async () => {
       try {
         for await (const message of session.events()) {
+          const liveTask = this.#liveTasks.get(taskId);
+          if (
+            liveTask === undefined ||
+            liveTask.closed ||
+            liveTask.session !== session
+          ) {
+            return;
+          }
+          if (liveTask.interrupting) {
+            continue;
+          }
           this.persistSessionId(taskId, session);
           this.#eventSink?.publishSdkMessage(taskId, message);
           if (message.type === "result") {
@@ -1178,7 +1618,11 @@ export class TaskManager {
       identity.operationId,
     );
     if (existing !== undefined) {
-      return Promise.resolve(existing);
+      return existing.kind === "result"
+        ? Promise.resolve(existing.result)
+        : Promise.reject(
+            new TaskError(existing.code, existing.statusCode, existing.message),
+          );
     }
 
     const key = `${identity.deviceId}:${identity.operationId}`;
@@ -1189,17 +1633,42 @@ export class TaskManager {
 
     let promise: Promise<TaskOperationResult>;
     try {
-      promise = execute().then((execution) =>
-        this.#repository.persistOperation({
-          deviceId: identity.deviceId,
-          expiresAt: this.#now() + OPERATION_RESULT_LIFETIME_MILLISECONDS,
-          operation: `task.${execution.action}`,
-          operationId: identity.operationId,
-          result: { action: execution.action, task: execution.task },
-          resultLabel: execution.auditResult,
-          taskId: execution.task.id,
-        }),
-      );
+      promise = execute()
+        .then((execution) =>
+          this.#repository.persistOperation({
+            deviceId: identity.deviceId,
+            expiresAt: this.#now() + OPERATION_RESULT_LIFETIME_MILLISECONDS,
+            operation: `task.${execution.action}`,
+            operationId: identity.operationId,
+            result: { action: execution.action, task: execution.task },
+            resultLabel: execution.auditResult,
+            taskId: execution.task.id,
+          }),
+        )
+        .catch((error: unknown) => {
+          if (
+            !(error instanceof TaskError) ||
+            error.code !== "TASK_OPERATION_SUPERSEDED"
+          ) {
+            throw error;
+          }
+          const now = this.#now();
+          const outcome = this.#repository.persistSupersededOperation({
+            createdAt: now,
+            deviceId: identity.deviceId,
+            expiresAt: now + OPERATION_RESULT_LIFETIME_MILLISECONDS,
+            operationId: identity.operationId,
+            taskId: null,
+          });
+          if (outcome.kind === "result") {
+            return outcome.result;
+          }
+          throw new TaskError(
+            outcome.code,
+            outcome.statusCode,
+            outcome.message,
+          );
+        });
     } catch (error) {
       return Promise.reject(error);
     }
@@ -1298,6 +1767,7 @@ export class TaskManager {
     if (
       liveTask === undefined ||
       liveTask.closed ||
+      liveTask.interrupting ||
       task === undefined ||
       task.state !== "executing"
     ) {
@@ -1338,11 +1808,26 @@ export class TaskManager {
 
   private runTaskLane<T>(
     taskId: string,
-    operation: () => Promise<T> | T,
+    operation: (lease: TaskOperationLease) => Promise<T> | T,
   ): Promise<T> {
+    const liveTask = this.liveTask(taskId);
+    if (liveTask.closed) {
+      throw new TaskError(
+        "TASK_TERMINAL",
+        409,
+        "The task is closed and cannot accept further control operations.",
+      );
+    }
+    if (liveTask.interrupting) {
+      throw new TaskError(
+        "TASK_SESSION_UNAVAILABLE",
+        409,
+        "The task is being interrupted and cannot accept new work yet.",
+      );
+    }
     let lane = this.#taskLanes.get(taskId);
     if (lane === undefined) {
-      lane = new SerialExecutor();
+      lane = new TaskOperationScheduler();
       this.#taskLanes.set(taskId, lane);
     }
     return lane.run(operation);
@@ -1426,7 +1911,9 @@ export class TaskManager {
     deviceId: string,
     taskId: string,
     message: SDKUserMessage,
+    lease: TaskOperationLease,
   ): TaskSnapshot {
+    lease.assertCurrent();
     const task = this.requireTask(taskId);
     this.assertTaskCanAcceptSdkMessage(task);
     if (task.state !== "idle") {
@@ -1448,11 +1935,13 @@ export class TaskManager {
     }
 
     this.#eventSink?.beginTurn(task.id);
+    lease.assertCurrent();
     const executing = this.#repository.update(task.id, {
       state: "executing",
       updatedAt: this.#now(),
     });
     try {
+      lease.assertCurrent();
       this.submitToSession(executing, message);
     } catch (error) {
       const idle = this.#repository.update(task.id, {
@@ -1549,13 +2038,29 @@ function invalidTaskOperationError(): TaskError {
   );
 }
 
-function isPathWithinRoot(root: string, candidate: string): boolean {
-  const pathFromRoot = relative(root, candidate);
+function authorizedDirectoryInvalidError(): TaskError {
+  return new TaskError(
+    "AUTHORIZED_DIRECTORY_INVALID",
+    422,
+    "The selected path is not an accessible local directory.",
+  );
+}
+
+function authorizedDirectorySnapshotStaleError(): TaskError {
+  return new TaskError(
+    "AUTHORIZED_DIRECTORY_SNAPSHOT_STALE",
+    409,
+    "Authorized directories changed. Refresh and confirm the removal again.",
+  );
+}
+
+function sameStringArray(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
   return (
-    pathFromRoot === "" ||
-    (!pathFromRoot.startsWith(`..${sep}`) &&
-      pathFromRoot !== ".." &&
-      !isAbsolute(pathFromRoot))
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
   );
 }
 

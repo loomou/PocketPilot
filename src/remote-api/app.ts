@@ -42,6 +42,7 @@ export type RemoteApiAppOptions = {
   taskManager?: SessionRouteManager &
     TaskRouteManager &
     TaskSdkRouteOptions["taskManager"];
+  taskSdkConnectionRegistry?: TaskSdkRouteOptions["taskConnectionRegistry"];
 };
 
 /**
@@ -114,12 +115,14 @@ export async function buildRemoteApiApp(
     options.connectionRegistry !== undefined &&
     options.deviceAuthService !== undefined &&
     options.eventJournal !== undefined &&
-    options.taskManager !== undefined
+    options.taskManager !== undefined &&
+    options.taskSdkConnectionRegistry !== undefined
   ) {
     registerTaskSdkRoutes(app, {
       connectionRegistry: options.connectionRegistry,
       deviceAuthService: options.deviceAuthService,
       eventJournal: options.eventJournal,
+      taskConnectionRegistry: options.taskSdkConnectionRegistry,
       taskManager: options.taskManager,
     });
   }

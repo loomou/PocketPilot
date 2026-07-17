@@ -21,3 +21,9 @@ adding feature-level configuration.
 types. Components must not cast JSON with `as`, duplicate response interfaces,
 or use `any`. API errors also pass through a validated `{ code, message }`
 schema before their message reaches the page.
+
+The same module owns the discriminated picker response and directory snapshot,
+add, and remove schemas. Keep `selectionId` as UUID, `revision`/counts as
+non-negative integers, paths bounded to 4096 characters, and directory status
+as `"available" | "unavailable"`. Components consume inferred
+`AuthorizedDirectory`/snapshot types and never decode these payloads locally.

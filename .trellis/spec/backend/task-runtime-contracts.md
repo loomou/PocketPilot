@@ -32,6 +32,13 @@ manager.readClaudeSessionHistory({
 manager.activateSdkSession(taskId);
 manager.getComposerOptions(taskId);
 manager.authorizedWorkspaceRoots(): readonly string[];
+manager.authorizedDirectorySnapshot(): Promise<AuthorizedDirectorySnapshot>;
+manager.addAuthorizedDirectory({
+  selectedPath, volumeRootRiskAccepted,
+}): Promise<AddAuthorizedDirectoryResult>;
+manager.removeAuthorizedDirectory({
+  path, revision, expectedNonTerminalRuntimeCount, runtimeStopAccepted,
+}): Promise<RemoveAuthorizedDirectoryResult>;
 manager.submitSdkMessage({ deviceId, taskId, message: SDKUserMessage });
 manager.resolveApproval({
   deviceId, operationId, taskId, requestId, result: PermissionResult,
@@ -81,8 +88,9 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   inventing a turn or consuming active capacity.
 - Accept SDK messages while `executing` or `awaiting_approval`. Serialize
   simultaneous socket callbacks only to retain arrival order; never return
-  `TASK_BUSY` merely because a turn or approval is active. Preserve `priority`
-  and `shouldQuery`; do not implement a PocketPilot scheduler.
+  `TASK_BUSY` merely because a turn or approval is active. Preserve SDK
+  `priority` and `shouldQuery` unchanged; PocketPilot's P0-P3 runtime tiers
+  control admission/preemption only and never reinterpret SDK scheduling data.
 - Count query-triggering messages only for lifecycle accounting. A result
   boundary advances retained-turn ownership; the task becomes idle after the
   outstanding SDK query boundaries or authoritative SDK idle state, without
@@ -120,10 +128,32 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   other local settings, and do not duplicate settings/SQLite reads in the
   route. These are configured roots; task creation still performs canonical
   existence and descendant authorization checks.
-- Normal HTTP controls use the per-task lane and 24-hour
-  `(deviceId, operationId)` cache. Interrupt and close bypass the lane. Close
-  persists `terminal`, cancels approval, interrupts, and closes the SDK session
-  before awaiting cancellation completion.
+- The loopback administration surface is the only workspace-root writer.
+  Canonical roots use Windows case-insensitive, component-boundary containment;
+  duplicate aliases and covered children collapse to one minimal root set.
+  Existing unresolvable roots remain visible/removable but authorize no new
+  work. A volume or UNC share root requires explicit high-risk acceptance.
+- Root addition/removal re-reads the complete latest task setting immediately
+  before its synchronous transaction. Comparing only `workspaceRoots` is not
+  enough: a concurrent capacity save must be preserved in that same record.
+- Removing a root is P0. One SQLite transaction writes the remaining roots and
+  terminalizes every uncovered non-terminal task before asynchronous SDK
+  cleanup. It then invalidates queued P2 work, cancels approval, ends replay,
+  closes affected raw SDK sockets with `4009`, and interrupts/closes live
+  Queries. Reauthorizing a path never resurrects an old terminal handle.
+- Runtime priority is explicit: P0 is shutdown/close/root revocation, P1 is
+  interrupt, P2 is raw Send/approval/model/mode/effort/activation/composer/
+  resume, and P3 is catalog/history/status/config reads. P0/P1 synchronously
+  advance the task operation generation and reject older queued P2 work before
+  awaiting SDK cleanup. P1 first persists `interrupted`, then returns the same
+  Query to `idle`; P0 leaves `terminal`. New P2 is rejected during P1 cleanup
+  and may run on the new generation after cleanup even if an already-handed
+  stale SDK call has not settled.
+- Idempotent HTTP controls use the 24-hour `(deviceId, operationId)` cache.
+  Superseded operations persist an error tombstone, so a retry after P1/P0
+  returns `TASK_OPERATION_SUPERSEDED` instead of running on a newer generation.
+  P3 reads stay outside the Query lane and recheck current workspace policy
+  before returning session data or persisting a runtime.
 - An approval uses the SDK `requestId`. The control payload is
   `{ toolName, input, options: Omit<CanUseToolOptions, "signal"> }`; the HTTP
   response body is `{ operationId, result: PermissionResult }`. Return the
@@ -167,6 +197,9 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
 | History UUID is absent from the current filtered chain | `HISTORY_CURSOR_STALE`; reload the latest page. |
 | SDK transcript read fails | `CLAUDE_HISTORY_UNAVAILABLE`; keep the attached Query/composer usable. |
 | A second non-terminal runtime would own one SDK session | `CLAUDE_SESSION_CONFLICT`; start no second Query. |
+| Picker-selected volume root lacks explicit acceptance | `VOLUME_ROOT_RISK_NOT_ACCEPTED`; write no setting. |
+| Root removal revision or affected-runtime count changed | `AUTHORIZED_DIRECTORY_SNAPSHOT_STALE`; stop no task and require a fresh confirmation. |
+| Older P2 reaches a lease checkpoint after P0/P1 | `TASK_OPERATION_SUPERSEDED`; persist a rejecting tombstone and perform no later state write. |
 | Replay reaches 256 MiB | Notify control subscribers, retain no later records, and continue live SDK/control delivery. |
 
 ### 5. Good / Base / Bad Cases
@@ -174,6 +207,11 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
 - Good: a task accepts two SDK user messages during execution, preserves their
   scheduling fields, emits raw Query messages on only its SDK socket, and
   remains active across both SDK result boundaries.
+- Good: root revocation commits the policy and terminal task rows, closes that
+  task's raw socket, keeps the control socket connected, and only then awaits
+  best-effort Query interruption.
+- Base: P1 invalidates a blocked model change; a new-generation permission
+  change runs after cleanup without waiting for the stale SDK promise.
 - Good: selecting a validated SDK session returns its existing opaque task
   handle, the raw subscriber receives original `system/init`, and a later raw
   user message continues through `Options.resume`.
@@ -207,6 +245,13 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   abort, replacement, interrupt, close, and shutdown cancellation.
 - Test recovery/resume without replay, close priority, and manual runtime
   shutdown of idle and active tasks.
+- Test P0 root revocation for idle/executing/approval/interrupted tasks,
+  capacity/root lost-update prevention, stale confirmation, parent/child root
+  normalization, and volume-root confirmation.
+- Test P1/P0 generation invalidation, new-generation progress while a stale SDK
+  call remains pending, persisted superseded retries, and close-vs-interrupt.
+- Route-test that P0 closes only the selected raw SDK task socket with `4009`
+  while a device control socket remains connected.
 - Test SDK catalog option forwarding and cwd filtering; unchanged latest/older
   history pages, stale cursors, system-message mode, serial reads, and history
   failure independent from Query activation.
@@ -229,8 +274,10 @@ idempotency subsystem.
 #### Correct
 
 ```ts
-await taskLane.run(async () => {
+await taskLane.run(async (lease) => {
+  lease.assertCurrent();
   await session.setModel(selectedModel);
+  lease.assertCurrent();
   session.submit(sdkUserMessage);
 });
 recordMetadataOnlyAudit(deviceId, taskId, "task.sdk-message-submitted");

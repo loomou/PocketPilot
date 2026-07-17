@@ -12,12 +12,17 @@ import { registerLocalDeviceAuthRoutes } from "../auth/local-admin-routes.js";
 import { createHttpApp } from "../http/create-http-app.js";
 import { registerHealthRoute } from "../http/health.js";
 import type { SettingsRepository } from "../storage/settings-repository.js";
+import {
+  type AuthorizedDirectoryManager,
+  registerAuthorizedDirectoryRoutes,
+} from "./authorized-directory-routes.js";
 import { registerConfigurationRoutes } from "./configuration-routes.js";
 import {
   hasValidLocalAdminCsrfToken,
   isUnsafeHttpMethod,
   type LocalAdminCsrfProtection,
 } from "./csrf.js";
+import type { DirectorySelectionService } from "./directory-selection-service.js";
 
 const localAdminListenerSchema = z.object({
   host: z.string().min(1),
@@ -50,8 +55,10 @@ const errorResponseSchema = z.object({
 export type LocalAdminStatus = z.infer<typeof localAdminStatusSchema>;
 
 export type LocalAdminAppOptions = {
+  authorizedDirectoryManager?: AuthorizedDirectoryManager;
   csrfProtection: LocalAdminCsrfProtection;
   deviceAuthService?: DeviceAuthService;
+  directorySelectionService?: DirectorySelectionService;
   settingsRepository?: SettingsRepository;
   sqlite?: BetterSqlite3.Database;
   getStatus(): LocalAdminStatus;
@@ -170,6 +177,15 @@ export async function buildLocalAdminApp(
     registerConfigurationRoutes(app, {
       settingsRepository: options.settingsRepository,
       sqlite: options.sqlite,
+    });
+  }
+  if (
+    options.authorizedDirectoryManager !== undefined &&
+    options.directorySelectionService !== undefined
+  ) {
+    registerAuthorizedDirectoryRoutes(app, {
+      directorySelectionService: options.directorySelectionService,
+      taskManager: options.authorizedDirectoryManager,
     });
   }
 

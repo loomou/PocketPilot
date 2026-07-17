@@ -14,6 +14,12 @@ export const taskRuntimeSettingsSchema = z.object({
 
 export type TaskRuntimeSettings = z.infer<typeof taskRuntimeSettingsSchema>;
 
+export const taskCapacitySettingsSchema = taskRuntimeSettingsSchema.pick({
+  concurrentTaskCapacity: true,
+});
+
+export type TaskCapacitySettings = z.infer<typeof taskCapacitySettingsSchema>;
+
 const defaultTaskRuntimeSettings: TaskRuntimeSettings = {
   concurrentTaskCapacity: DEFAULT_CONCURRENT_TASK_CAPACITY,
   workspaceRoots: [],
@@ -41,4 +47,17 @@ export function writeTaskRuntimeSettings(
     settings,
     taskRuntimeSettingsSchema,
   );
+}
+
+/** Updates local capacity without accepting or overwriting workspace roots. */
+export function writeTaskCapacitySettings(
+  settingsRepository: SettingsRepository,
+  settings: TaskCapacitySettings,
+): TaskCapacitySettings {
+  const current = readTaskRuntimeSettings(settingsRepository);
+  writeTaskRuntimeSettings(settingsRepository, {
+    ...current,
+    concurrentTaskCapacity: settings.concurrentTaskCapacity,
+  });
+  return settings;
 }

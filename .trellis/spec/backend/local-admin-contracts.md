@@ -18,6 +18,10 @@ registerConfigurationRoutes(app, { settingsRepository, sqlite }): void;
 GET /admin/configuration;
 PUT /admin/configuration/runtime;
 PUT /admin/configuration/tasks;
+GET /admin/authorized-directories;
+POST /admin/authorized-directories/pick;
+POST /admin/authorized-directories;
+POST /admin/authorized-directories/remove;
 GET /admin/audits;
 ```
 
@@ -31,9 +35,21 @@ Pairing and device administration retain their existing local routes:
 - `GET /admin/configuration` returns Zod-validated `runtime` and `tasks`
   settings, including fresh-install defaults when no row exists.
 - The runtime write accepts the optional mobile base URL plus the remote host
-  and port. The task-policy write accepts concurrency capacity and workspace
-  roots. Listener changes are persisted but apply only on the next manual
-  Agent start.
+  and port. The task-policy write accepts concurrency capacity only and
+  preserves the latest internal `workspaceRoots`; listener changes are
+  persisted but apply only on the next manual Agent start.
+- Authorized directories are a separate immediate-persistence security
+  surface. `GET` returns `{ revision, directories }`, where each row contains
+  canonical `path`, availability, volume-root risk, and affected non-terminal
+  runtime count. It is not part of the ordinary configuration Save action.
+- `POST .../pick` opens one injected Windows native picker and returns either
+  `{ status: "cancelled" }` or an expiring opaque `selectionId` plus its
+  canonical display path. The add route accepts only that single-use ID and a
+  volume-root risk boolean; it never accepts a caller-supplied path.
+- Removal accepts only an exact current row plus snapshot `revision`, expected
+  runtime count, and explicit stop acceptance. A mismatch stops nothing and
+  requires the browser to refresh/reconfirm. Successful P0 cleanup completes
+  before the route returns the next snapshot.
 - `GET /admin/audits` returns only `id`, `occurredAt`, `deviceId`, `taskId`,
   `operation`, and `result`, ordered newest first. Prompts, model output, tool
   parameters, credentials, and secrets have no response field.
@@ -56,6 +72,11 @@ Pairing and device administration retain their existing local routes:
 | --- | --- |
 | Unsafe local write lacks exact origin or CSRF token | HTTP 403 with `LOCAL_ADMIN_CSRF_REJECTED`; persist nothing. |
 | Runtime/task payload violates its shared Zod schema | HTTP 400; persist nothing. |
+| Picker is unsupported, busy, aborted, timed out, or malformed | Stable `DIRECTORY_PICKER_*` error; expose no PowerShell/process text. |
+| Selection ID expired or was already consumed | HTTP 409 `DIRECTORY_SELECTION_UNAVAILABLE`; write no root. |
+| Volume/UNC root lacks explicit risk acceptance | HTTP 422 `VOLUME_ROOT_RISK_NOT_ACCEPTED`; write no root. |
+| Removal revision/count is stale | HTTP 409 `AUTHORIZED_DIRECTORY_SNAPSHOT_STALE`; stop no runtime. |
+| Unexpected storage/runtime failure | HTTP 500 `LOCAL_ADMIN_OPERATION_FAILED`; expose no raw exception text. |
 | Mobile base URL is absent during pairing creation | Existing `MOBILE_BASE_URL_NOT_CONFIGURED` response; create no pairing. |
 | Audit table is empty | HTTP 200 with `[]`. |
 | Static build directory is absent | Local APIs still start; no static route is registered. |
@@ -66,16 +87,26 @@ Pairing and device administration retain their existing local routes:
 
 - Good: the browser obtains its CSRF token, saves both validated setting
   records, and the next manual start binds the new remote listener.
+- Good: a picker token adds one canonical directory immediately while unsaved
+  listener/capacity form edits remain unchanged.
+- Base: cancelling the native picker creates no token and changes no setting;
+  a covered child returns `already-covered`.
 - Base: a fresh database returns `127.0.0.1:43182`, capacity `3`, and no
   workspace roots or audit records.
 - Bad: mounting `@fastify/static` or `registerConfigurationRoutes` on the
   remote app, returning an audit payload field that can contain user content,
-  or applying listener changes to the live socket.
+  accepting an arbitrary add path, or applying listener changes to the live
+  socket.
 
 ## 6. Tests Required
 
 - Fastify injection proves fresh defaults, CSRF rejection, valid same-origin
   persistence, and metadata-only audit projection.
+- Picker/route tests prove cancellation, single-use/expiry, directory
+  revalidation, volume confirmation, safe process failures, stale removal,
+  and capacity/root lost-update prevention.
+- Remote injection uses each route's actual method and proves every directory
+  list/mutation URL is 404.
 - Remote-app injection proves `/admin/configuration` and the management page
   are 404.
 - Static-app injection proves a local `index.html` is served when the build
@@ -93,6 +124,9 @@ Pairing and device administration retain their existing local routes:
 ```ts
 remoteApp.register(fastifyStatic, { root: adminBuild });
 remoteApp.get("/admin/audits", () => database.select().from(auditRecords));
+localApp.post("/admin/authorized-directories", ({ body }) =>
+  saveRoot(body.path),
+);
 ```
 
 This exposes the computer administration surface through the user's tunnel
@@ -103,6 +137,10 @@ and couples the response to every future database column.
 ```ts
 await localApp.register(fastifyStatic, { root: adminBuild });
 registerConfigurationRoutes(localApp, { settingsRepository, sqlite });
+registerAuthorizedDirectoryRoutes(localApp, {
+  directorySelectionService,
+  taskManager,
+});
 ```
 
 The audit route uses an explicit metadata projection and both registrations

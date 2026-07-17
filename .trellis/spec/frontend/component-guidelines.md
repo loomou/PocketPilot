@@ -31,3 +31,14 @@ Keep API calls in `src/api`, stateful local administration behavior in the
 named feature, and `App.tsx` as composition only. The page must not add task
 controls, process start/stop actions, Claude configuration, or credential
 inputs.
+
+## Authorized Directories
+
+- Render authorization as its own unframed security section, separate from the
+  Runtime and task policy form.
+- Use a folder-plus Add command and per-row trash Remove command. Long canonical
+  paths use `break-all`; unavailable roots stay visible and removable.
+- Show affected open-session counts and whole-volume status next to each path.
+  Native `window.confirm` is the explicit P0/high-risk gate in this MVP.
+- Disable competing actions while a picker/add/removal is in flight, but do not
+  stage directory mutations behind Save configuration.

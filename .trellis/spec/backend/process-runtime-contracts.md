@@ -17,6 +17,8 @@ buildLocalAdminApp(options: LocalAdminAppOptions): Promise<FastifyInstance>;
 buildMobileOpenApiDocument(): Promise<OpenAPIV3.Document>;
 new AgentRuntime(options).start(): Promise<AgentRuntimeStatus>;
 AgentRuntime.shutdown(): Promise<void>;
+new WindowsDirectoryPicker().pick(signal?): Promise<DirectoryPickerResult>;
+taskSdkConnectionRegistry.closeTaskConnections(taskId): void;
 requestRuntimeShutdown(runtimeControlPath: string): Promise<void>;
 acquireAgentLock(databasePath: string): Promise<ReleaseAgentLock>;
 runRekeyCommand(environment?, writeOutput?): Promise<void>;
@@ -50,6 +52,15 @@ and use the Zod `runtimeSettingsSchema`.
   `43183`. `POCKETPILOT_LOCAL_ADMIN_PORT` may select another validated port but
   never changes the host. `GET /admin/status`, `GET /admin/csrf`, and Swagger
   documentation are local-only.
+- Runtime composition injects one `WindowsDirectoryPicker`, its short-lived
+  selection service, and the shared `TaskManager` only into the loopback app.
+  The picker launches fixed `powershell.exe -NoProfile -NonInteractive -STA`
+  arguments with `shell: false`, bounded output, abort/timeout termination, and
+  one active dialog. No filesystem picker/browse route is mounted remotely.
+- Raw task SDK sockets register in both the device registry and a separate
+  task-scoped registry. Device revocation may close every device transport;
+  task P0 closes only that task's raw SDK sockets and leaves the control socket
+  available for the terminal state event.
 - Startup generates the mobile OpenAPI document without listeners or storage,
   then passes it to the local app. The remote app never registers Swagger UI or
   raw-document routes.
@@ -66,6 +77,10 @@ and use the Zod `runtimeSettingsSchema`.
 - A stopping runtime removes the control-state file only if its token still
   matches. A failed second startup must therefore never remove another running
   Agent's stop credential.
+- Coordinated shutdown first closes task admission, persists every non-terminal
+  task as terminal, invalidates P2 generations, closes raw task sockets, and
+  starts Query interruption before storage closes. No awaited SDK cleanup may
+  precede the rejecting task state.
 
 ### 4. Validation & Error Matrix
 
@@ -81,6 +96,7 @@ and use the Zod `runtimeSettingsSchema`.
 | Shutdown request does not return HTTP 202 | Throw `RuntimeControlError` with `RUNTIME_CONTROL_REJECTED`. |
 | Remote request for `/admin/status` | Return 404, never a proxied local response. |
 | Unsafe local-admin request without valid origin/token | Return HTTP 403 and `LOCAL_ADMIN_CSRF_REJECTED`. |
+| Native picker invoked on non-Windows or fails safely | Return stable `DIRECTORY_PICKER_UNAVAILABLE`; keep listeners running. |
 | Missing/wrong internal control token | Return HTTP 401 and `RUNTIME_CONTROL_UNAUTHORIZED`. |
 
 ### 5. Good / Base / Bad Cases
@@ -88,6 +104,8 @@ and use the Zod `runtimeSettingsSchema`.
 - Good: a user starts the Agent with a valid key, exposes only the configured
   remote listener through their own tunnel, and runs `agent stop`; both
   listeners close and the control-state file disappears.
+- Good: local root revocation closes one raw task socket with `4009` while the
+  same device's control WebSocket remains connected.
 - Base: a fresh database establishes its key verifier and, with no `runtime`
   setting, binds remote health on `127.0.0.1:43182` and local administration on
   `127.0.0.1:43183`.
@@ -105,6 +123,10 @@ and use the Zod `runtimeSettingsSchema`.
 - Runtime integration starts both listeners on temporary ports, verifies
   remote/local route isolation, calls `requestRuntimeShutdown`, waits for the
   shared shutdown promise, and verifies control-state cleanup.
+- Windows packaged-install smoke includes the local-admin bundle and fixed
+  PowerShell picker code, starts both installed listeners, keeps all new
+  `/admin/authorized-directories*` routes off the remote listener, and completes
+  shutdown/rekey/reset with Node 24 and pnpm 10.14.
 - Runtime startup with no master key rejects before creating the database or
   control-state file.
 - Runtime tests prove a second owner is rejected, shutdown releases the lock,
