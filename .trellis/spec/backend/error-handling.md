@@ -19,7 +19,7 @@ output.
 | `AgentMaintenanceError` | `AGENT_DATA_NOT_FOUND`, `AGENT_MAINTENANCE_LOCKED`, `AGENT_MAINTENANCE_LOCK_UNAVAILABLE`, `MASTER_KEYS_IDENTICAL` | Stopped-only maintenance preconditions and exclusive data-lock failures. |
 | `EnvironmentConfigurationError` | `DOTENV_READ_FAILED`, `ENVIRONMENT_VALUE_INVALID` | Safe startup-directory dotenv read and allowlisted value validation failures. |
 | `DeviceAuthError` | Pairing, device-proof, challenge, opaque-token, and revocation codes | HTTP-safe device authentication failure. |
-| `TaskError` | `TASK_BUSY`, `TASK_INTERRUPTED`, `TASK_TERMINAL`, `STALE_APPROVAL`, `CONCURRENT_TASK_LIMIT_REACHED`, workspace-policy, capability, and task-lookup codes | Validated mobile task-control and task-policy failures. |
+| `TaskError` | Task lifecycle/policy codes plus `CLAUDE_SESSION_NOT_FOUND`, `CLAUDE_SESSION_CONFLICT`, `CLAUDE_HISTORY_UNAVAILABLE`, and `HISTORY_CURSOR_STALE` | Validated mobile task, SDK-session, history, and control failures. |
 
 ## Patterns
 
@@ -44,6 +44,11 @@ output.
   verifier, signature, or crypto-library details.
 - Keep task errors metadata-only: do not put an instruction, model output, tool
   input, or SDK process details in a `TaskError` message.
+- Map missing/out-of-policy session metadata to the same safe
+  `CLAUDE_SESSION_NOT_FOUND` response. Map transcript parse/read failure to
+  retryable `CLAUDE_HISTORY_UNAVAILABLE` and a disappeared UUID anchor to
+  `HISTORY_CURSOR_STALE`; never include a summary, prompt, message, raw SDK
+  error, or machine path in these responses.
 - The raw SDK WebSocket never sends PocketPilot error JSON. Translate invalid
   input, authentication, missing task, unavailable session, and unexpected
   transport failure to stable close code/reason pairs `4000`, `4003`, `4004`,

@@ -19,6 +19,8 @@ eventSubscribedMessageSchema: ZodType;
 eventDeliveryMessageSchema: ZodType;
 eventErrorMessageSchema: ZodType;
 sdkUserMessageTransportSchema: ZodType;
+sdkSessionInfoSchema: ZodType;
+sdkSessionMessageSchema: ZodType;
 sdkWebSocketClose: Record<string, { code: number; reason: string }>;
 ```
 
@@ -38,6 +40,19 @@ emits `dist/openapi/mobile-v1.json`.
   list as `{ workspaceRoots: string[] }`. Its response schema is derived from
   `taskRuntimeSettingsSchema.pick({ workspaceRoots: true })`, matching the
   settings owner used by task authorization.
+- The `Sessions` tag owns protected `GET/POST /v1/sessions`,
+  `GET /v1/sessions/{sessionId}/messages`, and
+  `POST /v1/sessions/{sessionId}/attach`. Document workspace authorization,
+  transparent attachment, the opaque task transport handle, and that SDK
+  `0.3.210` owns open/passthrough session and message rows.
+- History documentation specifies chronological latest/older pages of at most
+  50, the out-of-band `beforeUuid`/`hasMoreBefore` metadata,
+  `includeSystemMessages` consistency, stale-cursor reload, repeated local SDK
+  parse cost, and client-side virtualization/history-live UUID deduplication.
+- Composer documentation owns `GET /v1/tasks/{taskId}/composer-options` and
+  `POST /v1/tasks/{taskId}/effort` alongside model and permission routes. State
+  that controls update the existing Query for the next turn and must complete
+  before Send when ordering matters; Send remains a raw SDK user message.
 - Generate the complete document with structural no-op service dependencies.
   `app.ready()` may build the route graph, but documentation generation must
   never bind sockets, open storage, launch Claude, or require a real key.
@@ -60,6 +75,8 @@ emits `dist/openapi/mobile-v1.json`.
   and close codes `4000`, `4003`, `4004`, `4009`, and `4011`. Keep
   `afterCursor` and `EVENT_SUBSCRIPTION_INVALID` specific to the control
   socket.
+- Document subscribe-before-activation for session-centric runtimes without
+  changing the raw WebSocket schemas or adding an SDK envelope.
 - Document approval controls with every serializable `CanUseTool` option and
   the HTTP response's complete `PermissionResult`; explicitly state that
   `AbortSignal` remains local.
@@ -81,11 +98,15 @@ emits `dist/openapi/mobile-v1.json`.
 | SDK task is missing or unavailable | Close `4004 / TASK_NOT_FOUND` or `4009 / TASK_SESSION_UNAVAILABLE`. |
 | SDK transport fails unexpectedly | Close `4011 / SDK_TRANSPORT_FAILED`; expose no internal exception text. |
 | Repeated generation from unchanged source differs byte-for-byte | Treat as a build-quality failure. |
+| Session/history/control route lacks Bearer security or a stable operation ID | Fail the OpenAPI path-set/operation audit. |
+| SDK-owned row schema strips an unknown field | Fail route serialization tests; keep the runtime schema passthrough. |
 
 ## 5. Good / Base / Bad Cases
 
 - Good: changing the raw SDK input base guard updates runtime validation,
   `x-websocket`, local Swagger, and packaged JSON from the exported Zod owner.
+- Good: adding an SDK session field requires no PocketPilot schema rewrite;
+  passthrough runtime serialization and the open OpenAPI row preserve it.
 - Base: the unbound remote app without domain dependencies exposes only health
   at runtime and no documentation route; the documentation factory supplies
   no-op dependencies to register the complete `/v1` graph.
@@ -105,6 +126,9 @@ emits `dist/openapi/mobile-v1.json`.
 - Assert the complete path set contains `/v1/tasks/{taskId}/sdk`, omits
   `/v1/tasks/{taskId}/instruction`, includes protected `/v1/workspaces`, and
   names the approval parameter `requestId`.
+- Assert the path set includes session list/create/history/attach, composer
+  options, and effort; descriptions include the SDK version, 50-row cursor
+  behavior, history/live separation, and subscribe-before-activation.
 - Assert control docs contain no SDK server message, raw SDK docs contain no
   PocketPilot wrapper, and all approval fields and stable close codes appear.
 - Local-app injection must return Swagger UI and the exact raw document while

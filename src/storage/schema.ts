@@ -1,9 +1,11 @@
+import { sql } from "drizzle-orm";
 import {
   index,
   integer,
   primaryKey,
   sqliteTable,
   text,
+  uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
 export const agentSettings = sqliteTable("agent_settings", {
@@ -108,14 +110,22 @@ export const tasks = sqliteTable(
     initialCwd: text("initial_cwd").notNull(),
     interruptedAt: integer("interrupted_at"),
     model: text("model"),
-    permissionMode: text("permission_mode").notNull(),
+    origin: text("origin").notNull().default("pocketpilot"),
+    permissionMode: text("permission_mode"),
     sdkSessionId: text("sdk_session_id"),
     state: text("state").notNull(),
     terminalAt: integer("terminal_at"),
     updatedAt: integer("updated_at").notNull(),
     id: text("id").primaryKey(),
   },
-  (table) => [index("tasks_state_index").on(table.state)],
+  (table) => [
+    index("tasks_state_index").on(table.state),
+    uniqueIndex("tasks_live_sdk_session_id_unique")
+      .on(table.sdkSessionId)
+      .where(
+        sql`${table.sdkSessionId} is not null and ${table.state} <> 'terminal'`,
+      ),
+  ],
 );
 
 export const operationResults = sqliteTable(

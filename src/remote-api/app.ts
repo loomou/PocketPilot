@@ -9,6 +9,11 @@ import {
 import { createHttpApp } from "../http/create-http-app.js";
 import { registerHealthRoute } from "../http/health.js";
 import {
+  registerSessionRoutes,
+  type SessionRouteDeviceAuthService,
+  type SessionRouteManager,
+} from "./session-routes.js";
+import {
   registerTaskEventRoutes,
   type TaskEventRouteOptions,
 } from "./task-event-routes.js";
@@ -23,6 +28,7 @@ import {
 } from "./task-sdk-routes.js";
 
 export type RemoteApiDeviceAuthService = RemoteDeviceAuthRouteService &
+  SessionRouteDeviceAuthService &
   TaskRouteDeviceAuthService &
   TaskEventRouteOptions["deviceAuthService"] &
   TaskSdkRouteOptions["deviceAuthService"];
@@ -33,7 +39,9 @@ export type RemoteApiAppOptions = {
   deviceAuthService?: RemoteApiDeviceAuthService;
   eventJournal?: TaskEventRouteOptions["eventJournal"] &
     TaskSdkRouteOptions["eventJournal"];
-  taskManager?: TaskRouteManager & TaskSdkRouteOptions["taskManager"];
+  taskManager?: SessionRouteManager &
+    TaskRouteManager &
+    TaskSdkRouteOptions["taskManager"];
 };
 
 /**
@@ -69,6 +77,7 @@ export async function buildRemoteApiApp(
       servers: [],
       tags: [
         { name: "Authentication" },
+        { name: "Sessions" },
         { name: "Tasks" },
         { name: "Events" },
         { name: "SDK" },
@@ -80,6 +89,10 @@ export async function buildRemoteApiApp(
   if (options.deviceAuthService !== undefined) {
     registerRemoteDeviceAuthRoutes(app, options.deviceAuthService);
     if (options.taskManager !== undefined) {
+      registerSessionRoutes(app, {
+        deviceAuthService: options.deviceAuthService,
+        taskManager: options.taskManager,
+      });
       registerTaskRoutes(app, {
         deviceAuthService: options.deviceAuthService,
         taskManager: options.taskManager,

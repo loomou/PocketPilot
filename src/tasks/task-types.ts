@@ -10,13 +10,18 @@ export const taskStateSchema = z.enum([
 
 export type TaskState = z.infer<typeof taskStateSchema>;
 
+export const taskOriginSchema = z.enum(["pocketpilot", "claude-session"]);
+
+export type TaskOrigin = z.infer<typeof taskOriginSchema>;
+
 export const taskSnapshotSchema = z.object({
   createdAt: z.number().int(),
   id: z.uuid(),
   initialCwd: z.string().min(1),
   interruptedAt: z.number().int().nullable(),
   model: z.string().min(1).nullable(),
-  permissionMode: z.string().min(1),
+  origin: taskOriginSchema.default("pocketpilot"),
+  permissionMode: z.string().min(1).nullable(),
   sdkSessionId: z.string().min(1).nullable(),
   state: taskStateSchema,
   terminalAt: z.number().int().nullable(),
@@ -26,6 +31,7 @@ export const taskSnapshotSchema = z.object({
 export type TaskSnapshot = z.infer<typeof taskSnapshotSchema>;
 
 export const taskOperationActionSchema = z.enum([
+  "attached",
   "created",
   "interrupted",
   "closed",
@@ -34,6 +40,7 @@ export const taskOperationActionSchema = z.enum([
   "approval-denied",
   "model-changed",
   "permission-mode-changed",
+  "effort-changed",
 ]);
 
 export type TaskOperationAction = z.infer<typeof taskOperationActionSchema>;

@@ -8,6 +8,7 @@ import {
   authErrorResponseSchema,
   readBearerAccessToken,
 } from "../auth/http.js";
+import { pinnedEffortLevels } from "../claude-sdk/session.js";
 import { taskRuntimeSettingsSchema } from "../tasks/settings.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import {
@@ -25,6 +26,21 @@ const createTaskSchema = operationSchema.extend({
 });
 const authorizedWorkspacesResponseSchema = taskRuntimeSettingsSchema.pick({
   workspaceRoots: true,
+});
+const effortLevelSchema = z.enum(pinnedEffortLevels);
+const sdkModelInfoSchema = z
+  .object({
+    description: z.string(),
+    displayName: z.string(),
+    supportedEffortLevels: z.array(effortLevelSchema).optional(),
+    supportsEffort: z.boolean().optional(),
+    value: z.string(),
+  })
+  .passthrough();
+const composerOptionsResponseSchema = z.object({
+  effortLevel: effortLevelSchema.nullable(),
+  models: z.array(sdkModelInfoSchema),
+  supportedPermissionModes: z.array(z.string()),
 });
 
 export const permissionResultSchema = z.discriminatedUnion("behavior", [
@@ -72,12 +88,14 @@ export type TaskRouteManager = Pick<
   | "authorizedWorkspaceRoots"
   | "closeTask"
   | "createTask"
+  | "getComposerOptions"
   | "getTask"
   | "interruptTask"
   | "listTasks"
   | "resolveApproval"
   | "resumeTask"
   | "setModel"
+  | "setEffortLevel"
   | "setPermissionMode"
   | "supportedPermissionModes"
 >;
@@ -278,7 +296,7 @@ export function registerTaskRoutes(
       schema: {
         body: operationSchema.extend({ model: z.string().min(1).optional() }),
         description:
-          "Changes the model for the next turn while the task is idle.",
+          "Immediately forwards a live model change. The accepted value applies to the next turn without restarting the Query; await this response before Send when ordering matters.",
         operationId: "setTaskModel",
         params: taskIdParamsSchema,
         response: { 200: taskOperationResultSchema, ...taskErrorResponses },
@@ -292,6 +310,49 @@ export function registerTaskRoutes(
         deviceId: authenticate(request),
         model: request.body.model,
         operationId: request.body.operationId,
+        taskId: request.params.taskId,
+      }),
+  );
+  typed.get(
+    "/v1/tasks/:taskId/composer-options",
+    {
+      schema: {
+        description:
+          "Returns installed-SDK model rows, per-model effort choices, permission modes, and the resolved starting effort for an activated Query. Open the raw SDK stream first; raw system/init and system/status remain authoritative for active model and permission state.",
+        operationId: "getTaskComposerOptions",
+        params: taskIdParamsSchema,
+        response: { 200: composerOptionsResponseSchema, ...taskErrorResponses },
+        security: bearerSecurity,
+        summary: "Get task composer options",
+        tags: taskTag,
+      },
+    },
+    async (request) => {
+      authenticate(request);
+      return options.taskManager.getComposerOptions(request.params.taskId);
+    },
+  );
+  typed.post(
+    "/v1/tasks/:taskId/effort",
+    {
+      schema: {
+        body: operationSchema.extend({
+          effortLevel: effortLevelSchema.nullable(),
+        }),
+        description:
+          "Immediately forwards a named effort change through Query.applyFlagSettings(). The accepted value applies to the next turn; null clears the live flag-layer override.",
+        operationId: "setTaskEffort",
+        params: taskIdParamsSchema,
+        response: { 200: taskOperationResultSchema, ...taskErrorResponses },
+        security: bearerSecurity,
+        summary: "Change a task effort level",
+        tags: taskTag,
+      },
+    },
+    async (request) =>
+      options.taskManager.setEffortLevel({
+        ...request.body,
+        deviceId: authenticate(request),
         taskId: request.params.taskId,
       }),
   );

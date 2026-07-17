@@ -6,16 +6,19 @@ import { StorageDataError } from "../storage/errors.js";
 import { auditRecords, operationResults, tasks } from "../storage/schema.js";
 import {
   type TaskOperationResult,
+  type TaskOrigin,
   type TaskSnapshot,
   type TaskState,
   taskOperationResultSchema,
+  taskOriginSchema,
   taskStateSchema,
 } from "./task-types.js";
 
 type TaskUpdate = {
   interruptedAt?: number | null;
   model?: string | null;
-  permissionMode?: string;
+  origin?: TaskOrigin;
+  permissionMode?: string | null;
   sdkSessionId?: string | null;
   state?: TaskState;
   terminalAt?: number | null;
@@ -50,7 +53,9 @@ export class TaskRepository {
     id: string;
     initialCwd: string;
     model: string | null;
-    permissionMode: string;
+    origin: TaskOrigin;
+    permissionMode: string | null;
+    sdkSessionId?: string | null;
   }): TaskSnapshot {
     this.database
       .insert(tasks)
@@ -59,7 +64,9 @@ export class TaskRepository {
         id: input.id,
         initialCwd: input.initialCwd,
         model: input.model,
+        origin: input.origin,
         permissionMode: input.permissionMode,
+        sdkSessionId: input.sdkSessionId ?? null,
         state: "idle",
         updatedAt: input.createdAt,
       })
@@ -73,6 +80,19 @@ export class TaskRepository {
       .select()
       .from(tasks)
       .where(eq(tasks.id, id))
+      .get();
+    return row === undefined ? undefined : parseTaskRow(row);
+  }
+
+  public findNonTerminalBySdkSessionId(
+    sdkSessionId: string,
+  ): TaskSnapshot | undefined {
+    const row = this.database
+      .select()
+      .from(tasks)
+      .where(
+        and(eq(tasks.sdkSessionId, sdkSessionId), ne(tasks.state, "terminal")),
+      )
       .get();
     return row === undefined ? undefined : parseTaskRow(row);
   }
@@ -226,6 +246,10 @@ function parseTaskRow(row: typeof tasks.$inferSelect): TaskSnapshot {
       "A task contains an unsupported lifecycle state.",
     );
   }
+  const origin = taskOriginSchema.safeParse(row.origin);
+  if (!origin.success) {
+    throw new StorageDataError("A task contains an unsupported origin.");
+  }
 
   return {
     createdAt: row.createdAt,
@@ -233,6 +257,7 @@ function parseTaskRow(row: typeof tasks.$inferSelect): TaskSnapshot {
     initialCwd: row.initialCwd,
     interruptedAt: row.interruptedAt,
     model: row.model,
+    origin: origin.data,
     permissionMode: row.permissionMode,
     sdkSessionId: row.sdkSessionId,
     state: state.data,

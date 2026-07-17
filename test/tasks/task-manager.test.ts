@@ -4,8 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type {
+  EffortLevel,
+  ModelInfo,
   PermissionMode,
   PermissionResult,
+  SDKControlInitializeResponse,
   SDKControlInterruptResponse,
   SDKMessage,
   SDKSessionStateChangedMessage,
@@ -14,7 +17,10 @@ import type {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ToolApprovalCancelledError } from "../../src/claude-sdk/permission-gate.js";
-import type { OpenClaudeSdkSessionOptions } from "../../src/claude-sdk/session.js";
+import type {
+  ClaudeSdkInitialization,
+  OpenClaudeSdkSessionOptions,
+} from "../../src/claude-sdk/session.js";
 import {
   openStorage,
   type StorageConnection,
@@ -198,7 +204,7 @@ describe("TaskManager", () => {
     expect(session.submissions).toHaveLength(2);
   });
 
-  it("allows permission changes during execution but defers model changes until idle", async () => {
+  it("allows model and permission changes during execution for the next turn", async () => {
     const fixture = createFixture(connections, temporaryDirectories, managers);
     const created = await fixture.manager.createTask(
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
@@ -206,28 +212,17 @@ describe("TaskManager", () => {
     await fixture.manager.submitSdkMessage(sdkInput(created.task.id));
     const session = fixture.sessionFor(created.task.id);
 
-    await expect(
-      fixture.manager.setModel({
-        ...operationInput(created.task.id),
-        model: "sonnet",
-      }),
-    ).rejects.toMatchObject({ code: "TASK_BUSY" });
+    const model = await fixture.manager.setModel({
+      ...operationInput(created.task.id),
+      model: "sonnet",
+    });
     const permission = await fixture.manager.setPermissionMode({
       ...operationInput(created.task.id),
       permissionMode: "plan",
     });
     expect(permission.task.state).toBe("executing");
+    expect(model.task.state).toBe("executing");
     expect(session.permissionModes).toEqual(["plan"]);
-
-    session.emitState("idle");
-    await waitFor(
-      () => fixture.manager.getTask(created.task.id).state === "idle",
-    );
-    const model = await fixture.manager.setModel({
-      ...operationInput(created.task.id),
-      model: "sonnet",
-    });
-
     expect(model.task.model).toBe("sonnet");
     expect(session.models).toEqual(["sonnet"]);
   });
@@ -433,6 +428,7 @@ class FakeTaskSession implements TaskSdkSession {
   readonly options: OpenClaudeSdkSessionOptions;
   closed = false;
   interruptCalls = 0;
+  effortLevels: Array<EffortLevel | null> = [];
   models: Array<string | undefined> = [];
   permissionModes: PermissionMode[] = [];
   readonly submissions: SDKUserMessage[] = [];
@@ -456,6 +452,17 @@ class FakeTaskSession implements TaskSdkSession {
   public async interrupt(): Promise<SDKControlInterruptResponse | undefined> {
     this.interruptCalls += 1;
     return undefined;
+  }
+
+  public async initialize(): Promise<ClaudeSdkInitialization> {
+    return {
+      initialization: {} as SDKControlInitializeResponse,
+      models: [] as ModelInfo[],
+    };
+  }
+
+  public async setEffortLevel(effortLevel: EffortLevel | null): Promise<void> {
+    this.effortLevels.push(effortLevel);
   }
 
   public async setModel(model: string | undefined): Promise<void> {

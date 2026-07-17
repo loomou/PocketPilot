@@ -36,6 +36,8 @@ describe("task SDK WebSocket", () => {
 
     expect(fixture.journal.afterUuid).toBe("message-anchor");
     expect(fixture.journal.taskId).toBe(taskId);
+    await waitFor(() => fixture.activationObservedSubscriber.length === 1);
+    expect(fixture.activationObservedSubscriber).toEqual([true]);
 
     const output = {
       type: "future_sdk_variant",
@@ -61,6 +63,28 @@ describe("task SDK WebSocket", () => {
     expect(fixture.submissions[0]).toEqual(input);
     expect(fixture.submissions[0]).not.toHaveProperty("operationId");
     expect(fixture.submissions[0]).not.toHaveProperty("payload");
+    client.terminate();
+  });
+
+  it("delivers the original system init after subscribing and before input", async () => {
+    const init = {
+      apiKeySource: "none",
+      cwd: "C:\\workspace",
+      model: "opus",
+      permissionMode: "default",
+      session_id: "sdk-session",
+      subtype: "init",
+      tools: [],
+      type: "system",
+      uuid: randomUUID(),
+    } as unknown as SDKMessage;
+    const fixture = await createFixture(apps, { activationMessage: init });
+    const client = await fixture.app.injectWS(`/v1/tasks/${taskId}/sdk`, {
+      headers: { authorization: "Bearer access-token" },
+    });
+
+    await expect(nextMessage(client)).resolves.toEqual(init);
+    expect(fixture.activationObservedSubscriber).toEqual([true]);
     client.terminate();
   });
 
@@ -157,9 +181,14 @@ describe("task SDK WebSocket", () => {
 
 async function createFixture(
   apps: Array<Awaited<ReturnType<typeof createHttpApp>>>,
-  options: { authenticate?: boolean; taskExists?: boolean } = {},
+  options: {
+    activationMessage?: SDKMessage;
+    authenticate?: boolean;
+    taskExists?: boolean;
+  } = {},
 ): Promise<{
   app: Awaited<ReturnType<typeof createHttpApp>>;
+  activationObservedSubscriber: boolean[];
   connectionRegistry: InMemoryDeviceConnectionRegistry;
   journal: RecordingSdkJournal;
   submissions: SDKUserMessage[];
@@ -168,6 +197,7 @@ async function createFixture(
   const connectionRegistry = new InMemoryDeviceConnectionRegistry();
   const journal = new RecordingSdkJournal();
   const submissions: SDKUserMessage[] = [];
+  const activationObservedSubscriber: boolean[] = [];
   registerTaskSdkRoutes(app, {
     connectionRegistry,
     deviceAuthService: {
@@ -180,6 +210,13 @@ async function createFixture(
     },
     eventJournal: journal,
     taskManager: {
+      async activateSdkSession(): Promise<void> {
+        activationObservedSubscriber.push(journal.subscriber !== undefined);
+        if (options.activationMessage !== undefined) {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          journal.subscriber?.send(options.activationMessage);
+        }
+      },
       getTask(): TaskSnapshot {
         if (options.taskExists === false) {
           throw new TaskError("TASK_NOT_FOUND", 404, "Task not found.");
@@ -194,7 +231,13 @@ async function createFixture(
   });
   await app.ready();
   apps.push(app);
-  return { app, connectionRegistry, journal, submissions };
+  return {
+    activationObservedSubscriber,
+    app,
+    connectionRegistry,
+    journal,
+    submissions,
+  };
 }
 
 class RecordingSdkJournal {
@@ -223,6 +266,7 @@ function taskSnapshot(): TaskSnapshot {
     initialCwd: "C:\\workspace",
     interruptedAt: null,
     model: null,
+    origin: "pocketpilot",
     permissionMode: "default",
     sdkSessionId: null,
     state: "idle",

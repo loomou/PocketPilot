@@ -19,6 +19,18 @@ manager.createTask({
   deviceId, operationId, initialCwd, model, permissionMode,
   workspaceRiskAccepted,
 });
+manager.createClaudeConversation({
+  deviceId, operationId, workspace, workspaceRiskAccepted,
+});
+manager.attachClaudeSession({
+  deviceId, operationId, workspace, workspaceRiskAccepted, sessionId,
+});
+manager.listClaudeSessions({ workspace, limit?, offset? });
+manager.readClaudeSessionHistory({
+  workspace, sessionId, limit?, beforeUuid?, includeSystemMessages?,
+});
+manager.activateSdkSession(taskId);
+manager.getComposerOptions(taskId);
 manager.authorizedWorkspaceRoots(): readonly string[];
 manager.submitSdkMessage({ deviceId, taskId, message: SDKUserMessage });
 manager.resolveApproval({
@@ -29,6 +41,7 @@ manager.closeTask({ deviceId, operationId, taskId });
 manager.resumeTask({ deviceId, operationId, taskId });
 manager.setModel({ deviceId, operationId, taskId, model });
 manager.setPermissionMode({ deviceId, operationId, taskId, permissionMode });
+manager.setEffortLevel({ deviceId, operationId, taskId, effortLevel });
 manager.shutdown();
 
 journal.publishSdkMessage(taskId, message: SDKMessage): void;
@@ -47,6 +60,15 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
 - Persist only `idle`, `executing`, `awaiting_approval`, `interrupted`, and
   `terminal`. The common path is `idle -> executing -> awaiting_approval ->
   executing -> idle`.
+- Persist task origin as `pocketpilot` or `claude-session`. Explicit task rows
+  keep their initial model and permission mode. Session-centric rows keep
+  `model` and `permissionMode` null so Claude Code resolves/restores its own
+  settings; `sdkSessionId` is null only until a new Query emits its unchanged
+  `system/init` message.
+- Enforce one non-terminal task for each non-null SDK session ID with the
+  partial unique index `tasks_live_sdk_session_id_unique`. The migration keeps
+  the newest legacy owner and terminalizes older duplicates before creating
+  the index. Attachment also runs on one manager lane and reuses the winner.
 - A task owns one long-lived SDK input stream and Query while its live session
   exists. Lazily open idle/recovered sessions with persisted `model`,
   `permissionMode`, and `sdkSessionId`; never recreate a transcript.
@@ -69,6 +91,29 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   Canonicalize selected cwd and configured roots, require
   `workspaceRiskAccepted: true`, and remember that roots authorize initial cwd
   but are not a filesystem sandbox.
+- Session catalog, history, new-conversation, and attachment requests
+  canonicalize the selected workspace through that same policy owner. Catalog
+  calls explicitly set `includeWorktrees: false` and
+  `includeProgrammatic: true`; present SDK session cwd values must canonicalize
+  inside the selected workspace before metadata, history, or attachment is
+  allowed.
+- List pagination preserves each `SDKSessionInfo` object and advances
+  `nextOffset` by SDK rows consumed, including rows filtered by cwd policy.
+  History first validates with `getSessionInfo`, then returns unchanged
+  chronological `SessionMessage` rows: the latest 50 initially and up to 50
+  before the earliest loaded UUID. Same-session history reads use a dedicated
+  serial lane and retain no transcript cache.
+- New conversation and selected-session attachment create idle internal
+  runtimes without reserving active-turn capacity. Selecting a session is the
+  continuation action; no public task-resume step or prompt replay is added.
+  The raw WebSocket subscribes first and then calls `activateSdkSession`, which
+  opens `claude-session` Queries with no PocketPilot model/permission/effort
+  override and sets `Options.resume` only for an existing SDK session.
+- Composer options expose SDK `ModelInfo[]`, pinned SDK permission modes, and
+  the allowlisted resolved effort only after Query activation. Model,
+  permission-mode, and effort controls share the per-task input lane, may run
+  while a turn is active, and affect the next turn. A client awaits the
+  control response before Send when command-before-prompt order matters.
 - `GET /v1/workspaces` requires the existing Bearer access credential and
   returns `{ workspaceRoots: string[] }` from the same Zod-validated
   `task-runtime` settings used by task creation. Return a new array, expose no
@@ -115,9 +160,13 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
 | Task is interrupted/terminal or SDK input is closed | Raw socket closes `4009 / TASK_SESSION_UNAVAILABLE`. |
 | Task does not exist | Raw socket closes `4004 / TASK_NOT_FOUND`. |
 | Raw transport fails unexpectedly | Close `4011 / SDK_TRANSPORT_FAILED`; never send an error JSON frame on the SDK socket. |
-| Model changes while active | `TASK_BUSY`; do not queue the model change. |
+| Model, permission, or effort changes while active | Forward through the live Query; accepted values apply to the next turn. |
 | Approval request ID is stale | `STALE_APPROVAL`; never resolve another SDK callback. |
 | Resume lacks an SDK session reference | `TASK_SESSION_UNAVAILABLE`; do not invent a transcript. |
+| Selected SDK session is absent or cannot be proven inside the workspace | `CLAUDE_SESSION_NOT_FOUND`; reveal no other local path. |
+| History UUID is absent from the current filtered chain | `HISTORY_CURSOR_STALE`; reload the latest page. |
+| SDK transcript read fails | `CLAUDE_HISTORY_UNAVAILABLE`; keep the attached Query/composer usable. |
+| A second non-terminal runtime would own one SDK session | `CLAUDE_SESSION_CONFLICT`; start no second Query. |
 | Replay reaches 256 MiB | Notify control subscribers, retain no later records, and continue live SDK/control delivery. |
 
 ### 5. Good / Base / Bad Cases
@@ -125,6 +174,12 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
 - Good: a task accepts two SDK user messages during execution, preserves their
   scheduling fields, emits raw Query messages on only its SDK socket, and
   remains active across both SDK result boundaries.
+- Good: selecting a validated SDK session returns its existing opaque task
+  handle, the raw subscriber receives original `system/init`, and a later raw
+  user message continues through `Options.resume`.
+- Base: a long history opens on its latest 50 messages; upward pagination uses
+  the earliest UUID, virtualized clients prepend older rows, and PocketPilot
+  never stores or resends the history.
 - Base: an SDK socket connects without `afterUuid`; it receives the retained
   current turn from the beginning and then live raw messages.
 - Base: an authenticated device lists workspaces before local configuration
@@ -152,6 +207,12 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   abort, replacement, interrupt, close, and shutdown cancellation.
 - Test recovery/resume without replay, close priority, and manual runtime
   shutdown of idle and active tasks.
+- Test SDK catalog option forwarding and cwd filtering; unchanged latest/older
+  history pages, stale cursors, system-message mode, serial reads, and history
+  failure independent from Query activation.
+- Test new-conversation defaults, transparent attachment/reuse, migration and
+  runtime uniqueness, subscribe-before-activate raw init delivery, composer
+  discovery, and active-turn model/mode/effort sequencing.
 
 ### 7. Wrong vs Correct
 
@@ -168,10 +229,13 @@ idempotency subsystem.
 #### Correct
 
 ```ts
-await taskLane.run(() => session.submit(sdkUserMessage));
+await taskLane.run(async () => {
+  await session.setModel(selectedModel);
+  session.submit(sdkUserMessage);
+});
 recordMetadataOnlyAudit(deviceId, taskId, "task.sdk-message-submitted");
-return { workspaceRoots: [...manager.authorizedWorkspaceRoots()] };
+return sessionMessagePage; // unchanged SDK rows + out-of-band page metadata
 ```
 
-The lane preserves arrival order only; the SDK controls scheduling and the
-Agent records no message content.
+The lane preserves control/input order only; the SDK controls scheduling and
+the Agent records no message or history content.

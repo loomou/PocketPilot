@@ -26,6 +26,16 @@ openClaudeSdkSession(options: {
 
 session.submit(message: SDKUserMessage): void;
 session.events(): AsyncGenerator<SDKMessage>;
+session.initialize(): Promise<{
+  initialization: SDKControlInitializeResponse;
+  models: ModelInfo[];
+}>;
+session.setEffortLevel(level: EffortLevel | null): Promise<void>;
+
+catalog.list(options: ListSessionsOptions): Promise<SDKSessionInfo[]>;
+catalog.getInfo(sessionId, options): Promise<SDKSessionInfo | undefined>;
+catalog.getMessages(sessionId, options): Promise<SessionMessage[]>;
+catalog.resolveSettings(options): Promise<ResolvedSettings>;
 
 type SerializableCanUseToolRequest = {
   toolName: Parameters<CanUseTool>[0];
@@ -69,6 +79,27 @@ consumer and remains open until task close or coordinated shutdown.
 - Forward `Options.resume`, initial model, and permission mode when opening a
   session. Existing live sessions use `setModel()` and
   `setPermissionMode()`; product state rules remain in `TaskManager`.
+- Discover and read local Claude sessions only through `listSessions`,
+  `getSessionInfo`, and `getSessionMessages`. Never locate or parse
+  `~/.claude` files. Preserve every returned `SDKSessionInfo` and
+  `SessionMessage` object; pagination cursors remain outside SDK rows.
+- Session-centric Queries omit PocketPilot model, permission-mode, and effort
+  startup overrides. A selected session supplies only `Options.resume`; a new
+  conversation supplies cwd only. Install the raw subscriber before opening
+  either Query so the original `system/init` reaches the client unchanged.
+- Query composer discovery uses `supportedModels()` and each model's
+  `supportedEffortLevels`; permission choices cover every pinned SDK
+  `PermissionMode`. Observe raw `system/init`/`system/status` for actual model
+  and permission state instead of projecting those messages.
+- Forward live model/mode/effort controls through `setModel()`,
+  `setPermissionMode()`, and `applyFlagSettings()` on the existing streaming
+  Query. They may run during an active turn and apply to the next turn; never
+  reopen Query or attach controls to the next `SDKUserMessage`.
+- `EffortLevel` and model discovery can include `max`, while generated
+  `Settings.effortLevel` omits it. Keep the one compatibility cast inside
+  `ClaudeSdkSession.setEffortLevel()` and still call
+  `applyFlagSettings({ effortLevel })`; never substitute deprecated
+  `setMaxThinkingTokens()`.
 
 ### 4. Validation & Error Matrix
 
@@ -82,12 +113,20 @@ consumer and remains open until task close or coordinated shutdown.
 | SDK aborts a pending tool approval | Reject with `ToolApprovalCancelledError`; do not serialize the signal or silently allow. |
 | Complete allow/deny `PermissionResult` arrives | Resolve the SDK callback with that result, including optional SDK fields. |
 | Requested permission mode is absent from the pinned SDK | Return `UNSUPPORTED_PERMISSION_MODE`; never fall back to another mode. |
+| SDK rejects model, permission, or effort | Return the control failure; retain the current Query and perform no PocketPilot fallback. |
+| Session catalog/history API fails | Translate to a safe task-domain error; never expose an SDK exception or local path. |
+| `max` effort is selected | Forward through the narrow live-settings adapter; do not reject a model-advertised SDK value. |
 
 ### 5. Good / Base / Bad Cases
 
 - Good: one open input stream accepts a raw message with `priority: "now"`,
   later accepts another while Claude is executing, and Query's raw messages
   reach the SDK socket with deep equality.
+- Good: a selected session uses `Options.resume`, emits its original init
+  object after subscription, accepts a live effort change, then receives only
+  the next raw SDK user message.
+- Base: historical messages are fetched for display and never concatenated
+  into a prompt; Claude Code alone restores and compacts context on resume.
 - Base: an idle task receives `shouldQuery: false`; the SDK appends it without
   PocketPilot inventing an active turn, while the same session remains usable.
 - Bad: converting input from `{ instruction }`, dropping `user` output, or
@@ -108,6 +147,9 @@ consumer and remains open until task close or coordinated shutdown.
 - Keep an opt-in `CLAUDE_SDK_LIVE=1` test for the pinned package that discovers
   initialization/models, submits multiple messages on one stream, changes
   controls between turns, and interrupts the session.
+- Unit-test catalog option forwarding and object identity, effort including
+  `max`/null, Query defaults versus resume, and subscribe-before-activation
+  delivery of unwrapped `system/init`.
 
 ### 7. Wrong vs Correct
 

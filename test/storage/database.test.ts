@@ -1,4 +1,11 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -77,6 +84,72 @@ describe("storage database", () => {
     expect(() => settings.get("runtime", settingsSchema)).toThrow(
       StorageDataError,
     );
+  });
+
+  it("migrates legacy task origins and terminalizes duplicate live session owners", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pocketpilot-migration-"));
+    const databasePath = join(directory, "agent.sqlite");
+    const legacyMigrations = join(directory, "legacy-drizzle");
+    const legacyMeta = join(legacyMigrations, "meta");
+    mkdirSync(legacyMeta, { recursive: true });
+    for (const migration of [
+      "0000_classy_firebrand.sql",
+      "0001_bitter_tony_stark.sql",
+      "0002_concerned_lockjaw.sql",
+    ]) {
+      copyFileSync(
+        join(process.cwd(), "drizzle", migration),
+        join(legacyMigrations, migration),
+      );
+    }
+    const journal = JSON.parse(
+      readFileSync(join(process.cwd(), "drizzle/meta/_journal.json"), "utf8"),
+    ) as { entries: unknown[] };
+    writeFileSync(
+      join(legacyMeta, "_journal.json"),
+      JSON.stringify({ ...journal, entries: journal.entries.slice(0, 3) }),
+    );
+
+    const legacy = openStorage({
+      databasePath,
+      migrationsFolder: legacyMigrations,
+    });
+    legacy.sqlite
+      .prepare(
+        "INSERT INTO tasks (id, initial_cwd, model, permission_mode, sdk_session_id, state, created_at, updated_at) VALUES (?, ?, NULL, 'default', ?, 'idle', ?, ?)",
+      )
+      .run("older", "C:\\workspace", "sdk-session", 1, 1);
+    legacy.sqlite
+      .prepare(
+        "INSERT INTO tasks (id, initial_cwd, model, permission_mode, sdk_session_id, state, created_at, updated_at) VALUES (?, ?, NULL, 'default', ?, 'executing', ?, ?)",
+      )
+      .run("newer", "C:\\workspace", "sdk-session", 2, 2);
+    legacy.close();
+
+    const migrated = openStorage({ databasePath });
+    const rows = migrated.sqlite
+      .prepare(
+        "SELECT id, origin, state, terminal_at AS terminalAt FROM tasks ORDER BY id",
+      )
+      .all();
+    expect(rows).toEqual([
+      {
+        id: "newer",
+        origin: "pocketpilot",
+        state: "executing",
+        terminalAt: null,
+      },
+      { id: "older", origin: "pocketpilot", state: "terminal", terminalAt: 1 },
+    ]);
+    expect(() =>
+      migrated.sqlite
+        .prepare(
+          "INSERT INTO tasks (id, initial_cwd, origin, sdk_session_id, state, created_at, updated_at) VALUES (?, ?, 'claude-session', ?, 'idle', ?, ?)",
+        )
+        .run("duplicate", "C:\\workspace", "sdk-session", 3, 3),
+    ).toThrow();
+    migrated.close();
+    temporaryDirectories.push(directory);
   });
 });
 

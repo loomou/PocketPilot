@@ -18,10 +18,15 @@ const expectedPaths = [
   "/v1/pair/{pairingId}/claim",
   "/v1/pair/{pairingId}/claim-challenge",
   "/v1/pair/{pairingId}/register",
+  "/v1/sessions",
+  "/v1/sessions/{sessionId}/attach",
+  "/v1/sessions/{sessionId}/messages",
   "/v1/tasks",
   "/v1/tasks/{taskId}",
   "/v1/tasks/{taskId}/approvals/{requestId}",
   "/v1/tasks/{taskId}/close",
+  "/v1/tasks/{taskId}/composer-options",
+  "/v1/tasks/{taskId}/effort",
   "/v1/tasks/{taskId}/interrupt",
   "/v1/tasks/{taskId}/model",
   "/v1/tasks/{taskId}/permission-mode",
@@ -154,6 +159,19 @@ describe("mobile OpenAPI generation", () => {
     );
     expect(sdk.notes.join(" ")).toContain("no PocketPilot wrapper");
     expect(sdk.notes.join(" ")).toContain("afterUuid");
+    expect(sdk.notes.join(" ")).toContain("before activating");
+    const historyOperation =
+      document.paths["/v1/sessions/{sessionId}/messages"]?.get;
+    const historySerialized = JSON.stringify(historyOperation);
+    for (const contract of [
+      "beforeUuid",
+      "hasMoreBefore",
+      "HISTORY_CURSOR_STALE",
+      "includeSystemMessages",
+      "@anthropic-ai/claude-agent-sdk@0.3.210",
+    ]) {
+      expect(historySerialized).toContain(contract);
+    }
     expect(
       eventSubscriptionMessageSchema.safeParse({
         afterCursor: 3,

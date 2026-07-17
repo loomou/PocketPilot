@@ -1,5 +1,6 @@
 import type {
   CanUseTool,
+  EffortLevel,
   ModelInfo,
   Options,
   PermissionMode,
@@ -22,6 +23,24 @@ export const pinnedPermissionModes: readonly PermissionMode[] = [
   "auto",
 ];
 
+export const pinnedEffortLevels = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const satisfies readonly EffortLevel[];
+
+const effortLevelCoverage: Record<EffortLevel, true> = {
+  low: true,
+  medium: true,
+  high: true,
+  xhigh: true,
+  max: true,
+};
+
+void effortLevelCoverage;
+
 // A newly added SDK permission mode must be considered deliberately before an
 // SDK upgrade can compile. The product must expose every installed SDK mode.
 const permissionModeCoverage: Record<PermissionMode, true> = {
@@ -37,6 +56,7 @@ void permissionModeCoverage;
 
 export type ClaudeSdkQuery = Pick<
   Query,
+  | "applyFlagSettings"
   | "initializationResult"
   | "interrupt"
   | "setModel"
@@ -114,6 +134,16 @@ export class ClaudeSdkSession {
 
   public async setPermissionMode(mode: PermissionMode): Promise<void> {
     await this.#query.setPermissionMode(mode);
+  }
+
+  public async setEffortLevel(effortLevel: EffortLevel | null): Promise<void> {
+    // The generated Settings type omits the SDK's session-only `max` effort,
+    // although EffortLevel, ModelInfo and the live control protocol support it.
+    // Keep that declaration/runtime mismatch isolated at this adapter boundary.
+    const settings = { effortLevel } as unknown as Parameters<
+      ClaudeSdkQuery["applyFlagSettings"]
+    >[0];
+    await this.#query.applyFlagSettings(settings);
   }
 
   /** Adds the next raw SDK user message to the Query's long-lived input. */

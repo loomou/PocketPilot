@@ -1,4 +1,5 @@
 import type {
+  EffortLevel,
   ModelInfo,
   PermissionMode,
   SDKControlInitializeResponse,
@@ -32,6 +33,11 @@ function createFakeQuery(
 
   return {
     calls,
+    async applyFlagSettings(settings): Promise<void> {
+      calls.push(
+        `effort:${String((settings as { effortLevel?: EffortLevel | null }).effortLevel)}`,
+      );
+    },
     async initializationResult(): Promise<SDKControlInitializeResponse> {
       throw new Error(
         "Initialization is exercised by the opt-in live SDK test.",
@@ -76,6 +82,8 @@ describe("Claude SDK session adapter", () => {
     session.submit(sdkUserMessage("later instruction"));
     await session.setModel("sonnet");
     await session.setPermissionMode("plan");
+    await session.setEffortLevel("max");
+    await session.setEffortLevel(null);
     await session.interrupt();
     session.close();
 
@@ -94,6 +102,8 @@ describe("Claude SDK session adapter", () => {
     expect(fakeQuery.calls).toEqual([
       "model:sonnet",
       "permission:plan",
+      "effort:max",
+      "effort:null",
       "interrupt",
       "close",
     ]);

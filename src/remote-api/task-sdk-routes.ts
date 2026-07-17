@@ -64,7 +64,10 @@ export type TaskSdkRouteOptions = {
   };
   deviceAuthService: AccessDeviceAuthenticator;
   eventJournal: Pick<TaskEventJournal, "subscribeSdk">;
-  taskManager: Pick<TaskManager, "getTask" | "submitSdkMessage">;
+  taskManager: Pick<
+    TaskManager,
+    "activateSdkSession" | "getTask" | "submitSdkMessage"
+  >;
 };
 
 /** Registers the raw, task-specific Claude SDK WebSocket transport. */
@@ -153,6 +156,12 @@ export function registerTaskSdkRoutes(
         unsubscribeSdk();
         return;
       }
+
+      void options.taskManager.activateSdkSession(taskId).catch((error) => {
+        if (!closed) {
+          terminate(taskSubmissionFailure(error));
+        }
+      });
 
       socket.on(
         "message",

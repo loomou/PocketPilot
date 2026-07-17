@@ -15,6 +15,11 @@ Claude configuration, and API keys do not belong in these tables.
 
 ```ts
 openStorage({ databasePath, migrationsFolder? }): StorageConnection;
+tasks.origin: "pocketpilot" | "claude-session";
+tasks.permission_mode: string | null;
+tasks.sdk_session_id: string | null;
+UNIQUE tasks(sdk_session_id)
+  WHERE sdk_session_id IS NOT NULL AND state <> "terminal";
 readAgentMasterKey(environment?): Buffer;
 readNewAgentMasterKey(environment?): Buffer;
 ensureMasterKeyVerifier(sqlite, masterKey): void;
@@ -77,6 +82,15 @@ live in `drizzle/`. Runtime migration uses
 - Store non-secret settings only through `SettingsRepository` with a feature
   Zod schema on both write and read. Do not deserialize SQLite JSON with an
   unchecked cast.
+- Task rows store runtime metadata only. `claude-session` rows keep nullable
+  SDK-owned startup controls and may persist the SDK session ID, but never a
+  summary, prompt, message, tool payload, history page, or Claude settings
+  object. Existing `pocketpilot` rows migrate with that explicit origin.
+- A partial unique index permits historical terminal rows but prevents two
+  live runtime owners for one non-null SDK session ID. Before index creation,
+  migration ranks duplicate non-terminal rows by `updated_at`, `created_at`,
+  and `id`, keeps the newest, and terminalizes the rest. Generate the schema
+  migration first, then review custom data-migration ordering before commit.
 
 ### 4. Validation & Error Matrix
 
@@ -93,12 +107,17 @@ live in `drizzle/`. Runtime migration uses
 | Reset confirmation differs from `RESET_AGENT_DATA` | `StorageResetConfirmationError`; make no changes. |
 | Stored setting JSON is invalid or fails its Zod schema | `StorageDataError`; do not return the value. |
 | Packaged migration journal is absent | Startup fails before binding listeners; release validation must reject the package. |
+| Legacy tasks have no origin column | Migration writes `pocketpilot`; operation-result parsing also defaults missing legacy origin safely. |
+| Duplicate non-terminal SDK session IDs exist | Keep the newest owner, terminalize older rows, then create the partial unique index. |
+| Runtime attempts a second live owner | SQLite rejects the insert/update; return `CLAUDE_SESSION_CONFLICT` without starting another Query. |
 
 ### 5. Good / Base / Bad Cases
 
 - Good: create a 32-byte key, encrypt a device refresh secret using
   `{ table: 'device_credentials', column: 'secret_envelope', recordId }`, then
   decrypt it with precisely the same context.
+- Good: an attached task stores cwd, lifecycle, origin, and SDK session ID
+  only; history is read from the SDK for each request and never reaches SQLite.
 - Base: the first secure startup of a new database establishes its persistent
   key verifier before exposing either listener.
 - Bad: encrypt one table row and copy its envelope to another record ID. AAD
@@ -108,6 +127,9 @@ live in `drizzle/`. Runtime migration uses
 
 - Native SQLite smoke test opens a migrated file under Node 24 and confirms
   `foreign_keys` is enabled.
+- Migration-test a legacy database with duplicate live SDK session owners;
+  assert origins backfill, only the newest remains non-terminal, and a later
+  duplicate insert violates the partial unique index.
 - Package inspection proves `dist/drizzle/meta/_journal.json` and every
   generated SQL migration ship with the built CLI. A fresh-storage built-CLI
   smoke test must complete migrations before listener startup.

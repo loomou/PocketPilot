@@ -3,9 +3,13 @@ import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type {
+  EffortLevel,
+  ModelInfo,
   PermissionMode,
   PermissionResult,
+  SDKSessionInfo,
   SDKUserMessage,
+  SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import {
@@ -14,11 +18,17 @@ import {
   type SerializableCanUseToolRequest,
 } from "../claude-sdk/permission-gate.js";
 import {
+  type ClaudeSdkInitialization,
   type ClaudeSdkSession,
   type OpenClaudeSdkSessionOptions,
   openClaudeSdkSession,
+  pinnedEffortLevels,
   pinnedPermissionModes,
 } from "../claude-sdk/session.js";
+import {
+  type ClaudeSessionCatalog,
+  installedClaudeSessionCatalog,
+} from "../claude-sdk/session-catalog.js";
 import type { StorageDatabase } from "../storage/database.js";
 import type { SettingsRepository } from "../storage/settings-repository.js";
 import { TaskError } from "./errors.js";
@@ -45,11 +55,54 @@ const createTaskInputSchema = operationIdentitySchema.extend({
   workspaceRiskAccepted: z.boolean(),
 });
 
+const sessionOperationInputSchema = operationIdentitySchema.extend({
+  workspace: z.string().trim().min(1).max(4_096),
+  workspaceRiskAccepted: z.boolean(),
+});
+
+const attachClaudeSessionInputSchema = sessionOperationInputSchema.extend({
+  sessionId: z.string().trim().min(1).max(256),
+});
+
+const listClaudeSessionsInputSchema = z.object({
+  limit: z.number().int().min(1).max(100).default(50),
+  offset: z.number().int().min(0).default(0),
+  workspace: z.string().trim().min(1).max(4_096),
+});
+
+const readClaudeSessionHistoryInputSchema = z.object({
+  beforeUuid: z.string().trim().min(1).max(256).optional(),
+  includeSystemMessages: z.boolean().default(false),
+  limit: z.number().int().min(1).max(50).default(50),
+  sessionId: z.string().trim().min(1).max(256),
+  workspace: z.string().trim().min(1).max(4_096),
+});
+
 const taskIdSchema = z.uuid();
 const deviceIdSchema = z.uuid();
 
 export type TaskOperationIdentity = z.infer<typeof operationIdentitySchema>;
 export type CreateTaskInput = z.infer<typeof createTaskInputSchema>;
+export type SessionOperationInput = z.infer<typeof sessionOperationInputSchema>;
+
+export type ClaudeSessionListPage = {
+  nextOffset: number | null;
+  sessions: SDKSessionInfo[];
+};
+
+export type ClaudeSessionHistoryPage = {
+  messages: SessionMessage[];
+  page: {
+    beforeUuid: string | null;
+    hasMoreBefore: boolean;
+  };
+};
+
+export type TaskComposerOptions = {
+  effortLevel: EffortLevel | null;
+  models: ModelInfo[];
+  supportedPermissionModes: PermissionMode[];
+};
 
 export type TaskPathResolver = {
   canonicalize(path: string): Promise<string>;
@@ -59,8 +112,10 @@ export type TaskSdkSession = Pick<
   ClaudeSdkSession,
   | "close"
   | "events"
+  | "initialize"
   | "interrupt"
   | "sessionId"
+  | "setEffortLevel"
   | "setModel"
   | "setPermissionMode"
   | "submit"
@@ -71,6 +126,7 @@ export type TaskSdkSessionFactory = (
 ) => TaskSdkSession;
 
 export type TaskManagerOptions = {
+  claudeSessionCatalog?: ClaudeSessionCatalog;
   createSession?: TaskSdkSessionFactory;
   eventSink?: TaskEventSink;
   now?: () => number;
@@ -81,7 +137,9 @@ export type TaskManagerOptions = {
 };
 
 type LiveTask = {
+  composerInitialized: boolean;
   closed: boolean;
+  effortLevel: EffortLevel | null;
   eventLoop: Promise<void> | undefined;
   interrupting: boolean;
   pendingQueryCount: number;
@@ -89,6 +147,7 @@ type LiveTask = {
     | { approval: PendingToolApproval; requestId: string }
     | undefined;
   session: TaskSdkSession | undefined;
+  supportedModels: ModelInfo[];
 };
 
 type OperationExecution = {
@@ -103,7 +162,9 @@ type OperationExecution = {
  * the SDK remains the canonical conversation owner.
  */
 export class TaskManager {
+  readonly #attachmentLane = new SerialExecutor();
   readonly #capacityLane = new SerialExecutor();
+  readonly #claudeSessionCatalog: ClaudeSessionCatalog;
   readonly #createSession: TaskSdkSessionFactory;
   readonly #eventSink: TaskEventSink | undefined;
   readonly #inFlightOperations = new Map<
@@ -111,6 +172,7 @@ export class TaskManager {
     Promise<TaskOperationResult>
   >();
   readonly #liveTasks = new Map<string, LiveTask>();
+  readonly #historyLanes = new Map<string, SerialExecutor>();
   readonly #now: () => number;
   readonly #pathResolver: TaskPathResolver;
   readonly #repository: TaskRepository;
@@ -120,6 +182,8 @@ export class TaskManager {
   #shuttingDown = false;
 
   public constructor(options: TaskManagerOptions) {
+    this.#claudeSessionCatalog =
+      options.claudeSessionCatalog ?? installedClaudeSessionCatalog;
     this.#createSession = options.createSession ?? openClaudeSdkSession;
     this.#eventSink = options.eventSink;
     this.#now = options.now ?? Date.now;
@@ -154,6 +218,247 @@ export class TaskManager {
     return this.requireTask(taskId);
   }
 
+  public async listClaudeSessions(input: {
+    limit?: number;
+    offset?: number;
+    workspace: string;
+  }): Promise<ClaudeSessionListPage> {
+    const parsed = listClaudeSessionsInputSchema.safeParse(input);
+    if (!parsed.success) {
+      throw invalidTaskOperationError();
+    }
+    const settings = readTaskRuntimeSettings(this.#settingsRepository);
+    const workspace = await this.authorizeInitialWorkspace(
+      parsed.data.workspace,
+      settings.workspaceRoots,
+    );
+
+    let sdkSessions: SDKSessionInfo[];
+    try {
+      sdkSessions = await this.#claudeSessionCatalog.list({
+        dir: workspace,
+        includeProgrammatic: true,
+        includeWorktrees: false,
+        limit: parsed.data.limit,
+        offset: parsed.data.offset,
+      });
+    } catch {
+      throw taskSessionUnavailableError(
+        "Claude sessions are currently unavailable.",
+      );
+    }
+
+    const sessions: SDKSessionInfo[] = [];
+    for (const sdkSession of sdkSessions) {
+      if (
+        sdkSession.cwd === undefined ||
+        (await this.isSessionCwdAuthorized(workspace, sdkSession.cwd))
+      ) {
+        sessions.push(sdkSession);
+      }
+    }
+
+    return {
+      nextOffset:
+        sdkSessions.length < parsed.data.limit
+          ? null
+          : parsed.data.offset + sdkSessions.length,
+      sessions,
+    };
+  }
+
+  public async readClaudeSessionHistory(input: {
+    beforeUuid?: string;
+    includeSystemMessages?: boolean;
+    limit?: number;
+    sessionId: string;
+    workspace: string;
+  }): Promise<ClaudeSessionHistoryPage> {
+    const parsed = readClaudeSessionHistoryInputSchema.safeParse(input);
+    if (!parsed.success) {
+      throw invalidTaskOperationError();
+    }
+    const settings = readTaskRuntimeSettings(this.#settingsRepository);
+    const workspace = await this.authorizeInitialWorkspace(
+      parsed.data.workspace,
+      settings.workspaceRoots,
+    );
+    const laneKey = `${workspace}\0${parsed.data.sessionId}`;
+    return this.runHistoryLane(laneKey, async () => {
+      await this.requireAuthorizedClaudeSession(
+        workspace,
+        parsed.data.sessionId,
+      );
+
+      let messages: SessionMessage[];
+      try {
+        messages = await this.#claudeSessionCatalog.getMessages(
+          parsed.data.sessionId,
+          {
+            dir: workspace,
+            includeSystemMessages: parsed.data.includeSystemMessages,
+          },
+        );
+      } catch {
+        throw new TaskError(
+          "CLAUDE_HISTORY_UNAVAILABLE",
+          409,
+          "Claude session history is temporarily unavailable.",
+        );
+      }
+
+      const end =
+        parsed.data.beforeUuid === undefined
+          ? messages.length
+          : messages.findIndex(
+              (message) => message.uuid === parsed.data.beforeUuid,
+            );
+      if (end < 0) {
+        throw new TaskError(
+          "HISTORY_CURSOR_STALE",
+          409,
+          "The history cursor is stale; reload the latest history page.",
+        );
+      }
+      const start = Math.max(0, end - parsed.data.limit);
+      const pageMessages = messages.slice(start, end);
+      const hasMoreBefore = start > 0;
+      return {
+        messages: pageMessages,
+        page: {
+          beforeUuid:
+            hasMoreBefore && pageMessages[0] !== undefined
+              ? pageMessages[0].uuid
+              : null,
+          hasMoreBefore,
+        },
+      };
+    });
+  }
+
+  public async createClaudeConversation(
+    input: SessionOperationInput,
+  ): Promise<TaskOperationResult> {
+    const parsed = sessionOperationInputSchema.safeParse(input);
+    if (!parsed.success) {
+      throw invalidTaskOperationError();
+    }
+    this.assertWorkspaceRiskAccepted(parsed.data.workspaceRiskAccepted);
+
+    return this.executeIdempotent(parsed.data, async () =>
+      this.#attachmentLane.run(async () => {
+        this.assertAcceptingWork();
+        const settings = readTaskRuntimeSettings(this.#settingsRepository);
+        const initialCwd = await this.authorizeInitialWorkspace(
+          parsed.data.workspace,
+          settings.workspaceRoots,
+        );
+        const now = this.#now();
+        const task = this.#repository.create({
+          createdAt: now,
+          id: randomUUID(),
+          initialCwd,
+          model: null,
+          origin: "claude-session",
+          permissionMode: null,
+          sdkSessionId: null,
+        });
+        return {
+          action: "created",
+          auditResult: "workspace-risk-accepted",
+          task,
+        };
+      }),
+    );
+  }
+
+  public async attachClaudeSession(
+    input: SessionOperationInput & { sessionId: string },
+  ): Promise<TaskOperationResult> {
+    const parsed = attachClaudeSessionInputSchema.safeParse(input);
+    if (!parsed.success) {
+      throw invalidTaskOperationError();
+    }
+    this.assertWorkspaceRiskAccepted(parsed.data.workspaceRiskAccepted);
+
+    return this.executeIdempotent(parsed.data, async () =>
+      this.#attachmentLane.run(async () => {
+        this.assertAcceptingWork();
+        const settings = readTaskRuntimeSettings(this.#settingsRepository);
+        const initialCwd = await this.authorizeInitialWorkspace(
+          parsed.data.workspace,
+          settings.workspaceRoots,
+        );
+        await this.requireAuthorizedClaudeSession(
+          initialCwd,
+          parsed.data.sessionId,
+        );
+
+        const existing = this.#repository.findNonTerminalBySdkSessionId(
+          parsed.data.sessionId,
+        );
+        const task =
+          existing === undefined
+            ? this.createAttachedTask(initialCwd, parsed.data.sessionId)
+            : this.adoptAttachedTask(existing);
+        return {
+          action: "attached",
+          auditResult: "workspace-risk-accepted",
+          task,
+        };
+      }),
+    );
+  }
+
+  /** Activates only session-centric runtimes after the raw subscriber exists. */
+  public async activateSdkSession(taskId: string): Promise<void> {
+    this.assertTaskId(taskId);
+    await this.runTaskLane(taskId, async () => {
+      this.assertAcceptingWork();
+      let task = this.requireTask(taskId);
+      this.assertTaskNotTerminal(task);
+      if (task.origin !== "claude-session") {
+        return;
+      }
+      if (task.state === "interrupted") {
+        task = this.#repository.update(task.id, {
+          interruptedAt: null,
+          state: "idle",
+          updatedAt: this.#now(),
+        });
+      }
+      const liveTask = this.liveTask(task.id);
+      const session = this.ensureSession(task);
+      await this.initializeComposer(task, liveTask, session);
+    });
+  }
+
+  public async getComposerOptions(
+    taskId: string,
+  ): Promise<TaskComposerOptions> {
+    this.assertTaskId(taskId);
+    return this.runTaskLane(taskId, async () => {
+      const task = this.requireTask(taskId);
+      this.assertTaskNotTerminal(task);
+      if (task.state === "interrupted") {
+        throw interruptedTaskError();
+      }
+      const liveTask = this.liveTask(task.id);
+      const session = liveTask.session;
+      if (session === undefined) {
+        throw taskSessionUnavailableError(
+          "Connect the raw SDK stream before requesting composer options.",
+        );
+      }
+      await this.initializeComposer(task, liveTask, session);
+      return {
+        effortLevel: liveTask.effortLevel,
+        models: [...liveTask.supportedModels],
+        supportedPermissionModes: [...this.#supportedPermissionModes],
+      };
+    });
+  }
+
   public async createTask(
     input: CreateTaskInput,
   ): Promise<TaskOperationResult> {
@@ -161,13 +466,7 @@ export class TaskManager {
     if (!parsed.success) {
       throw invalidTaskOperationError();
     }
-    if (!parsed.data.workspaceRiskAccepted) {
-      throw new TaskError(
-        "WORKSPACE_SCOPE_RISK_NOT_ACCEPTED",
-        422,
-        "Task creation requires accepting the workspace scope risk.",
-      );
-    }
+    this.assertWorkspaceRiskAccepted(parsed.data.workspaceRiskAccepted);
     if (!this.isSupportedPermissionMode(parsed.data.permissionMode)) {
       throw new TaskError(
         "UNSUPPORTED_PERMISSION_MODE",
@@ -200,6 +499,7 @@ export class TaskManager {
           id: randomUUID(),
           initialCwd,
           model: parsed.data.model ?? null,
+          origin: "pocketpilot",
           permissionMode: parsed.data.permissionMode,
         });
         return {
@@ -422,13 +722,13 @@ export class TaskManager {
         if (task.state === "interrupted") {
           throw interruptedTaskError();
         }
-        if (task.state !== "idle") {
-          throw taskBusyError();
-        }
-
         const liveTask = this.liveTask(task.id);
         if (liveTask.session !== undefined) {
           await liveTask.session.setModel(input.model);
+        } else if (task.origin === "claude-session") {
+          throw taskSessionUnavailableError(
+            "Connect the raw SDK stream before changing the model.",
+          );
         }
         const current = this.requireTask(task.id);
         if (current.state === "terminal") {
@@ -438,10 +738,13 @@ export class TaskManager {
             task: current,
           };
         }
-        const updated = this.#repository.update(task.id, {
-          model: input.model ?? null,
-          updatedAt: this.#now(),
-        });
+        const updated =
+          task.origin === "claude-session"
+            ? current
+            : this.#repository.update(task.id, {
+                model: input.model ?? null,
+                updatedAt: this.#now(),
+              });
         return {
           action: "model-changed",
           auditResult: "changed",
@@ -479,6 +782,10 @@ export class TaskManager {
         const liveTask = this.liveTask(task.id);
         if (liveTask.session !== undefined) {
           await liveTask.session.setPermissionMode(permissionMode);
+        } else if (task.origin === "claude-session") {
+          throw taskSessionUnavailableError(
+            "Connect the raw SDK stream before changing the permission mode.",
+          );
         }
         const current = this.requireTask(task.id);
         if (current.state === "terminal") {
@@ -488,14 +795,59 @@ export class TaskManager {
             task: current,
           };
         }
-        const updated = this.#repository.update(task.id, {
-          permissionMode,
-          updatedAt: this.#now(),
-        });
+        const updated =
+          task.origin === "claude-session"
+            ? current
+            : this.#repository.update(task.id, {
+                permissionMode,
+                updatedAt: this.#now(),
+              });
         return {
           action: "permission-mode-changed",
           auditResult: "changed",
           task: updated,
+        };
+      }),
+    );
+  }
+
+  public async setEffortLevel(
+    input: {
+      effortLevel: EffortLevel | null;
+      taskId: string;
+    } & TaskOperationIdentity,
+  ): Promise<TaskOperationResult> {
+    const identity = this.parseOperationIdentity(input);
+    this.assertTaskId(input.taskId);
+    if (
+      input.effortLevel !== null &&
+      !this.isSupportedEffortLevel(input.effortLevel)
+    ) {
+      throw invalidTaskOperationError();
+    }
+
+    return this.executeIdempotent(identity, async () =>
+      this.runTaskLane(input.taskId, async () => {
+        const task = this.requireTask(input.taskId);
+        this.assertTaskNotTerminal(task);
+        if (task.state === "interrupted") {
+          throw interruptedTaskError();
+        }
+        const liveTask = this.liveTask(task.id);
+        if (liveTask.session === undefined) {
+          throw taskSessionUnavailableError(
+            "Connect the raw SDK stream before changing the effort level.",
+          );
+        }
+        await liveTask.session.setEffortLevel(input.effortLevel);
+        const current = this.requireTask(task.id);
+        if (current.state !== "terminal") {
+          liveTask.effortLevel = input.effortLevel;
+        }
+        return {
+          action: "effort-changed",
+          auditResult: current.state === "terminal" ? "task-closed" : "changed",
+          task: current,
         };
       }),
     );
@@ -525,6 +877,169 @@ export class TaskManager {
     await Promise.allSettled(interruptions);
     this.#repository.markNonTerminalTasksTerminal(this.#now());
     this.#liveTasks.clear();
+  }
+
+  private adoptAttachedTask(task: TaskSnapshot): TaskSnapshot {
+    if (
+      task.origin === "claude-session" &&
+      task.model === null &&
+      task.permissionMode === null &&
+      task.state !== "interrupted"
+    ) {
+      return task;
+    }
+    return this.#repository.update(task.id, {
+      ...(task.state === "interrupted"
+        ? { interruptedAt: null, state: "idle" as const }
+        : {}),
+      model: null,
+      origin: "claude-session",
+      permissionMode: null,
+      updatedAt: this.#now(),
+    });
+  }
+
+  private assertWorkspaceRiskAccepted(accepted: boolean): void {
+    if (!accepted) {
+      throw new TaskError(
+        "WORKSPACE_SCOPE_RISK_NOT_ACCEPTED",
+        422,
+        "The operation requires accepting the workspace scope risk.",
+      );
+    }
+  }
+
+  private createAttachedTask(
+    initialCwd: string,
+    sdkSessionId: string,
+  ): TaskSnapshot {
+    const now = this.#now();
+    try {
+      return this.#repository.create({
+        createdAt: now,
+        id: randomUUID(),
+        initialCwd,
+        model: null,
+        origin: "claude-session",
+        permissionMode: null,
+        sdkSessionId,
+      });
+    } catch {
+      const winner =
+        this.#repository.findNonTerminalBySdkSessionId(sdkSessionId);
+      if (winner !== undefined) {
+        return this.adoptAttachedTask(winner);
+      }
+      throw new TaskError(
+        "CLAUDE_SESSION_CONFLICT",
+        409,
+        "The Claude session is already attached to another runtime.",
+      );
+    }
+  }
+
+  private async initializeComposer(
+    task: TaskSnapshot,
+    liveTask: LiveTask,
+    session: TaskSdkSession,
+  ): Promise<void> {
+    if (liveTask.composerInitialized) {
+      return;
+    }
+
+    let initialization: ClaudeSdkInitialization;
+    try {
+      initialization = await session.initialize();
+    } catch {
+      throw taskSessionUnavailableError(
+        "Claude session initialization is currently unavailable.",
+      );
+    }
+
+    let effortLevel: EffortLevel | null = null;
+    try {
+      const settings = await this.#claudeSessionCatalog.resolveSettings({
+        cwd: task.initialCwd,
+      });
+      const configuredEffort = settings.effective.effortLevel;
+      if (
+        configuredEffort !== undefined &&
+        this.isSupportedEffortLevel(configuredEffort)
+      ) {
+        effortLevel = configuredEffort;
+      }
+    } catch {
+      // Query initialization remains authoritative and usable when optional
+      // settings projection is unavailable.
+    }
+
+    liveTask.supportedModels = initialization.models;
+    liveTask.effortLevel = effortLevel;
+    liveTask.composerInitialized = true;
+  }
+
+  private async isSessionCwdAuthorized(
+    workspace: string,
+    sessionCwd: string,
+  ): Promise<boolean> {
+    try {
+      const canonicalSessionCwd =
+        await this.#pathResolver.canonicalize(sessionCwd);
+      return isPathWithinRoot(workspace, canonicalSessionCwd);
+    } catch {
+      return false;
+    }
+  }
+
+  private async requireAuthorizedClaudeSession(
+    workspace: string,
+    sessionId: string,
+  ): Promise<SDKSessionInfo> {
+    let session: SDKSessionInfo | undefined;
+    try {
+      session = await this.#claudeSessionCatalog.getInfo(sessionId, {
+        dir: workspace,
+      });
+    } catch {
+      throw taskSessionUnavailableError(
+        "The selected Claude session is currently unavailable.",
+      );
+    }
+    if (session === undefined) {
+      throw claudeSessionNotFoundError();
+    }
+    if (session.cwd !== undefined) {
+      if (!(await this.isSessionCwdAuthorized(workspace, session.cwd))) {
+        throw claudeSessionNotFoundError();
+      }
+      return session;
+    }
+
+    let workspaceSessions: SDKSessionInfo[];
+    try {
+      workspaceSessions = await this.#claudeSessionCatalog.list({
+        dir: workspace,
+        includeProgrammatic: true,
+        includeWorktrees: false,
+      });
+    } catch {
+      throw taskSessionUnavailableError(
+        "The selected Claude session is currently unavailable.",
+      );
+    }
+    const workspaceSession = workspaceSessions.find(
+      (candidate) => candidate.sessionId === sessionId,
+    );
+    if (workspaceSession === undefined) {
+      throw claudeSessionNotFoundError();
+    }
+    if (
+      workspaceSession.cwd !== undefined &&
+      !(await this.isSessionCwdAuthorized(workspace, workspaceSession.cwd))
+    ) {
+      throw claudeSessionNotFoundError();
+    }
+    return session;
   }
 
   private async authorizeInitialWorkspace(
@@ -633,14 +1148,20 @@ export class TaskManager {
       return liveTask.session;
     }
 
-    const permissionMode = this.permissionModeForTask(task);
+    liveTask.composerInitialized = false;
+    liveTask.effortLevel = null;
+    liveTask.supportedModels = [];
     const session = this.#createSession({
       canUseTool: createToolApprovalHandler((approval) => {
         this.registerPendingApproval(task.id, approval);
       }),
       cwd: task.initialCwd,
-      ...(task.model === null ? {} : { model: task.model }),
-      permissionMode,
+      ...(task.origin === "pocketpilot" && task.model !== null
+        ? { model: task.model }
+        : {}),
+      ...(task.origin === "pocketpilot"
+        ? { permissionMode: this.permissionModeForTask(task) }
+        : {}),
       ...(task.sdkSessionId === null ? {} : { resume: task.sdkSessionId }),
     });
     liveTask.session = session;
@@ -702,16 +1223,25 @@ export class TaskManager {
     );
   }
 
+  private isSupportedEffortLevel(
+    effortLevel: string,
+  ): effortLevel is EffortLevel {
+    return pinnedEffortLevels.some((supported) => supported === effortLevel);
+  }
+
   private liveTask(taskId: string): LiveTask {
     let liveTask = this.#liveTasks.get(taskId);
     if (liveTask === undefined) {
       liveTask = {
+        composerInitialized: false,
         closed: false,
+        effortLevel: null,
         eventLoop: undefined,
         interrupting: false,
         pendingApproval: undefined,
         pendingQueryCount: 0,
         session: undefined,
+        supportedModels: [],
       };
       this.#liveTasks.set(taskId, liveTask);
     }
@@ -727,7 +1257,10 @@ export class TaskManager {
   }
 
   private permissionModeForTask(task: TaskSnapshot): PermissionMode {
-    if (!this.isSupportedPermissionMode(task.permissionMode)) {
+    if (
+      task.permissionMode === null ||
+      !this.isSupportedPermissionMode(task.permissionMode)
+    ) {
       throw new TaskError(
         "UNSUPPORTED_PERMISSION_MODE",
         422,
@@ -811,6 +1344,18 @@ export class TaskManager {
     if (lane === undefined) {
       lane = new SerialExecutor();
       this.#taskLanes.set(taskId, lane);
+    }
+    return lane.run(operation);
+  }
+
+  private runHistoryLane<T>(
+    key: string,
+    operation: () => Promise<T> | T,
+  ): Promise<T> {
+    let lane = this.#historyLanes.get(key);
+    if (lane === undefined) {
+      lane = new SerialExecutor();
+      this.#historyLanes.set(key, lane);
     }
     return lane.run(operation);
   }
@@ -988,6 +1533,14 @@ function interruptedTaskError(): TaskError {
   );
 }
 
+function claudeSessionNotFoundError(): TaskError {
+  return new TaskError(
+    "CLAUDE_SESSION_NOT_FOUND",
+    404,
+    "The Claude session was not found in the authorized workspace.",
+  );
+}
+
 function invalidTaskOperationError(): TaskError {
   return new TaskError(
     "INVALID_TASK_OPERATION",
@@ -1006,10 +1559,6 @@ function isPathWithinRoot(root: string, candidate: string): boolean {
   );
 }
 
-function taskBusyError(): TaskError {
-  return new TaskError(
-    "TASK_BUSY",
-    409,
-    "The task is busy; interrupt the current turn before sending new work.",
-  );
+function taskSessionUnavailableError(message: string): TaskError {
+  return new TaskError("TASK_SESSION_UNAVAILABLE", 409, message);
 }

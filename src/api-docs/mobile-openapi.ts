@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   buildRemoteApiApp,
+  type RemoteApiAppOptions,
   type RemoteApiDeviceAuthService,
 } from "../remote-api/app.js";
 import {
@@ -12,11 +13,9 @@ import {
   eventSubscriptionMessageSchema,
   taskEventRouteDocumentation,
 } from "../remote-api/task-event-routes.js";
-import type { TaskRouteManager } from "../remote-api/task-routes.js";
 import {
   sdkUserMessageTransportSchema,
   sdkWebSocketClose,
-  type TaskSdkRouteOptions,
   taskSdkRouteDocumentation,
 } from "../remote-api/task-sdk-routes.js";
 
@@ -172,6 +171,8 @@ function addSdkWebSocketExtension(document: MobileOpenApiDocument): void {
       notes: [
         "Wire types are owned by @anthropic-ai/claude-agent-sdk@0.3.210.",
         "Client frames are raw SDKUserMessage objects and server frames are raw SDKMessage objects with no PocketPilot wrapper.",
+        "For a session-centric runtime, PocketPilot installs this raw subscriber before activating the new or resumed Query so the original system/init message is delivered unchanged.",
+        "History uses the separate SDK SessionMessage API; clients virtualize, prepend older pages, and deduplicate history/live rows by SDK UUID where available.",
         "afterUuid resumes after a retained SDK UUID; a missing or unknown value replays the current active turn from its beginning.",
         "Swagger UI displays this contract but does not execute WebSocket messages.",
       ],
@@ -200,17 +201,25 @@ const documentationDeviceAuthService: RemoteApiDeviceAuthService = {
   registerPairingDevice: unavailableDocumentationHandler,
 };
 
-const documentationTaskManager: TaskRouteManager &
-  TaskSdkRouteOptions["taskManager"] = {
+const documentationTaskManager: NonNullable<
+  RemoteApiAppOptions["taskManager"]
+> = {
+  activateSdkSession: unavailableDocumentationHandler,
+  attachClaudeSession: unavailableDocumentationHandler,
   authorizedWorkspaceRoots: unavailableDocumentationHandler,
   closeTask: unavailableDocumentationHandler,
   createTask: unavailableDocumentationHandler,
+  createClaudeConversation: unavailableDocumentationHandler,
+  getComposerOptions: unavailableDocumentationHandler,
   getTask: unavailableDocumentationHandler,
   interruptTask: unavailableDocumentationHandler,
   listTasks: unavailableDocumentationHandler,
+  listClaudeSessions: unavailableDocumentationHandler,
+  readClaudeSessionHistory: unavailableDocumentationHandler,
   resolveApproval: unavailableDocumentationHandler,
   resumeTask: unavailableDocumentationHandler,
   setModel: unavailableDocumentationHandler,
+  setEffortLevel: unavailableDocumentationHandler,
   setPermissionMode: unavailableDocumentationHandler,
   submitSdkMessage: unavailableDocumentationHandler,
   supportedPermissionModes: unavailableDocumentationHandler,
