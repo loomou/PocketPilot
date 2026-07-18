@@ -4,6 +4,7 @@ import { type FormEvent, useCallback, useEffect, useState } from "react";
 import {
   approvePairing,
   createPairing,
+  LocalAdminApiError,
   type LocalAdminSnapshot,
   loadLocalAdminSnapshot,
   revokeDevice,
@@ -26,8 +27,10 @@ import {
 } from "@/features/administration/devices-view";
 import { MaintenanceView } from "@/features/administration/maintenance-view";
 import { OverviewView } from "@/features/administration/overview-view";
+import { useI18n } from "@/lib/i18n/i18n-context";
 
 export function AdministrationPage() {
+  const { messages } = useI18n();
   const [activeSection, setActiveSection] = useState<AdminSection>("overview");
   const [snapshot, setSnapshot] = useState<LocalAdminSnapshot>();
   const [configurationDraft, setConfigurationDraft] =
@@ -46,7 +49,7 @@ export function AdministrationPage() {
       setConfigurationDraft(next.configuration);
       if (!preserveNotice) setNotice(undefined);
     } catch (error) {
-      setNotice({ kind: "error", message: errorMessage(error) });
+      setNotice(errorNotice(error));
     }
   }, []);
 
@@ -70,12 +73,9 @@ export function AdministrationPage() {
       const configuration = { runtime, tasks };
       setSnapshot({ ...snapshot, configuration });
       setConfigurationDraft(configuration);
-      setNotice({
-        kind: "success",
-        message: "配置已保存。监听器更改将在下次启动时生效。",
-      });
+      setNotice({ kind: "success", code: "configurationSaved" });
     } catch (error) {
-      setNotice({ kind: "error", message: errorMessage(error) });
+      setNotice(errorNotice(error));
     } finally {
       setBusyAction(undefined);
     }
@@ -100,10 +100,10 @@ export function AdministrationPage() {
         pairingId: createdPairing.pairingId,
         qrUrl: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
       });
-      setNotice({ kind: "success", message: "配对二维码已生成。" });
+      setNotice({ kind: "success", code: "pairingQrGenerated" });
       await refresh(true);
     } catch (error) {
-      setNotice({ kind: "error", message: errorMessage(error) });
+      setNotice(errorNotice(error));
     } finally {
       setBusyAction(undefined);
     }
@@ -120,10 +120,10 @@ export function AdministrationPage() {
         delete next[pairingId];
         return next;
       });
-      setNotice({ kind: "success", message: "设备配对已批准。" });
+      setNotice({ kind: "success", code: "pairingApproved" });
       await refresh(true);
     } catch (error) {
-      setNotice({ kind: "error", message: errorMessage(error) });
+      setNotice(errorNotice(error));
     } finally {
       setBusyAction(undefined);
     }
@@ -134,10 +134,10 @@ export function AdministrationPage() {
     setBusyAction(`revoke:${deviceId}`);
     try {
       await revokeDevice(snapshot.csrfToken, deviceId);
-      setNotice({ kind: "success", message: "设备访问权限已撤销。" });
+      setNotice({ kind: "success", code: "deviceRevoked" });
       await refresh(true);
     } catch (error) {
-      setNotice({ kind: "error", message: errorMessage(error) });
+      setNotice(errorNotice(error));
     } finally {
       setBusyAction(undefined);
     }
@@ -158,7 +158,7 @@ export function AdministrationPage() {
       running={snapshot?.status.status === "running"}
     >
       {snapshot === undefined || configurationDraft === undefined ? (
-        <LoadingState failed={notice?.kind === "error"} />
+        <LoadingState failed={notice?.kind === "error"} messages={messages} />
       ) : (
         <ActiveView
           activeSection={activeSection}
@@ -262,18 +262,24 @@ function ActiveView({
   }
 }
 
-function LoadingState({ failed }: { failed: boolean }) {
+function LoadingState({
+  failed,
+  messages,
+}: {
+  failed: boolean;
+  messages: ReturnType<typeof useI18n>["messages"];
+}) {
   return (
     <div className="flex min-h-[520px] items-center justify-center rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="max-w-sm text-center">
         <span className="mx-auto block size-8 animate-pulse rounded-full bg-slate-200" />
         <p className="mt-4 text-sm font-medium">
-          {failed ? "本地 Agent 数据暂不可用" : "正在加载本地 Agent 数据…"}
+          {failed ? messages.errors.loadingFailed : messages.shell.loadingAgent}
         </p>
         <p className="mt-1 text-xs leading-5 text-slate-500">
           {failed
-            ? "控制台框架仍可使用。本地 Agent 就绪后请点击“刷新”。"
-            : "正在读取配置、状态、设备、配对与审计记录。"}
+            ? messages.errors.loadingDescriptionFailed
+            : messages.errors.loadingDescription}
         </p>
       </div>
     </div>
@@ -287,6 +293,15 @@ function sameConfiguration(
   return JSON.stringify(current) === JSON.stringify(draft);
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "本地管理请求失败。";
+function errorNotice(error: unknown): Notice {
+  if (error instanceof LocalAdminApiError) {
+    if (error.code === "LOCAL_ADMIN_RESPONSE_INVALID") {
+      return { kind: "error", code: "invalidResponse" };
+    }
+    if (error.code === "LOCAL_ADMIN_REQUEST_FAILED") {
+      return { kind: "error", code: "localRequestFailed" };
+    }
+    return { kind: "error", message: error.message };
+  }
+  return { kind: "error", code: "localRequestFailed" };
 }

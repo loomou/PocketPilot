@@ -48,9 +48,10 @@ Agent and is not a second mobile/task control application.
 - The production console is desktop-only with a persistent sidebar and a
   minimum 1080px application width. Section navigation uses local React state;
   do not add a router for these five views.
-- User-facing console labels follow the approved Simplified Chinese interface.
-  Server-returned operation names, identifiers, URLs, and command strings stay
-  unchanged rather than being rewritten in components.
+- User-facing console labels support Simplified Chinese and English through
+  the registry/provider contract in `i18n-guidelines.md`. Server-returned
+  operation names, identifiers, URLs, device names, paths, and command strings
+  stay unchanged rather than being rewritten in components.
 - Configuration edits remain a local draft with an explicit dirty-state save
   bar. Runtime and task settings are saved together through the two existing
   validated writes; there is no autosave.
@@ -98,15 +99,17 @@ Agent and is not a second mobile/task control application.
   accessible names and verify the approved observable view structure.
 - Configuration tests change the local draft, assert the dirty-state save
   action, and verify the save notice appears only after both validated writes.
-- Save behavior asserts both PUT requests contain the fetched CSRF token and
-  JSON content type.
+- Save behavior asserts both PUT paths and payloads contain the expected
+  values, fetched CSRF token, and JSON content type.
 - Pairing tests assert that QR generation and code entry make no approval
   request, one Approve click sends the current pairing ID and six-digit code,
   rejected approval preserves the QR/code, and successful approval updates only
   devices while preserving staged form edits.
 - Add/Remove tests assert picker-selected payloads, volume/stale confirmation,
   current revision/count, and preservation of staged capacity/runtime values.
-- Backend/static integration separately proves the bundle is never served by
+- Locale tests assert startup resolution, immediate switching, `<html lang>`,
+  persistence, state preservation, locale-neutral notice rerendering, and the
+  opaque server-value boundary described in `i18n-guidelines.md`.- Backend/static integration separately proves the bundle is never served by
   the remote listener; a component test cannot establish listener isolation.
 - Root lint, type-check, test, and production build include the workspace.
 

@@ -11,13 +11,16 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  formatResultLabel,
   formatTimestamp,
   inputClassName,
   ResultBadge,
 } from "@/features/administration/administration-ui";
+import { useI18n } from "@/lib/i18n/i18n-context";
 import { cn } from "@/lib/utils";
 
 export function AuditView({ audits }: { audits: AuditRecord[] }) {
+  const { languageTag, messages } = useI18n();
   const [query, setQuery] = useState("");
   const [resultFilter, setResultFilter] = useState("all");
   const resultOptions = useMemo(
@@ -32,20 +35,19 @@ export function AuditView({ audits }: { audits: AuditRecord[] }) {
       return [
         audit.operation,
         audit.result,
-        audit.deviceId ?? "local",
+        formatResultLabel(audit.result, messages),
+        audit.deviceId ?? messages.audit.local,
         audit.taskId ?? "",
       ].some((value) => value.toLowerCase().includes(normalizedQuery));
     });
-  }, [audits, query, resultFilter]);
+  }, [audits, messages, query, resultFilter]);
   const hasFilters = query !== "" || resultFilter !== "all";
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>审计记录</CardTitle>
-        <CardDescription>
-          搜索当前 Agent 快照中的操作、结果、设备与任务元数据。
-        </CardDescription>
+        <CardTitle>{messages.audit.title}</CardTitle>
+        <CardDescription>{messages.audit.description}</CardDescription>
       </CardHeader>
       <CardContent className="p-0">
         <div className="flex items-center gap-3 border-y border-slate-200 bg-slate-50 px-5 py-3">
@@ -55,16 +57,16 @@ export function AuditView({ audits }: { audits: AuditRecord[] }) {
               className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400"
             />
             <input
-              aria-label="搜索审计记录"
+              aria-label={messages.audit.searchAria}
               className={cn(inputClassName, "pl-9")}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索操作、设备或任务 ID…"
+              placeholder={messages.audit.searchPlaceholder}
               type="search"
               value={query}
             />
           </div>
           <label className="sr-only" htmlFor="audit-result-filter">
-            按结果筛选审计记录
+            {messages.audit.filterLabel}
           </label>
           <select
             className={cn(inputClassName, "w-44")}
@@ -72,10 +74,10 @@ export function AuditView({ audits }: { audits: AuditRecord[] }) {
             onChange={(event) => setResultFilter(event.target.value)}
             value={resultFilter}
           >
-            <option value="all">全部结果</option>
+            <option value="all">{messages.audit.allResults}</option>
             {resultOptions.map((result) => (
               <option key={result} value={result}>
-                {result}
+                {formatResultLabel(result, messages)}
               </option>
             ))}
           </select>
@@ -90,7 +92,7 @@ export function AuditView({ audits }: { audits: AuditRecord[] }) {
               variant="outline"
             >
               <X aria-hidden="true" className="size-3.5" />
-              重置筛选
+              {messages.audit.resetFilters}
             </Button>
           ) : null}
         </div>
@@ -101,12 +103,14 @@ export function AuditView({ audits }: { audits: AuditRecord[] }) {
               <Search aria-hidden="true" className="size-5" />
             </span>
             <h3 className="mt-4 text-sm font-semibold">
-              {audits.length === 0 ? "暂无审计记录" : "没有匹配的审计记录"}
+              {audits.length === 0
+                ? messages.audit.empty
+                : messages.audit.noMatches}
             </h3>
             <p className="mt-1 max-w-md text-sm leading-6 text-slate-500">
               {audits.length === 0
-                ? "本地 Agent 尚未返回任何保留的审计元数据。"
-                : "请尝试其他搜索词，或重置当前结果筛选。"}
+                ? messages.audit.emptyDescription
+                : messages.audit.noMatchesDescription}
             </p>
             {hasFilters ? (
               <Button
@@ -119,7 +123,7 @@ export function AuditView({ audits }: { audits: AuditRecord[] }) {
                 type="button"
                 variant="outline"
               >
-                重置筛选
+                {messages.audit.resetFilters}
               </Button>
             ) : null}
           </div>
@@ -128,24 +132,26 @@ export function AuditView({ audits }: { audits: AuditRecord[] }) {
             <table className="w-full min-w-[900px] border-collapse text-left text-sm">
               <thead className="bg-white text-xs font-medium text-slate-500">
                 <tr>
-                  <th className="px-5 py-3">时间</th>
-                  <th className="px-5 py-3">操作</th>
-                  <th className="px-5 py-3">设备</th>
-                  <th className="px-5 py-3">任务</th>
-                  <th className="px-5 py-3">结果</th>
+                  <th className="px-5 py-3">{messages.audit.table.time}</th>
+                  <th className="px-5 py-3">
+                    {messages.audit.table.operation}
+                  </th>
+                  <th className="px-5 py-3">{messages.audit.table.device}</th>
+                  <th className="px-5 py-3">{messages.audit.table.task}</th>
+                  <th className="px-5 py-3">{messages.audit.table.result}</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredAudits.map((audit) => (
                   <tr className="border-t border-slate-100" key={audit.id}>
                     <td className="whitespace-nowrap px-5 py-3 text-xs text-slate-500">
-                      {formatTimestamp(audit.occurredAt)}
+                      {formatTimestamp(audit.occurredAt, languageTag)}
                     </td>
                     <td className="px-5 py-3 font-mono text-xs">
                       {audit.operation}
                     </td>
                     <td className="max-w-56 truncate px-5 py-3 font-mono text-xs text-slate-500">
-                      {audit.deviceId ?? "本地"}
+                      {audit.deviceId ?? messages.audit.local}
                     </td>
                     <td className="max-w-56 truncate px-5 py-3 font-mono text-xs text-slate-500">
                       {audit.taskId ?? "-"}
@@ -160,7 +166,7 @@ export function AuditView({ audits }: { audits: AuditRecord[] }) {
           </div>
         )}
         <div className="border-t border-slate-100 px-5 py-3 text-xs text-slate-500">
-          当前快照共 {audits.length} 条记录，显示 {filteredAudits.length} 条。
+          {messages.audit.summary(audits.length, filteredAudits.length)}
         </div>
       </CardContent>
     </Card>

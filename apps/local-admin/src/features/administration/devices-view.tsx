@@ -25,6 +25,7 @@ import {
   formatTimestamp,
   inputClassName,
 } from "@/features/administration/administration-ui";
+import { useI18n } from "@/lib/i18n/i18n-context";
 
 export type PairingPresentation = {
   expiresAt: number;
@@ -53,6 +54,7 @@ export function DevicesView({
   pairing: PairingPresentation | undefined;
   snapshot: LocalAdminSnapshot;
 }) {
+  const { languageTag, messages } = useI18n();
   const [deviceToRevoke, setDeviceToRevoke] = useState<Device>();
   const activeDevices = snapshot.devices.filter(
     (device) => device.revokedAt === null,
@@ -61,22 +63,25 @@ export function DevicesView({
 
   return (
     <div className="space-y-5">
-      <section aria-label="设备摘要" className="grid grid-cols-3 gap-4">
+      <section
+        aria-label={messages.devices.deviceSummary}
+        className="grid grid-cols-3 gap-4"
+      >
         <SummaryCard
           icon={<ShieldCheck aria-hidden="true" className="size-4" />}
-          label="已配对"
+          label={messages.devices.summaries.paired}
           tone="success"
           value={activeDevices}
         />
         <SummaryCard
           icon={<Clock3 aria-hidden="true" className="size-4" />}
-          label="等待批准"
+          label={messages.devices.summaries.pending}
           tone="warning"
           value={snapshot.pendingPairings.length}
         />
         <SummaryCard
           icon={<Ban aria-hidden="true" className="size-4" />}
-          label="已撤销"
+          label={messages.devices.summaries.revoked}
           tone="destructive"
           value={revokedDevices}
         />
@@ -85,9 +90,9 @@ export function DevicesView({
       <Card>
         <CardHeader className="flex-row items-start justify-between gap-6">
           <div>
-            <CardTitle>配对移动设备</CardTitle>
+            <CardTitle>{messages.devices.pairingNew}</CardTitle>
             <CardDescription>
-              生成服务端签发的二维码，再核对并批准匹配的六位验证码。
+              {messages.devices.generatePairingDescription}
             </CardDescription>
           </div>
           <Button
@@ -97,27 +102,27 @@ export function DevicesView({
             type="button"
           >
             <QrCode aria-hidden="true" className="size-3.5" />
-            生成配对二维码
+            {messages.devices.generatePairing}
           </Button>
         </CardHeader>
         <CardContent>
           <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-800">
-            配对二维码数据由本地 Agent 返回，五分钟后过期，且仅可注册一台设备。
-            浏览器不会自行构造或持久化这些数据。
+            {messages.devices.pairingDataDescription}{" "}
+            {messages.devices.pairingDataSafety}
           </div>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>待处理批准</CardTitle>
+          <CardTitle>{messages.devices.pendingApproval}</CardTitle>
           <CardDescription>
-            请确认 Agent 验证码与移动设备显示的验证码一致。
+            {messages.devices.pendingApprovalDescription}
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           {snapshot.pendingPairings.length === 0 ? (
-            <EmptyDevices label="当前没有等待批准的设备。" />
+            <EmptyDevices label={messages.devices.emptyPending} />
           ) : (
             <div className="divide-y divide-slate-100 border-t border-slate-100">
               {snapshot.pendingPairings.map((pending) => {
@@ -132,21 +137,27 @@ export function DevicesView({
                         <p className="truncate text-sm font-medium">
                           {pending.deviceDisplayName}
                         </p>
-                        <Badge variant="warning">待处理</Badge>
+                        <Badge variant="warning">
+                          {messages.common.statuses.pending}
+                        </Badge>
                       </div>
                       <p className="mt-1 font-mono text-xs text-slate-500">
-                        Agent 验证码 {pending.verificationCode}
+                        {messages.overview.agentCode(pending.verificationCode)}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        到期时间 {formatTimestamp(pending.expiresAt)}
+                        {messages.overview.expiry(
+                          formatTimestamp(pending.expiresAt, languageTag),
+                        )}
                       </p>
                     </div>
                     <Field
                       id={`approval-${pending.pairingId}`}
-                      label="移动端验证码"
+                      label={messages.devices.approvalCode}
                     >
                       <input
-                        aria-label={`${pending.deviceDisplayName} 的移动端验证码`}
+                        aria-label={messages.devices.approvalCodeAria(
+                          pending.deviceDisplayName,
+                        )}
                         className={inputClassName}
                         id={`approval-${pending.pairingId}`}
                         inputMode="numeric"
@@ -170,7 +181,7 @@ export function DevicesView({
                       type="button"
                     >
                       <Check aria-hidden="true" className="size-3.5" />
-                      批准
+                      {messages.devices.approve}
                     </Button>
                   </div>
                 );
@@ -182,12 +193,14 @@ export function DevicesView({
 
       <Card>
         <CardHeader>
-          <CardTitle>设备清单</CardTitle>
-          <CardDescription>撤销后，所选设备的会话将立即失效。</CardDescription>
+          <CardTitle>{messages.devices.deviceList}</CardTitle>
+          <CardDescription>
+            {messages.devices.deviceListDescription}
+          </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           {snapshot.devices.length === 0 ? (
-            <EmptyDevices label="尚未配对任何设备。" />
+            <EmptyDevices label={messages.devices.emptyDevices} />
           ) : (
             <div className="divide-y divide-slate-100 border-t border-slate-100">
               {snapshot.devices.map((device) => (
@@ -211,7 +224,9 @@ export function DevicesView({
                               : "destructive"
                           }
                         >
-                          {device.revokedAt === null ? "已配对" : "已撤销"}
+                          {device.revokedAt === null
+                            ? messages.devices.active
+                            : messages.devices.revoked}
                         </Badge>
                       </div>
                       <p className="mt-1 truncate font-mono text-xs text-slate-500">
@@ -220,15 +235,17 @@ export function DevicesView({
                     </div>
                   </div>
                   <div className="text-xs text-slate-500">
-                    <p>配对时间</p>
+                    <p>{messages.devices.createdAt}</p>
                     <p className="mt-1 text-slate-700">
-                      {formatTimestamp(device.createdAt)}
+                      {formatTimestamp(device.createdAt, languageTag)}
                     </p>
                   </div>
                   <div className="flex justify-end">
                     {device.revokedAt === null ? (
                       <Button
-                        aria-label={`撤销 ${device.displayName} 的访问权限`}
+                        aria-label={messages.devices.revokeAria(
+                          device.displayName,
+                        )}
                         disabled={busyAction !== undefined}
                         onClick={() => setDeviceToRevoke(device)}
                         size="sm"
@@ -236,11 +253,11 @@ export function DevicesView({
                         variant="outline"
                       >
                         <Ban aria-hidden="true" className="size-3.5" />
-                        撤销
+                        {messages.devices.revoke}
                       </Button>
                     ) : (
                       <span className="text-right text-xs text-red-700">
-                        {formatTimestamp(device.revokedAt)}
+                        {formatTimestamp(device.revokedAt, languageTag)}
                       </span>
                     )}
                   </div>
@@ -253,34 +270,37 @@ export function DevicesView({
 
       {pairing === undefined ? null : (
         <ModalDialog
-          description="请使用 PocketPilot 移动端扫描服务端签发的二维码。"
+          description={messages.devices.qrDescription}
           onClose={onClosePairing}
-          title="配对新设备"
+          title={messages.devices.pairingNew}
         >
           <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-6">
             <div className="flex items-center justify-center rounded-md border border-slate-200 bg-white p-3">
               <img
-                alt="PocketPilot 设备配对二维码"
+                alt={messages.devices.qrAlt}
                 className="size-48"
                 src={pairing.qrUrl}
               />
             </div>
             <div className="space-y-4">
               <div>
-                <p className="text-xs font-medium text-slate-500">配对 ID</p>
+                <p className="text-xs font-medium text-slate-500">
+                  {messages.devices.pairingId}
+                </p>
                 <p className="mt-1 break-all font-mono text-sm">
                   {pairing.pairingId}
                 </p>
               </div>
               <div>
-                <p className="text-xs font-medium text-slate-500">到期时间</p>
+                <p className="text-xs font-medium text-slate-500">
+                  {messages.devices.expiredAt}
+                </p>
                 <p className="mt-1 text-sm">
-                  {formatTimestamp(pairing.expiresAt)}
+                  {formatTimestamp(pairing.expiresAt, languageTag)}
                 </p>
               </div>
               <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800">
-                这些是服务端返回的静态配对数据。PocketPilot 不会保存二维码，
-                也不会自行生成此处显示的任何标识符。
+                {messages.devices.qrStaticDescription}
               </div>
             </div>
           </div>
@@ -289,9 +309,9 @@ export function DevicesView({
 
       {deviceToRevoke === undefined ? null : (
         <ModalDialog
-          description="此操作会立即使设备会话失效，且无法在浏览器中撤销。"
+          description={messages.devices.revokeDescription}
           onClose={() => setDeviceToRevoke(undefined)}
-          title="确认撤销设备访问权限？"
+          title={messages.devices.revokeConfirmTitle}
           tone="destructive"
         >
           <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -304,7 +324,7 @@ export function DevicesView({
                   {deviceToRevoke.id}
                 </p>
               </div>
-              <Badge variant="success">已配对</Badge>
+              <Badge variant="success">{messages.devices.active}</Badge>
             </div>
           </div>
           <div className="mt-5 flex justify-end gap-2">
@@ -315,7 +335,7 @@ export function DevicesView({
               type="button"
               variant="outline"
             >
-              取消
+              {messages.devices.cancel}
             </Button>
             <Button
               disabled={busyAction !== undefined}
@@ -329,7 +349,7 @@ export function DevicesView({
               variant="destructive"
             >
               <Ban aria-hidden="true" className="size-3.5" />
-              撤销访问权限
+              {messages.devices.revokeAccess}
             </Button>
           </div>
         </ModalDialog>
@@ -383,6 +403,7 @@ function ModalDialog({
   title: string;
   tone?: "default" | "destructive";
 }) {
+  const { messages } = useI18n();
   return (
     <div
       aria-labelledby="admin-dialog-title"
@@ -411,7 +432,7 @@ function ModalDialog({
             </p>
           </div>
           <Button
-            aria-label="关闭对话框"
+            aria-label={messages.devices.closeDialog}
             onClick={onClose}
             size="icon"
             type="button"

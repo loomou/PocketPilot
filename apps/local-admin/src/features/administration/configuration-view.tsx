@@ -14,6 +14,7 @@ import {
   Field,
   inputClassName,
 } from "@/features/administration/administration-ui";
+import { useI18n } from "@/lib/i18n/i18n-context";
 import { cn } from "@/lib/utils";
 
 export function ConfigurationView({
@@ -31,19 +32,24 @@ export function ConfigurationView({
   onDiscard: () => void;
   onSave: (event: FormEvent) => void;
 }) {
+  const { messages } = useI18n();
+
   return (
     <form className="space-y-5" onSubmit={onSave}>
       <div className="grid grid-cols-2 gap-4">
         <Card>
           <CardHeader>
-            <CardTitle>运行设置</CardTitle>
+            <CardTitle>{messages.configuration.runtimeSettings}</CardTitle>
             <CardDescription>
-              监听器更改将在 Agent 下次启动时生效。
+              {messages.configuration.runtimeDescription}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-[minmax(0,1fr)_140px] gap-3">
-              <Field id="remote-listener-host" label="远程监听地址">
+              <Field
+                id="remote-listener-host"
+                label={messages.configuration.hostLabel}
+              >
                 <input
                   className={inputClassName}
                   id="remote-listener-host"
@@ -63,7 +69,10 @@ export function ConfigurationView({
                   value={configuration.runtime.remoteListener.host}
                 />
               </Field>
-              <Field id="remote-listener-port" label="端口">
+              <Field
+                id="remote-listener-port"
+                label={messages.configuration.portLabel}
+              >
                 <input
                   className={inputClassName}
                   id="remote-listener-port"
@@ -88,9 +97,9 @@ export function ConfigurationView({
               </Field>
             </div>
             <Field
-              description="该地址会写入服务端生成的二维码，并提供给移动端。"
+              description={messages.configuration.mobileBaseUrlDescription}
               id="mobile-base-url"
-              label="移动端基础 URL"
+              label={messages.configuration.mobileBaseUrl}
             >
               <input
                 className={inputClassName}
@@ -114,16 +123,16 @@ export function ConfigurationView({
 
         <Card>
           <CardHeader>
-            <CardTitle>任务策略</CardTitle>
+            <CardTitle>{messages.configuration.taskSettings}</CardTitle>
             <CardDescription>
-              限制并发任务数量与任务可访问的目录范围。
+              {messages.configuration.taskDescription}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <Field
-              description="Agent 可同时运行的最大任务数量。"
+              description={messages.configuration.concurrentDescription}
               id="concurrent-task-capacity"
-              label="最大并发任务数"
+              label={messages.configuration.concurrentLabel}
             >
               <input
                 className={inputClassName}
@@ -145,9 +154,9 @@ export function ConfigurationView({
               />
             </Field>
             <Field
-              description="每行输入一个绝对工作区路径。"
+              description={messages.configuration.workspaceRootsDescription}
               id="workspace-roots"
-              label="工作区根目录"
+              label={messages.configuration.workspaceRootsLabel}
             >
               <textarea
                 className={cn(inputClassName, "min-h-32 resize-y py-2")}
@@ -173,10 +182,10 @@ export function ConfigurationView({
         <div className="sticky bottom-5 z-10 flex items-center justify-between gap-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 shadow-lg">
           <div>
             <p className="text-sm font-medium text-amber-950">
-              存在尚未保存的配置更改。
+              {messages.configuration.dirtyTitle}
             </p>
             <p className="mt-0.5 text-xs text-amber-700">
-              请同时保存运行设置与任务策略，或放弃本次更改。
+              {messages.configuration.dirtyDescription}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -188,11 +197,11 @@ export function ConfigurationView({
               variant="outline"
             >
               <Undo2 aria-hidden="true" className="size-3.5" />
-              放弃更改
+              {messages.configuration.discardChanges}
             </Button>
             <Button disabled={busy} size="sm" type="submit">
               <Save aria-hidden="true" className="size-3.5" />
-              保存配置
+              {messages.configuration.saveChanges}
             </Button>
           </div>
         </div>

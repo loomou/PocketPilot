@@ -10,6 +10,8 @@ import {
 import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import { LocaleSwitcher } from "@/features/administration/locale-switcher";
+import { useI18n } from "@/lib/i18n/i18n-context";
 import { cn } from "@/lib/utils";
 
 export type AdminSection =
@@ -20,38 +22,12 @@ export type AdminSection =
   | "maintenance";
 
 const navigationItems = [
-  { icon: LayoutDashboard, id: "overview", label: "总览" },
-  { icon: Settings2, id: "configuration", label: "配置" },
-  { icon: Smartphone, id: "devices", label: "设备" },
-  { icon: ScrollText, id: "audit", label: "审计记录" },
-  { icon: Shield, id: "maintenance", label: "维护" },
+  { icon: LayoutDashboard, id: "overview" },
+  { icon: Settings2, id: "configuration" },
+  { icon: Smartphone, id: "devices" },
+  { icon: ScrollText, id: "audit" },
+  { icon: Shield, id: "maintenance" },
 ] as const;
-
-export const sectionDetails: Record<
-  AdminSection,
-  { description: string; title: string }
-> = {
-  audit: {
-    description: "检查本地控制、配置与安全事件的审计元数据。",
-    title: "审计记录",
-  },
-  configuration: {
-    description: "调整运行端点、工作区访问范围与任务容量。",
-    title: "配置",
-  },
-  devices: {
-    description: "配对可信移动端，并管理现有设备的访问权限。",
-    title: "设备",
-  },
-  maintenance: {
-    description: "查看安全元数据与仅限终端执行的恢复指引。",
-    title: "维护",
-  },
-  overview: {
-    description: "检查 Agent 健康、当前策略、设备与近期活动。",
-    title: "总览",
-  },
-};
 
 export function AdministrationShell({
   activeSection,
@@ -70,7 +46,8 @@ export function AdministrationShell({
   refreshDisabled: boolean;
   running: boolean;
 }) {
-  const details = sectionDetails[activeSection];
+  const { messages } = useI18n();
+  const details = messages.shell.section[activeSection];
 
   return (
     <main className="grid min-h-screen min-w-[1080px] grid-cols-[224px_minmax(0,1fr)] bg-slate-100 text-slate-950">
@@ -81,11 +58,16 @@ export function AdministrationShell({
           </span>
           <div>
             <p className="text-sm font-semibold">PocketPilot</p>
-            <p className="text-[11px] text-slate-500">本地管理控制台</p>
+            <p className="text-[11px] text-slate-500">
+              {messages.shell.brandSubtitle}
+            </p>
           </div>
         </div>
 
-        <nav aria-label="管理控制台导航" className="space-y-1 p-3">
+        <nav
+          aria-label={messages.shell.navigationLabel}
+          className="space-y-1 p-3"
+        >
           {navigationItems.map((item) => {
             const Icon = item.icon;
             const selected = item.id === activeSection;
@@ -103,7 +85,7 @@ export function AdministrationShell({
                 type="button"
               >
                 <Icon aria-hidden="true" className="size-4" />
-                {item.label}
+                {messages.shell.nav[item.id]}
               </button>
             );
           })}
@@ -119,12 +101,15 @@ export function AdministrationShell({
                   running ? "bg-emerald-500" : "bg-slate-400",
                 )}
               />
-              {running ? "本地 Agent 正在运行" : "正在加载本地 Agent"}
+              {running
+                ? messages.shell.runningAgent
+                : messages.shell.loadingAgent}
             </div>
             <p className="mt-1 text-[11px] leading-4 text-slate-500">
-              此控制台仅能通过本地管理监听器访问。
+              {messages.shell.localAccessDescription}
             </p>
           </div>
+          <LocaleSwitcher />
         </div>
       </aside>
 
@@ -155,10 +140,12 @@ export function AdministrationShell({
                     running ? "bg-emerald-500" : "bg-slate-400",
                   )}
                 />
-                {running ? "运行正常" : "加载中"}
+                {running
+                  ? messages.shell.runningStatus
+                  : messages.shell.loadingStatus}
               </span>
               <Button
-                aria-label="刷新本地管理数据"
+                aria-label={messages.shell.refreshAria}
                 disabled={refreshDisabled}
                 onClick={onRefresh}
                 size="sm"
@@ -166,7 +153,7 @@ export function AdministrationShell({
                 variant="outline"
               >
                 <RefreshCw aria-hidden="true" className="size-3.5" />
-                刷新
+                {messages.shell.refresh}
               </Button>
             </div>
           </div>

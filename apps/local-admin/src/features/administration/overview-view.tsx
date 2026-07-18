@@ -23,6 +23,7 @@ import {
   formatTimestamp,
   ResultBadge,
 } from "@/features/administration/administration-ui";
+import { useI18n } from "@/lib/i18n/i18n-context";
 import { cn } from "@/lib/utils";
 
 export function OverviewView({
@@ -32,6 +33,7 @@ export function OverviewView({
   onNavigate: (section: AdminSection) => void;
   snapshot: LocalAdminSnapshot;
 }) {
+  const { languageTag, messages } = useI18n();
   const activeDevices = snapshot.devices.filter(
     (device) => device.revokedAt === null,
   ).length;
@@ -39,24 +41,29 @@ export function OverviewView({
 
   return (
     <div className="space-y-5">
-      <section aria-label="Agent 总览" className="grid grid-cols-3 gap-4">
+      <section
+        aria-label={messages.overview.agentOverviewAria}
+        className="grid grid-cols-3 gap-4"
+      >
         <MetricCard
-          detail={`本地管理 ${formatListener(snapshot.status.localAdminListener)}`}
+          detail={`${messages.overview.localAdminListener} ${formatListener(snapshot.status.localAdminListener)}`}
           icon={<Activity aria-hidden="true" className="size-4" />}
-          label="Agent 状态"
+          label={messages.overview.agentStatus}
           tone="success"
-          value="在线"
+          value={messages.overview.online}
         />
         <MetricCard
-          detail={`${snapshot.devices.length - activeDevices} 台已撤销`}
+          detail={messages.overview.activeDevicesDetail(
+            snapshot.devices.length - activeDevices,
+          )}
           icon={<Smartphone aria-hidden="true" className="size-4" />}
-          label="活跃设备"
+          label={messages.overview.activeDevices}
           value={String(activeDevices)}
         />
         <MetricCard
-          detail="等待本地批准"
+          detail={messages.overview.pairingPendingDetail}
           icon={<Clock3 aria-hidden="true" className="size-4" />}
-          label="待处理配对"
+          label={messages.overview.pairingPending}
           tone={snapshot.pendingPairings.length > 0 ? "warning" : "default"}
           value={String(snapshot.pendingPairings.length)}
         />
@@ -65,29 +72,32 @@ export function OverviewView({
       <Card>
         <CardHeader className="flex-row items-start justify-between gap-6">
           <div>
-            <CardTitle>Agent 状态</CardTitle>
+            <CardTitle>{messages.overview.agentStatus}</CardTitle>
             <CardDescription>
-              当前监听器与服务端公布的移动端入口。
+              {messages.overview.agentDescription}
             </CardDescription>
           </div>
           <Badge variant="success">
             <CheckCircle2 aria-hidden="true" className="mr-1 size-3" />
-            运行中
+            {messages.overview.running}
           </Badge>
         </CardHeader>
         <CardContent>
           <dl className="grid grid-cols-3 gap-4 rounded-md border border-slate-200 bg-slate-50 p-4">
             <StatusItem
-              label="本地管理监听器"
+              label={messages.overview.localAdminListener}
               value={formatListener(snapshot.status.localAdminListener)}
             />
             <StatusItem
-              label="远程监听器"
+              label={messages.overview.serverListener}
               value={formatListener(snapshot.status.remoteListener)}
             />
             <StatusItem
-              label="移动端基础 URL"
-              value={snapshot.status.mobileBaseUrl ?? "本次启动未配置"}
+              label={messages.overview.mobileBaseUrl}
+              value={
+                snapshot.status.mobileBaseUrl ??
+                messages.overview.mobileBaseUrlMissing
+              }
             />
           </dl>
         </CardContent>
@@ -97,9 +107,9 @@ export function OverviewView({
         <Card>
           <CardHeader className="flex-row items-start justify-between gap-4">
             <div>
-              <CardTitle>待处理设备批准</CardTitle>
+              <CardTitle>{messages.overview.pairingPending}</CardTitle>
               <CardDescription>
-                授予访问权限前，请核对两端的六位验证码。
+                {messages.overview.deviceApprovalDescription}
               </CardDescription>
             </div>
             <Button
@@ -108,14 +118,14 @@ export function OverviewView({
               type="button"
               variant="outline"
             >
-              管理设备
+              {messages.overview.manageDevices}
               <ChevronRight aria-hidden="true" className="size-3.5" />
             </Button>
           </CardHeader>
           <CardContent className="space-y-3">
             {snapshot.pendingPairings.length === 0 ? (
               <div className="rounded-md border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
-                当前没有等待批准的设备。
+                {messages.overview.noPendingPairings}
               </div>
             ) : (
               snapshot.pendingPairings.slice(0, 3).map((pairing) => (
@@ -128,13 +138,17 @@ export function OverviewView({
                       {pairing.deviceDisplayName}
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
-                      到期时间 {formatTimestamp(pairing.expiresAt)}
+                      {messages.overview.expiry(
+                        formatTimestamp(pairing.expiresAt, languageTag),
+                      )}
                     </p>
                   </div>
                   <div className="text-right">
-                    <Badge variant="warning">待处理</Badge>
+                    <Badge variant="warning">
+                      {messages.common.statuses.pending}
+                    </Badge>
                     <p className="mt-1 font-mono text-xs text-slate-600">
-                      Agent 验证码 {pairing.verificationCode}
+                      {messages.overview.agentCode(pairing.verificationCode)}
                     </p>
                   </div>
                 </div>
@@ -145,22 +159,24 @@ export function OverviewView({
 
         <Card>
           <CardHeader>
-            <CardTitle>策略摘要</CardTitle>
-            <CardDescription>当前运行配置与任务限制。</CardDescription>
+            <CardTitle>{messages.overview.statusSummary}</CardTitle>
+            <CardDescription>
+              {messages.overview.policyDescription}
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <PolicyItem
-              label="最大并发任务数"
+              label={messages.overview.maxConcurrentTasks}
               value={String(
                 snapshot.configuration.tasks.concurrentTaskCapacity,
               )}
             />
             <PolicyItem
-              label="工作区根目录"
+              label={messages.overview.workspaceRoots}
               value={String(snapshot.configuration.tasks.workspaceRoots.length)}
             />
             <PolicyItem
-              label="远程监听器"
+              label={messages.overview.serverListener}
               value={formatListener(
                 snapshot.configuration.runtime.remoteListener,
               )}
@@ -172,7 +188,7 @@ export function OverviewView({
               type="button"
               variant="outline"
             >
-              打开配置
+              {messages.overview.openConfiguration}
             </Button>
           </CardContent>
         </Card>
@@ -181,8 +197,10 @@ export function OverviewView({
       <Card>
         <CardHeader className="flex-row items-start justify-between gap-4">
           <div>
-            <CardTitle>近期活动</CardTitle>
-            <CardDescription>Agent 返回的最新本地审计记录。</CardDescription>
+            <CardTitle>{messages.overview.recentActivity}</CardTitle>
+            <CardDescription>
+              {messages.overview.recentActivityDescription}
+            </CardDescription>
           </div>
           <Button
             onClick={() => onNavigate("audit")}
@@ -190,23 +208,31 @@ export function OverviewView({
             type="button"
             variant="outline"
           >
-            查看全部记录
+            {messages.overview.viewAllRecords}
             <ChevronRight aria-hidden="true" className="size-3.5" />
           </Button>
         </CardHeader>
         <CardContent className="p-0">
           {recentAudits.length === 0 ? (
             <p className="border-t border-slate-100 px-5 py-10 text-center text-sm text-slate-500">
-              暂无审计记录。
+              {messages.overview.emptyAudits}
             </p>
           ) : (
             <table className="w-full border-collapse text-left text-sm">
               <thead className="border-y border-slate-200 bg-slate-50 text-xs font-medium text-slate-500">
                 <tr>
-                  <th className="px-5 py-2.5">时间</th>
-                  <th className="px-5 py-2.5">操作</th>
-                  <th className="px-5 py-2.5">设备</th>
-                  <th className="px-5 py-2.5">结果</th>
+                  <th className="px-5 py-2.5">
+                    {messages.overview.table.time}
+                  </th>
+                  <th className="px-5 py-2.5">
+                    {messages.overview.table.operation}
+                  </th>
+                  <th className="px-5 py-2.5">
+                    {messages.overview.table.device}
+                  </th>
+                  <th className="px-5 py-2.5">
+                    {messages.overview.table.result}
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -216,13 +242,13 @@ export function OverviewView({
                     key={audit.id}
                   >
                     <td className="whitespace-nowrap px-5 py-3 text-xs text-slate-500">
-                      {formatTimestamp(audit.occurredAt)}
+                      {formatTimestamp(audit.occurredAt, languageTag)}
                     </td>
                     <td className="px-5 py-3 font-mono text-xs">
                       {audit.operation}
                     </td>
                     <td className="max-w-56 truncate px-5 py-3 font-mono text-xs text-slate-500">
-                      {audit.deviceId ?? "本地"}
+                      {audit.deviceId ?? messages.common.local}
                     </td>
                     <td className="px-5 py-3">
                       <ResultBadge result={audit.result} />
