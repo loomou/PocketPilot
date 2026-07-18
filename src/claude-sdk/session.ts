@@ -54,6 +54,8 @@ const permissionModeCoverage: Record<PermissionMode, true> = {
 
 void permissionModeCoverage;
 
+const pocketPilotClaudeCodeEntrypoint = "pocketpilot";
+
 export type ClaudeSdkQuery = Pick<
   Query,
   | "applyFlagSettings"
@@ -177,6 +179,14 @@ export function openClaudeSdkSession(
   const input = new ClaudeSdkInputStream();
   const queryOptions: Options = {
     cwd: options.cwd,
+    ...(options.resume === undefined
+      ? {
+          env: {
+            ...process.env,
+            CLAUDE_CODE_ENTRYPOINT: pocketPilotClaudeCodeEntrypoint,
+          },
+        }
+      : {}),
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.permissionMode === undefined
       ? {}
