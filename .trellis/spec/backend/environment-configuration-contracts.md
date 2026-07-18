@@ -13,6 +13,7 @@ Agent SDK configuration.
 loadPocketPilotEnvironment({ cwd?, environment? }): NodeJS.ProcessEnv;
 readAgentDataDirectory(environment): string | undefined;
 readLocalAdminPort(environment): number | undefined;
+readLogLevel(environment): "debug" | "info" | "warn" | "error";
 createProgramActions(environment): ProgramActions;
 runStartCommand(environment?): Promise<void>;
 runStopCommand(environment?): Promise<void>;
@@ -21,7 +22,8 @@ runResetCommand(confirmation, environment?, writeOutput?): Promise<void>;
 ```
 
 The supported dotenv keys are `AGENT_MASTER_KEY`, `AGENT_NEW_MASTER_KEY`,
-`POCKETPILOT_DATA_DIR`, and `POCKETPILOT_LOCAL_ADMIN_PORT`.
+`POCKETPILOT_DATA_DIR`, `POCKETPILOT_LOCAL_ADMIN_PORT`, and
+`POCKETPILOT_LOG_LEVEL`.
 
 ## 3. Contracts
 
@@ -39,6 +41,9 @@ The supported dotenv keys are `AGENT_MASTER_KEY`, `AGENT_NEW_MASTER_KEY`,
   `43183`.
 - `POCKETPILOT_DATA_DIR` must be non-empty when present. Relative paths resolve
   from the startup working directory through the existing runtime path owner.
+- `POCKETPILOT_LOG_LEVEL` defaults to `info` and accepts only lowercase
+  `debug`, `info`, `warn`, or `error`. It configures foreground diagnostics and
+  never changes API behavior.
 - PocketPilot deliberately ignores `ANTHROPIC_*`, Claude configuration, and
   arbitrary dotenv keys. Claude continues to inherit only the actual process
   environment owned by the user.
@@ -52,6 +57,7 @@ The supported dotenv keys are `AGENT_MASTER_KEY`, `AGENT_NEW_MASTER_KEY`,
 | Required master key remains missing/empty/malformed | Existing `MasterKeyError`; open no SQLite and bind no listener. |
 | Data directory is empty or whitespace | `ENVIRONMENT_VALUE_INVALID`. |
 | Local-admin port is empty, non-decimal, zero, or above 65535 | `ENVIRONMENT_VALUE_INVALID`. |
+| Log level is empty, uppercase, or outside the four supported values | `ENVIRONMENT_VALUE_INVALID`; bind no listener. |
 | Process value and dotenv value both exist | Use the process value; never silently fall back after validation fails. |
 | Unknown or Claude-related dotenv key exists | Ignore it in the PocketPilot environment snapshot. |
 
@@ -69,9 +75,10 @@ The supported dotenv keys are `AGENT_MASTER_KEY`, `AGENT_NEW_MASTER_KEY`,
 ## 6. Tests Required
 
 - Unit-test exact-child-directory selection while a parent `.env` exists.
-- Unit-test the four-key allowlist, process precedence, explicit empty values,
+- Unit-test the five-key allowlist, process precedence, explicit empty values,
   input immutability, missing files, and unreadable files.
-- Unit-test data-directory and local-port validation at boundary values.
+- Unit-test data-directory, local-port, and log-level validation at boundary
+  values.
 - CLI/runtime tests must prove invalid configuration fails before storage or
   listener creation and expected error text contains no secret.
 - The Windows packed-install smoke test must start and maintain the Agent from

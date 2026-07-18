@@ -5,7 +5,9 @@ import {
   AGENT_DATA_DIRECTORY_ENVIRONMENT_VARIABLE,
   readAgentDataDirectory,
   readLocalAdminPort,
+  readLogLevel,
 } from "../config/environment.js";
+import { createPocketPilotLogger } from "../logging/logger.js";
 import { AgentRuntime } from "./agent-runtime.js";
 import { readRuntimeControlState } from "./control-state.js";
 import { RuntimeControlError } from "./errors.js";
@@ -16,6 +18,10 @@ export type AgentRuntimePaths = {
   databasePath: string;
   runtimeControlPath: string;
 };
+
+export function isDevelopmentRuntimeModule(moduleUrl: string): boolean {
+  return new URL(moduleUrl).pathname.toLowerCase().endsWith(".ts");
+}
 
 export function resolveAgentRuntimePaths(
   environment: NodeJS.ProcessEnv = process.env,
@@ -37,20 +43,19 @@ export async function runStartCommand(
 ): Promise<void> {
   const paths = resolveAgentRuntimePaths(environment);
   const localAdminPort = readLocalAdminPort(environment);
+  const logger = createPocketPilotLogger({
+    environment,
+    level: readLogLevel(environment),
+  });
   const runtime = new AgentRuntime({
     databasePath: paths.databasePath,
+    developmentMode: isDevelopmentRuntimeModule(import.meta.url),
     environment,
     ...(localAdminPort === undefined ? {} : { localAdminPort }),
+    logger,
     runtimeControlPath: paths.runtimeControlPath,
   });
-  const status = await runtime.start();
-
-  console.log(
-    `PocketPilot Agent is running. Remote health: http://${status.remoteListener.host}:${status.remoteListener.port}/healthz`,
-  );
-  console.log(
-    `Local administration: http://${status.localAdminListener.host}:${status.localAdminListener.port}`,
-  );
+  await runtime.start();
   await runtime.waitUntilStopped();
 }
 

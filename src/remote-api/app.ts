@@ -8,6 +8,7 @@ import {
 } from "../auth/remote-routes.js";
 import { createHttpApp } from "../http/create-http-app.js";
 import { registerHealthRoute } from "../http/health.js";
+import type { PocketPilotLogger } from "../logging/logger.js";
 import {
   registerSessionRoutes,
   type SessionRouteDeviceAuthService,
@@ -39,6 +40,7 @@ export type RemoteApiAppOptions = {
   deviceAuthService?: RemoteApiDeviceAuthService;
   eventJournal?: TaskEventRouteOptions["eventJournal"] &
     TaskSdkRouteOptions["eventJournal"];
+  logger?: PocketPilotLogger;
   taskManager?: SessionRouteManager &
     TaskRouteManager &
     TaskSdkRouteOptions["taskManager"];
@@ -55,7 +57,11 @@ export type RemoteApiAppOptions = {
 export async function buildRemoteApiApp(
   options: RemoteApiAppOptions = {},
 ): Promise<FastifyInstance> {
-  const app = await createHttpApp({ websocket: true });
+  const app = await createHttpApp({
+    listenerKind: "remote",
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    websocket: true,
+  });
   await app.register(fastifySwagger, {
     hideUntagged: true,
     openapi: {
@@ -88,7 +94,11 @@ export async function buildRemoteApiApp(
   });
   registerHealthRoute(app);
   if (options.deviceAuthService !== undefined) {
-    registerRemoteDeviceAuthRoutes(app, options.deviceAuthService);
+    registerRemoteDeviceAuthRoutes(
+      app,
+      options.deviceAuthService,
+      options.logger,
+    );
     if (options.taskManager !== undefined) {
       registerSessionRoutes(app, {
         deviceAuthService: options.deviceAuthService,
@@ -109,6 +119,7 @@ export async function buildRemoteApiApp(
       connectionRegistry: options.connectionRegistry,
       deviceAuthService: options.deviceAuthService,
       eventJournal: options.eventJournal,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
     });
   }
   if (
@@ -122,6 +133,7 @@ export async function buildRemoteApiApp(
       connectionRegistry: options.connectionRegistry,
       deviceAuthService: options.deviceAuthService,
       eventJournal: options.eventJournal,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
       taskConnectionRegistry: options.taskSdkConnectionRegistry,
       taskManager: options.taskManager,
     });

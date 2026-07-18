@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
+import type { PocketPilotLogger } from "../logging/logger.js";
 
 import type { DeviceAuthService } from "./device-auth-service.js";
 import { authErrorResponses, registerDeviceAuthErrorHandler } from "./http.js";
@@ -49,8 +50,9 @@ const revocationResponseSchema = z.object({
 export function registerLocalDeviceAuthRoutes(
   app: FastifyInstance,
   deviceAuthService: DeviceAuthService,
+  logger?: PocketPilotLogger,
 ): void {
-  registerDeviceAuthErrorHandler(app);
+  registerDeviceAuthErrorHandler(app, logger);
   const typedApp = app.withTypeProvider<ZodTypeProvider>();
 
   typedApp.post(

@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { DeviceConnectionRegistry } from "../auth/device-auth-service.js";
 import { readBearerAccessToken } from "../auth/http.js";
+import { logEvents } from "../logging/events.js";
+import { noopLogger, type PocketPilotLogger } from "../logging/logger.js";
 import type { TaskEventJournal } from "../tasks/task-event-journal.js";
 import { taskControlEventEnvelopeSchema } from "../tasks/task-events.js";
 
@@ -51,6 +53,7 @@ export type TaskEventRouteOptions = {
   };
   deviceAuthService: AccessDeviceAuthenticator;
   eventJournal: Pick<TaskEventJournal, "subscribeControl">;
+  logger?: PocketPilotLogger;
 };
 
 export type AccessDeviceAuthenticator = {
@@ -62,6 +65,7 @@ export function registerTaskEventRoutes(
   app: FastifyInstance,
   options: TaskEventRouteOptions,
 ): void {
+  const logger = options.logger ?? noopLogger;
   app.get(
     "/v1/events",
     {
@@ -77,15 +81,32 @@ export function registerTaskEventRoutes(
           readBearerAccessToken(request),
         ).id;
       } catch {
+        logger.warn(
+          logEvents.authRequestRejected,
+          "Control WebSocket authentication rejected",
+          { code: "AUTHENTICATION_FAILED", transport: "control" },
+        );
         socket.close(4003, "Authentication failed.");
         return;
       }
 
       const unregisterDevice = options.connectionRegistry.add(deviceId, socket);
+      logger.info(
+        logEvents.websocketControlConnected,
+        "Control WebSocket connected",
+        { deviceId },
+      );
+      let closed = false;
+      let subscribedTaskId: string | undefined;
       let unsubscribeTask: (() => void) | undefined;
       socket.on("message", (message: Buffer | ArrayBuffer | Buffer[]) => {
         const subscription = parseSubscription(message);
         if (subscription === undefined) {
+          logger.warn(
+            logEvents.websocketMessageRejected,
+            "Control WebSocket message rejected",
+            { code: "EVENT_SUBSCRIPTION_INVALID", deviceId },
+          );
           sendServerMessage(socket, {
             code: "EVENT_SUBSCRIPTION_INVALID",
             type: "error",
@@ -94,6 +115,7 @@ export function registerTaskEventRoutes(
         }
 
         unsubscribeTask?.();
+        subscribedTaskId = subscription.taskId;
         unsubscribeTask = options.eventJournal.subscribeControl(
           subscription.taskId,
           subscription.afterCursor,
@@ -108,10 +130,44 @@ export function registerTaskEventRoutes(
           taskId: subscription.taskId,
           type: "subscribed",
         });
+        logger.info(
+          logEvents.websocketControlConnected,
+          "Control WebSocket subscribed",
+          { deviceId, taskId: subscription.taskId },
+        );
       });
-      socket.on("close", () => {
+      const cleanup = (): void => {
+        if (closed) {
+          return;
+        }
+        closed = true;
         unsubscribeTask?.();
         unregisterDevice();
+        logger.info(
+          logEvents.websocketControlClosed,
+          "Control WebSocket closed",
+          {
+            deviceId,
+            ...(subscribedTaskId === undefined
+              ? {}
+              : { taskId: subscribedTaskId }),
+          },
+        );
+      };
+      socket.on("close", cleanup);
+      socket.on("error", () => {
+        logger.warn(
+          logEvents.websocketControlClosed,
+          "Control WebSocket transport failed",
+          {
+            code: "CONTROL_TRANSPORT_FAILED",
+            deviceId,
+            ...(subscribedTaskId === undefined
+              ? {}
+              : { taskId: subscribedTaskId }),
+          },
+        );
+        cleanup();
       });
     },
   );

@@ -5,6 +5,8 @@ import { z } from "zod";
 
 import type { DeviceConnectionRegistry } from "../auth/device-auth-service.js";
 import { readBearerAccessToken } from "../auth/http.js";
+import { logEvents } from "../logging/events.js";
+import { noopLogger, type PocketPilotLogger } from "../logging/logger.js";
 import { TaskError } from "../tasks/errors.js";
 import type { TaskEventJournal } from "../tasks/task-event-journal.js";
 import type { TaskManager } from "../tasks/task-manager.js";
@@ -75,6 +77,7 @@ export type TaskSdkRouteOptions = {
     TaskManager,
     "activateSdkSession" | "getTask" | "submitSdkMessage"
   >;
+  logger?: PocketPilotLogger;
 };
 
 /** Registers the raw, task-specific Claude SDK WebSocket transport. */
@@ -82,6 +85,7 @@ export function registerTaskSdkRoutes(
   app: FastifyInstance,
   options: TaskSdkRouteOptions,
 ): void {
+  const logger = options.logger ?? noopLogger;
   const typed = app.withTypeProvider<ZodTypeProvider>();
   typed.get(
     "/v1/tasks/:taskId/sdk",
@@ -100,6 +104,11 @@ export function registerTaskSdkRoutes(
           readBearerAccessToken(request),
         ).id;
       } catch {
+        logger.warn(
+          logEvents.authRequestRejected,
+          "SDK WebSocket authentication rejected",
+          { code: "AUTHENTICATION_FAILED", transport: "sdk" },
+        );
         closeSocket(socket, sdkWebSocketClose.authenticationFailed);
         return;
       }
@@ -108,22 +117,41 @@ export function registerTaskSdkRoutes(
       try {
         const task = options.taskManager.getTask(taskId);
         if (task.state === "interrupted" || task.state === "terminal") {
+          logger.warn(
+            logEvents.websocketSdkClosed,
+            "SDK WebSocket session unavailable",
+            {
+              closeCode: sdkWebSocketClose.sessionUnavailable.code,
+              code: sdkWebSocketClose.sessionUnavailable.reason,
+              deviceId,
+              taskId,
+            },
+          );
           closeSocket(socket, sdkWebSocketClose.sessionUnavailable);
           return;
         }
       } catch (error) {
-        closeSocket(
-          socket,
+        const failure =
           error instanceof TaskError && error.code === "TASK_NOT_FOUND"
             ? sdkWebSocketClose.taskNotFound
-            : sdkWebSocketClose.transportFailed,
-        );
+            : sdkWebSocketClose.transportFailed;
+        logger.warn(logEvents.websocketSdkClosed, "SDK WebSocket rejected", {
+          closeCode: failure.code,
+          code: failure.reason,
+          deviceId,
+          taskId,
+        });
+        closeSocket(socket, failure);
         return;
       }
 
       let closed = false;
       const unregisterDevice = options.connectionRegistry.add(deviceId, socket);
       const unregisterTask = options.taskConnectionRegistry.add(taskId, socket);
+      logger.info(logEvents.websocketSdkConnected, "SDK WebSocket connected", {
+        deviceId,
+        taskId,
+      });
       let unsubscribeSdk = (): void => {};
       const cleanup = (): void => {
         if (closed) {
@@ -135,6 +163,12 @@ export function registerTaskSdkRoutes(
         unregisterDevice();
       };
       const terminate = (failure: WebSocketFailure): void => {
+        logger.warn(logEvents.websocketSdkClosed, "SDK WebSocket terminated", {
+          closeCode: failure.code,
+          code: failure.reason,
+          deviceId,
+          taskId,
+        });
         cleanup();
         closeSocket(socket, failure);
       };
@@ -194,8 +228,30 @@ export function registerTaskSdkRoutes(
             });
         },
       );
-      socket.on("close", cleanup);
-      socket.on("error", cleanup);
+      socket.on("close", () => {
+        if (!closed) {
+          logger.info(logEvents.websocketSdkClosed, "SDK WebSocket closed", {
+            deviceId,
+            taskId,
+          });
+        }
+        cleanup();
+      });
+      socket.on("error", () => {
+        if (!closed) {
+          logger.warn(
+            logEvents.websocketSdkClosed,
+            "SDK WebSocket transport failed",
+            {
+              closeCode: sdkWebSocketClose.transportFailed.code,
+              code: sdkWebSocketClose.transportFailed.reason,
+              deviceId,
+              taskId,
+            },
+          );
+        }
+        cleanup();
+      });
     },
   );
 }

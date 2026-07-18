@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { InMemoryDeviceConnectionRegistry } from "../../src/auth/device-connection-registry.js";
 import { createHttpApp } from "../../src/http/create-http-app.js";
+import { createPocketPilotLogger } from "../../src/logging/logger.js";
 import { InMemoryTaskSdkConnectionRegistry } from "../../src/remote-api/task-sdk-connection-registry.js";
 import {
   parseSdkUserMessageFrame,
@@ -64,6 +65,9 @@ describe("task SDK WebSocket", () => {
     expect(fixture.submissions[0]).toEqual(input);
     expect(fixture.submissions[0]).not.toHaveProperty("operationId");
     expect(fixture.submissions[0]).not.toHaveProperty("payload");
+    expect(fixture.logs.value()).toContain("SDK WebSocket connected");
+    expect(fixture.logs.value()).not.toContain("raw input");
+    expect(fixture.logs.value()).not.toContain("nested_extension");
     client.terminate();
   });
 
@@ -100,6 +104,8 @@ describe("task SDK WebSocket", () => {
 
     await expect(closed).resolves.toEqual(sdkWebSocketClose.messageInvalid);
     expect(fixture.submissions).toEqual([]);
+    expect(fixture.logs.value()).toContain("code=SDK_MESSAGE_INVALID");
+    expect(fixture.logs.value()).not.toContain("payload");
   });
 
   it("guards the SDK base contract without requiring optional identifiers", () => {
@@ -211,10 +217,17 @@ async function createFixture(
   activationObservedSubscriber: boolean[];
   connectionRegistry: InMemoryDeviceConnectionRegistry;
   journal: RecordingSdkJournal;
+  logs: ReturnType<typeof createCapture>;
   submissions: SDKUserMessage[];
   taskConnectionRegistry: InMemoryTaskSdkConnectionRegistry;
 }> {
   const app = await createHttpApp({ websocket: true });
+  const logs = createCapture();
+  const logger = createPocketPilotLogger({
+    color: false,
+    destination: logs,
+    level: "info",
+  });
   const connectionRegistry = new InMemoryDeviceConnectionRegistry();
   const journal = new RecordingSdkJournal();
   const submissions: SDKUserMessage[] = [];
@@ -231,6 +244,7 @@ async function createFixture(
       },
     },
     eventJournal: journal,
+    logger,
     taskConnectionRegistry,
     taskManager: {
       async activateSdkSession(): Promise<void> {
@@ -259,8 +273,24 @@ async function createFixture(
     app,
     connectionRegistry,
     journal,
+    logs,
     submissions,
     taskConnectionRegistry,
+  };
+}
+
+function createCapture(): {
+  isTTY: false;
+  value(): string;
+  write(chunk: string): void;
+} {
+  let output = "";
+  return {
+    isTTY: false,
+    value: () => output,
+    write(chunk): void {
+      output += chunk;
+    },
   };
 }
 

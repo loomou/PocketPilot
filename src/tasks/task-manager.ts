@@ -29,6 +29,12 @@ import {
   type ClaudeSessionCatalog,
   installedClaudeSessionCatalog,
 } from "../claude-sdk/session-catalog.js";
+import { logEvents } from "../logging/events.js";
+import {
+  noopLogger,
+  type PocketPilotLogger,
+  safeErrorFields,
+} from "../logging/logger.js";
 import type { StorageDatabase } from "../storage/database.js";
 import type { SettingsRepository } from "../storage/settings-repository.js";
 import { TaskError } from "./errors.js";
@@ -169,6 +175,7 @@ export type TaskManagerOptions = {
   createSession?: TaskSdkSessionFactory;
   directoryResolver?: WorkspaceDirectoryResolver;
   eventSink?: TaskEventSink;
+  logger?: PocketPilotLogger;
   now?: () => number;
   pathResolver?: TaskPathResolver;
   settingsRepository: SettingsRepository;
@@ -228,12 +235,14 @@ export class TaskManager {
   >();
   readonly #liveTasks = new Map<string, LiveTask>();
   readonly #historyLanes = new Map<string, SerialExecutor>();
+  readonly #logger: PocketPilotLogger;
   readonly #now: () => number;
   readonly #pathResolver: TaskPathResolver;
   readonly #repository: TaskRepository;
   readonly #settingsRepository: SettingsRepository;
   readonly #supportedPermissionModes: readonly PermissionMode[];
   readonly #taskLanes = new Map<string, TaskOperationScheduler>();
+  readonly #publishedTaskStates = new Map<string, TaskSnapshot["state"]>();
   #authorizationRevision = 0;
   #shuttingDown = false;
 
@@ -247,9 +256,13 @@ export class TaskManager {
     this.#directoryResolver =
       options.directoryResolver ?? nodeWorkspaceDirectoryResolver;
     this.#eventSink = options.eventSink;
+    this.#logger = options.logger ?? noopLogger;
     this.#now = options.now ?? Date.now;
     this.#pathResolver = options.pathResolver ?? nodeTaskPathResolver;
     this.#repository = new TaskRepository(options.sqlite);
+    for (const task of this.#repository.list()) {
+      this.#publishedTaskStates.set(task.id, task.state);
+    }
     this.#settingsRepository = options.settingsRepository;
     this.#supportedPermissionModes =
       options.supportedPermissionModes ?? pinnedPermissionModes;
@@ -257,7 +270,17 @@ export class TaskManager {
 
   /** Converts unfinished active work from a prior unexpected exit to interrupted. */
   public recoverFromUnexpectedRestart(): number {
-    return this.#repository.markActiveTasksInterrupted(this.#now());
+    const recoveredTaskCount = this.#repository.markActiveTasksInterrupted(
+      this.#now(),
+    );
+    if (recoveredTaskCount > 0) {
+      this.#logger.info(
+        logEvents.taskStateChanged,
+        "Interrupted tasks recovered after restart",
+        { recoveredTaskCount },
+      );
+    }
+    return recoveredTaskCount;
   }
 
   public listTasks(): TaskSnapshot[] {
@@ -639,6 +662,12 @@ export class TaskManager {
             permissionMode: null,
             sdkSessionId: null,
           });
+          this.#logger.info(logEvents.taskCreated, "Task created", {
+            origin: task.origin,
+            state: task.state,
+            taskId: task.id,
+          });
+          this.#publishedTaskStates.set(task.id, task.state);
           return {
             action: "created" as const,
             auditResult: "workspace-risk-accepted",
@@ -679,6 +708,12 @@ export class TaskManager {
             existing === undefined
               ? this.createAttachedTask(initialCwd, parsed.data.sessionId)
               : this.adoptAttachedTask(existing);
+          this.#logger.info(logEvents.taskAttached, "Claude session attached", {
+            reused: existing !== undefined,
+            state: task.state,
+            taskId: task.id,
+          });
+          this.#publishedTaskStates.set(task.id, task.state);
           return {
             action: "attached" as const,
             auditResult: "workspace-risk-accepted",
@@ -692,6 +727,11 @@ export class TaskManager {
   /** Activates only session-centric runtimes after the raw subscriber exists. */
   public async activateSdkSession(taskId: string): Promise<void> {
     this.assertTaskId(taskId);
+    this.#logger.info(
+      logEvents.taskActivationStarted,
+      "Task activation started",
+      { taskId },
+    );
     await this.runTaskLane(taskId, async (lease) => {
       this.assertAcceptingWork();
       let task = this.requireTask(taskId);
@@ -709,6 +749,9 @@ export class TaskManager {
       const liveTask = this.liveTask(task.id);
       const session = this.ensureSession(task);
       await this.initializeComposer(task, liveTask, session, lease);
+    });
+    this.#logger.info(logEvents.taskActivated, "Task activation completed", {
+      taskId,
     });
   }
 
@@ -783,6 +826,12 @@ export class TaskManager {
             origin: "pocketpilot",
             permissionMode: parsed.data.permissionMode,
           });
+          this.#logger.info(logEvents.taskCreated, "Task created", {
+            origin: task.origin,
+            state: task.state,
+            taskId: task.id,
+          });
+          this.#publishedTaskStates.set(task.id, task.state);
           return {
             action: "created" as const,
             auditResult: "workspace-risk-accepted",
@@ -802,6 +851,17 @@ export class TaskManager {
       throw invalidTaskOperationError();
     }
     this.assertTaskId(input.taskId);
+    this.#logger.debug(
+      logEvents.sdkMessageObserved,
+      "SDK user message accepted",
+      {
+        hasUuid: input.message.uuid !== undefined,
+        priority: input.message.priority ?? "default",
+        shouldQuery: input.message.shouldQuery !== false,
+        sdkType: input.message.type,
+        taskId: input.taskId,
+      },
+    );
 
     return this.runTaskLane(input.taskId, async (lease) => {
       this.assertAcceptingWork();
@@ -874,6 +934,11 @@ export class TaskManager {
               updatedAt: this.#now(),
             });
       this.publishTaskState(updated);
+      this.#logger.info(logEvents.taskControlCompleted, "Task interrupted", {
+        operation: "interrupt",
+        result: wasIdle ? "already-idle" : "interrupted",
+        taskId: task.id,
+      });
       return {
         action: "interrupted",
         auditResult: wasIdle ? "already-idle" : "interrupted",
@@ -911,6 +976,11 @@ export class TaskManager {
       const interrupt = this.interruptSession(liveTask.session);
       this.closeSession(liveTask.session);
       await Promise.allSettled(interrupt === undefined ? [] : [interrupt]);
+      this.#logger.info(logEvents.taskControlCompleted, "Task closed", {
+        operation: "close",
+        result: "closed",
+        taskId: task.id,
+      });
       return { action: "closed", auditResult: "closed", task: terminal };
     });
   }
@@ -948,6 +1018,11 @@ export class TaskManager {
         const resumed = this.#repository.update(task.id, {
           state: "idle",
           updatedAt: this.#now(),
+        });
+        this.#logger.info(logEvents.taskControlCompleted, "Task resumed", {
+          operation: "resume",
+          result: "resumed",
+          taskId: task.id,
         });
         return { action: "resumed", auditResult: "resumed", task: resumed };
       }),
@@ -994,6 +1069,15 @@ export class TaskManager {
           updatedAt: this.#now(),
         });
         this.publishTaskState(executing);
+        this.#logger.info(
+          logEvents.taskApprovalResolved,
+          "Task approval resolved",
+          {
+            requestId: input.requestId,
+            result: input.result.behavior,
+            taskId: task.id,
+          },
+        );
         return {
           action:
             input.result.behavior === "allow"
@@ -1044,6 +1128,11 @@ export class TaskManager {
                 model: input.model ?? null,
                 updatedAt: this.#now(),
               });
+        this.#logger.info(
+          logEvents.taskControlCompleted,
+          "Task model control completed",
+          { operation: "set-model", result: "changed", taskId: task.id },
+        );
         return {
           action: "model-changed",
           auditResult: "changed",
@@ -1097,6 +1186,15 @@ export class TaskManager {
                 permissionMode,
                 updatedAt: this.#now(),
               });
+        this.#logger.info(
+          logEvents.taskControlCompleted,
+          "Task permission control completed",
+          {
+            operation: "set-permission-mode",
+            result: "changed",
+            taskId: task.id,
+          },
+        );
         return {
           action: "permission-mode-changed",
           auditResult: "changed",
@@ -1139,6 +1237,11 @@ export class TaskManager {
         lease.assertCurrent();
         const current = this.requireTask(task.id);
         liveTask.effortLevel = input.effortLevel;
+        this.#logger.info(
+          logEvents.taskControlCompleted,
+          "Task effort control completed",
+          { operation: "set-effort", result: "changed", taskId: task.id },
+        );
         return {
           action: "effort-changed",
           auditResult: "changed",
@@ -1184,6 +1287,11 @@ export class TaskManager {
     }
     await Promise.allSettled(interruptions);
     this.#liveTasks.clear();
+    this.#logger.info(
+      logEvents.taskShutdownCompleted,
+      "Task shutdown completed",
+      { taskCount: nonTerminalTasks.length },
+    );
     this.#taskLanes.clear();
   }
 
@@ -1551,9 +1659,24 @@ export class TaskManager {
           if (liveTask.interrupting) {
             continue;
           }
+          const sdkSubtype = readSdkSubtype(message);
+          this.#logger.debug(
+            logEvents.sdkMessageObserved,
+            "SDK message observed",
+            {
+              hasUuid: readSdkUuidPresence(message),
+              ...(sdkSubtype === undefined ? {} : { sdkSubtype }),
+              sdkType: message.type,
+              taskId,
+            },
+          );
           this.persistSessionId(taskId, session);
           this.#eventSink?.publishSdkMessage(taskId, message);
           if (message.type === "result") {
+            this.#logger.info(logEvents.sdkQueryResult, "SDK Query completed", {
+              ...(sdkSubtype === undefined ? {} : { result: sdkSubtype }),
+              taskId,
+            });
             this.completeActiveTurn(taskId, false);
           } else if (
             message.type === "system" &&
@@ -1563,7 +1686,11 @@ export class TaskManager {
             this.completeActiveTurn(taskId, true);
           }
         }
-      } catch {
+      } catch (error) {
+        this.#logger.error(logEvents.sdkQueryFailed, "SDK Query failed", {
+          ...safeErrorFields(error),
+          taskId,
+        });
         this.completeActiveTurn(taskId, true);
       } finally {
         const liveTask = this.#liveTasks.get(taskId);
@@ -1571,6 +1698,9 @@ export class TaskManager {
           liveTask.session = undefined;
           liveTask.eventLoop = undefined;
         }
+        this.#logger.info(logEvents.sdkQueryStopped, "SDK Query stopped", {
+          taskId,
+        });
       }
     })();
   }
@@ -1603,6 +1733,11 @@ export class TaskManager {
         ? { permissionMode: this.permissionModeForTask(task) }
         : {}),
       ...(task.sdkSessionId === null ? {} : { resume: task.sdkSessionId }),
+    });
+    this.#logger.info(logEvents.sdkQueryStarted, "SDK Query started", {
+      origin: task.origin,
+      resumed: task.sdkSessionId !== null,
+      taskId: task.id,
     });
     liveTask.session = session;
     liveTask.eventLoop = this.consumeSessionEvents(task.id, session);
@@ -1756,6 +1891,11 @@ export class TaskManager {
       sdkSessionId: sessionId,
       updatedAt: this.#now(),
     });
+    this.#logger.info(
+      logEvents.sdkSessionObserved,
+      "SDK session reference observed",
+      { taskId },
+    );
   }
 
   private registerPendingApproval(
@@ -1787,6 +1927,15 @@ export class TaskManager {
       updatedAt: this.#now(),
     });
     this.publishTaskState(awaitingApproval);
+    this.#logger.info(
+      logEvents.taskApprovalRequested,
+      "Task approval requested",
+      {
+        requestId: approval.options.requestId,
+        taskId,
+        toolName: approval.toolName,
+      },
+    );
     const request: SerializableCanUseToolRequest = {
       input: approval.input,
       options: approval.options,
@@ -1887,6 +2036,15 @@ export class TaskManager {
   }
 
   private publishTaskState(task: TaskSnapshot): void {
+    const previousState = this.#publishedTaskStates.get(task.id);
+    if (previousState !== task.state) {
+      this.#logger.info(logEvents.taskStateChanged, "Task state changed", {
+        previousState: previousState ?? "unknown",
+        state: task.state,
+        taskId: task.id,
+      });
+      this.#publishedTaskStates.set(task.id, task.state);
+    }
     this.#eventSink?.publishControlEvent(task.id, {
       kind: "task.state",
       payload: { state: task.state },
@@ -1939,6 +2097,9 @@ export class TaskManager {
     const executing = this.#repository.update(task.id, {
       state: "executing",
       updatedAt: this.#now(),
+    });
+    this.#logger.info(logEvents.sdkTurnStarted, "SDK turn started", {
+      taskId: task.id,
     });
     try {
       lease.assertCurrent();
@@ -1993,6 +2154,25 @@ export class TaskManager {
       // Closing is best-effort after an explicit interrupt or process shutdown.
     }
   }
+}
+
+function readSdkSubtype(message: unknown): string | undefined {
+  if (
+    typeof message !== "object" ||
+    message === null ||
+    !("subtype" in message)
+  ) {
+    return undefined;
+  }
+  const subtype = Reflect.get(message, "subtype");
+  return typeof subtype === "string" ? subtype : undefined;
+}
+
+function readSdkUuidPresence(message: unknown): boolean {
+  if (typeof message !== "object" || message === null || !("uuid" in message)) {
+    return false;
+  }
+  return typeof Reflect.get(message, "uuid") === "string";
 }
 
 class SerialExecutor {

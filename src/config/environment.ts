@@ -13,12 +13,14 @@ import { EnvironmentConfigurationError } from "./errors.js";
 export const AGENT_DATA_DIRECTORY_ENVIRONMENT_VARIABLE = "POCKETPILOT_DATA_DIR";
 export const LOCAL_ADMIN_PORT_ENVIRONMENT_VARIABLE =
   "POCKETPILOT_LOCAL_ADMIN_PORT";
+export const LOG_LEVEL_ENVIRONMENT_VARIABLE = "POCKETPILOT_LOG_LEVEL";
 
 const dotenvAllowlist = [
   AGENT_MASTER_KEY_ENVIRONMENT_VARIABLE,
   AGENT_NEW_MASTER_KEY_ENVIRONMENT_VARIABLE,
   AGENT_DATA_DIRECTORY_ENVIRONMENT_VARIABLE,
   LOCAL_ADMIN_PORT_ENVIRONMENT_VARIABLE,
+  LOG_LEVEL_ENVIRONMENT_VARIABLE,
 ] as const;
 
 const localAdminPortSchema = z
@@ -26,6 +28,10 @@ const localAdminPortSchema = z
   .regex(/^\d+$/)
   .transform(Number)
   .pipe(z.number().int().min(1).max(65_535));
+
+const logLevelSchema = z.enum(["debug", "info", "warn", "error"]);
+
+export type PocketPilotLogLevel = z.infer<typeof logLevelSchema>;
 
 export type LoadPocketPilotEnvironmentOptions = {
   cwd?: string;
@@ -91,6 +97,19 @@ export function readAgentDataDirectory(
     );
   }
   return value;
+}
+
+export function readLogLevel(
+  environment: NodeJS.ProcessEnv,
+): PocketPilotLogLevel {
+  const value = environment[LOG_LEVEL_ENVIRONMENT_VARIABLE] ?? "info";
+  const result = logLevelSchema.safeParse(value);
+  if (!result.success) {
+    throw invalidEnvironmentValue(
+      `${LOG_LEVEL_ENVIRONMENT_VARIABLE} must be one of: debug, info, warn, error.`,
+    );
+  }
+  return result.data;
 }
 
 function invalidEnvironmentValue(

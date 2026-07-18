@@ -7,6 +7,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { DeviceAuthService } from "../../src/auth/device-auth-service.js";
 import { buildLocalAdminApp } from "../../src/local-admin/app.js";
+import {
+  createPocketPilotLogger,
+  type PocketPilotLogger,
+} from "../../src/logging/logger.js";
 import { buildRemoteApiApp } from "../../src/remote-api/app.js";
 import { writeRuntimeSettings } from "../../src/runtime/settings.js";
 import {
@@ -31,7 +35,13 @@ describe("pairing and device-authentication routes", () => {
   });
 
   it("keeps local approval local while issuing remote credentials after device proof", async () => {
-    const service = createService(connections, temporaryDirectories);
+    const logCapture = createCapture();
+    const logger = createPocketPilotLogger({
+      color: false,
+      destination: logCapture,
+      level: "debug",
+    });
+    const service = createService(connections, temporaryDirectories, logger);
     const localApp = await buildLocalAdminApp({
       csrfProtection: {
         expectedOrigin: () => "http://127.0.0.1:43183",
@@ -43,10 +53,14 @@ describe("pairing and device-authentication routes", () => {
         remoteListener: { host: "127.0.0.1", port: 43182 },
         status: "running" as const,
       }),
+      logger,
       requestShutdown: () => undefined,
       shutdownControlToken: "runtime-control-token",
     });
-    const remoteApp = await buildRemoteApiApp({ deviceAuthService: service });
+    const remoteApp = await buildRemoteApiApp({
+      deviceAuthService: service,
+      logger,
+    });
     apps.push(localApp, remoteApp);
 
     const csrfHeaders = {
@@ -76,6 +90,15 @@ describe("pairing and device-authentication routes", () => {
     });
     expect(registration.statusCode).toBe(200);
     const registrationBody = registration.json<{ verificationCode: string }>();
+
+    const claimBeforeApproval = await remoteApp.inject({
+      method: "POST",
+      url: `/v1/pair/${pairing.pairingId}/claim-challenge`,
+    });
+    expect(claimBeforeApproval.statusCode).toBe(409);
+    expect(claimBeforeApproval.json()).toMatchObject({
+      code: "PAIRING_NOT_APPROVED",
+    });
 
     const rejectedRemoteAdmin = await remoteApp.inject({
       method: "POST",
@@ -129,12 +152,28 @@ describe("pairing and device-authentication routes", () => {
     });
     expect(session.statusCode).toBe(200);
     expect(session.json()).toMatchObject({ displayName: "Pixel" });
+
+    const logs = logCapture.value();
+    expect(logs).toContain("Pairing device registered");
+    expect(logs).toContain("Authentication request rejected");
+    expect(logs).toContain("code=PAIRING_NOT_APPROVED");
+    expect(logs).toContain("Pairing approved");
+    expect(logs).toContain("Pairing claim completed");
+    expect(logs).toContain("Access credential authenticated");
+    for (const forbidden of [
+      registrationBody.verificationCode,
+      credentials.accessToken,
+      exportRawEd25519PublicKey(keyPair.publicKey),
+    ]) {
+      expect(logs).not.toContain(forbidden);
+    }
   });
 });
 
 function createService(
   connections: StorageConnection[],
   temporaryDirectories: string[],
+  logger?: PocketPilotLogger,
 ): DeviceAuthService {
   const directory = mkdtempSync(join(tmpdir(), "pocketpilot-auth-routes-"));
   const connection = openStorage({
@@ -148,10 +187,26 @@ function createService(
   connections.push(connection);
   temporaryDirectories.push(directory);
   return new DeviceAuthService({
+    ...(logger === undefined ? {} : { logger }),
     masterKey: Buffer.alloc(32, 11),
     settingsRepository,
     sqlite: connection.sqlite,
   });
+}
+
+function createCapture(): {
+  isTTY: false;
+  value(): string;
+  write(chunk: string): void;
+} {
+  let output = "";
+  return {
+    isTTY: false,
+    value: () => output,
+    write(chunk): void {
+      output += chunk;
+    },
+  };
 }
 
 function exportRawEd25519PublicKey(

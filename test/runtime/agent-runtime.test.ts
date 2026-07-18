@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { createPocketPilotLogger } from "../../src/logging/logger.js";
 import { AgentRuntime } from "../../src/runtime/agent-runtime.js";
 import { requestRuntimeShutdown } from "../../src/runtime/commands.js";
+import { readRuntimeControlState } from "../../src/runtime/control-state.js";
 import { writeRuntimeSettings } from "../../src/runtime/settings.js";
 import { openStorage } from "../../src/storage/database.js";
 import { SettingsRepository } from "../../src/storage/settings-repository.js";
@@ -28,10 +30,16 @@ describe("AgentRuntime", () => {
     temporaryDirectories.push(directory);
     const databasePath = join(directory, "agent.sqlite");
     const runtimeControlPath = join(directory, "runtime-control.json");
+    const logs = createCapture();
     const runtime = new AgentRuntime({
       databasePath,
       environment: {},
       installSignalHandlers: false,
+      logger: createPocketPilotLogger({
+        color: false,
+        destination: logs,
+        level: "info",
+      }),
       runtimeControlPath,
     });
     runtimes.push(runtime);
@@ -41,6 +49,9 @@ describe("AgentRuntime", () => {
     });
     expect(existsSync(databasePath)).toBe(false);
     expect(existsSync(runtimeControlPath)).toBe(false);
+    expect(logs.value()).toContain("Runtime starting");
+    expect(logs.value()).toContain("Runtime start failed");
+    expect(logs.value()).toContain("errorCode=MASTER_KEY_MISSING");
   });
 
   it("keeps local administration off the remote listener and shares shutdown with agent stop", async () => {
@@ -49,12 +60,19 @@ describe("AgentRuntime", () => {
     const databasePath = join(directory, "agent.sqlite");
     const runtimeControlPath = join(directory, "runtime-control.json");
     await configureEphemeralRemoteListener(databasePath);
+    const logs = createCapture();
 
     const runtime = new AgentRuntime({
       databasePath,
+      developmentMode: true,
       environment: { AGENT_MASTER_KEY: masterKey },
       installSignalHandlers: false,
       localAdminPort: 0,
+      logger: createPocketPilotLogger({
+        color: false,
+        destination: logs,
+        level: "debug",
+      }),
       runtimeControlPath,
     });
     runtimes.push(runtime);
@@ -74,12 +92,31 @@ describe("AgentRuntime", () => {
     expect(remoteLocalAdmin.status).toBe(404);
     expect(localStatus.status).toBe(200);
     expect(existsSync(runtimeControlPath)).toBe(true);
+    const controlState = await readRuntimeControlState(runtimeControlPath);
 
     await requestRuntimeShutdown(runtimeControlPath);
     await runtime.waitUntilStopped();
 
     expect(existsSync(runtimeControlPath)).toBe(false);
-  });
+    const output = logs.value();
+    expect(output).toContain("Runtime storage ready");
+    expect(output).toContain("Listener started");
+    expect(output).toContain("Runtime started");
+    expect(output).toContain(
+      `Remote health: http://${status.remoteListener.host}:${status.remoteListener.port}/healthz`,
+    );
+    expect(output).toContain(
+      `Local administration: http://${status.localAdminListener.host}:${status.localAdminListener.port}`,
+    );
+    expect(output).toContain(
+      `Swagger documentation: http://${status.localAdminListener.host}:${status.localAdminListener.port}/documentation/`,
+    );
+    expect(output).toContain("HTTP request completed");
+    expect(output).toContain("Runtime shutdown requested");
+    expect(output).toContain("Runtime stopped");
+    expect(output).not.toContain(masterKey);
+    expect(output).not.toContain(controlState.shutdownControlToken);
+  }, 10_000);
 
   it("terminates persisted idle sessions during a manual Agent shutdown", async () => {
     const directory = mkdtempSync(join(tmpdir(), "pocketpilot-runtime-"));
@@ -101,18 +138,32 @@ describe("AgentRuntime", () => {
         1,
       );
     initialStorage.close();
+    const logs = createCapture();
 
     const runtime = new AgentRuntime({
       databasePath,
       environment: { AGENT_MASTER_KEY: masterKey },
       installSignalHandlers: false,
       localAdminPort: 0,
+      logger: createPocketPilotLogger({
+        color: false,
+        destination: logs,
+        level: "info",
+      }),
       runtimeControlPath,
     });
     runtimes.push(runtime);
 
-    await runtime.start();
+    const status = await runtime.start();
     await runtime.shutdown();
+
+    expect(logs.value()).toContain(
+      `Remote health: http://${status.remoteListener.host}:${status.remoteListener.port}/healthz`,
+    );
+    expect(logs.value()).toContain(
+      `Local administration: http://${status.localAdminListener.host}:${status.localAdminListener.port}`,
+    );
+    expect(logs.value()).not.toContain("Swagger documentation:");
 
     const verifiedStorage = openStorage({ databasePath });
     try {
@@ -168,6 +219,21 @@ describe("AgentRuntime", () => {
     });
   });
 });
+
+function createCapture(): {
+  isTTY: false;
+  value(): string;
+  write(chunk: string): void;
+} {
+  let output = "";
+  return {
+    isTTY: false,
+    value: () => output,
+    write(chunk): void {
+      output += chunk;
+    },
+  };
+}
 
 async function configureEphemeralRemoteListener(
   databasePath: string,

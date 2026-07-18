@@ -7,6 +7,8 @@ import {
 
 import type BetterSqlite3 from "better-sqlite3";
 import { z } from "zod";
+import { logEvents } from "../logging/events.js";
+import { noopLogger, type PocketPilotLogger } from "../logging/logger.js";
 import { readRuntimeSettings } from "../runtime/settings.js";
 import {
   createEncryptionContext,
@@ -106,6 +108,7 @@ export type DeviceConnectionRegistry = {
 
 export type DeviceAuthServiceOptions = {
   closeDeviceConnections?: DeviceConnectionRegistry;
+  logger?: PocketPilotLogger;
   masterKey: Buffer;
   now?: () => number;
   settingsRepository: SettingsRepository;
@@ -162,12 +165,14 @@ export type AuthenticatedDevice = PairedDevice;
  */
 export class DeviceAuthService {
   private readonly closeDeviceConnections: DeviceConnectionRegistry;
+  private readonly logger: PocketPilotLogger;
   private readonly now: () => number;
 
   public constructor(private readonly options: DeviceAuthServiceOptions) {
     this.closeDeviceConnections = options.closeDeviceConnections ?? {
       closeDeviceConnections: () => undefined,
     };
+    this.logger = options.logger ?? noopLogger;
     this.now = options.now ?? Date.now;
   }
 
@@ -198,6 +203,11 @@ export class DeviceAuthService {
         this.encryptPairingSecret(pairingId, { verificationCode: null }),
       );
 
+    this.logger.info(logEvents.pairingCreated, "Pairing created", {
+      expiresAt,
+      pairingId,
+    });
+
     return {
       expiresAt,
       pairingId,
@@ -226,7 +236,7 @@ export class DeviceAuthService {
     }
 
     const now = this.now();
-    return this.options.sqlite.transaction(() => {
+    const registration = this.options.sqlite.transaction(() => {
       const pairing = this.getPairing(input.pairingId);
       this.assertPairingAvailableForRegistration(pairing, now);
 
@@ -256,6 +266,15 @@ export class DeviceAuthService {
         verificationCode,
       };
     })();
+    this.logger.info(
+      logEvents.pairingDeviceRegistered,
+      "Pairing device registered",
+      {
+        pairingId: registration.pairingId,
+        state: "pending-approval",
+      },
+    );
+    return registration;
   }
 
   public listPendingPairings(): PendingPairing[] {
@@ -273,7 +292,7 @@ export class DeviceAuthService {
       )
       .all(now);
 
-    return rows.flatMap((pairing) => {
+    const pendingPairings = rows.flatMap((pairing) => {
       if (pairing.deviceDisplayName === null || pairing.deviceId !== null) {
         return [];
       }
@@ -289,6 +308,12 @@ export class DeviceAuthService {
             },
           ];
     });
+    this.logger.debug(
+      logEvents.pairingPendingListed,
+      "Pending pairings listed",
+      { count: pendingPairings.length },
+    );
+    return pendingPairings;
   }
 
   public approvePairing(input: {
@@ -296,7 +321,7 @@ export class DeviceAuthService {
     verificationCode: string;
   }): PairedDevice {
     const now = this.now();
-    return this.options.sqlite.transaction(() => {
+    const device = this.options.sqlite.transaction(() => {
       const pairing = this.getPairing(input.pairingId);
       this.assertPairingPendingApproval(pairing, now);
       const pairingSecret = this.decryptPairingSecret(pairing);
@@ -350,17 +375,28 @@ export class DeviceAuthService {
 
       return device;
     })();
+    this.logger.info(logEvents.pairingApproved, "Pairing approved", {
+      deviceId: device.id,
+      pairingId: input.pairingId,
+    });
+    return device;
   }
 
   public createPairingClaimChallenge(pairingId: string): DeviceChallenge {
     const pairing = this.getPairing(pairingId);
     const now = this.now();
     this.assertPairingApproved(pairing, now);
-    return this.createChallenge({
+    const challenge = this.createChallenge({
       deviceId: pairing.deviceId,
       pairingId,
       purpose: "pairing_claim",
     });
+    this.logger.info(
+      logEvents.pairingClaimChallengeCreated,
+      "Pairing claim challenge created",
+      { deviceId: pairing.deviceId, pairingId },
+    );
+    return challenge;
   }
 
   public async claimPairingCredentials(input: {
@@ -381,7 +417,7 @@ export class DeviceAuthService {
       signature: input.signature,
     });
 
-    return this.options.sqlite.transaction(() => {
+    const credentials = this.options.sqlite.transaction(() => {
       this.consumeChallenge(input.challengeId, now);
       const currentPairing = this.getPairing(input.pairingId);
       if (currentPairing.credentialClaimedAt !== null) {
@@ -408,12 +444,27 @@ export class DeviceAuthService {
       }
       return this.issueCredentials(device.id, now);
     })();
+    this.logger.info(
+      logEvents.pairingClaimCompleted,
+      "Pairing claim completed",
+      {
+        deviceId: device.id,
+        pairingId: input.pairingId,
+      },
+    );
+    return credentials;
   }
 
   public createRefreshChallenge(deviceId: string): DeviceChallenge {
     const device = this.getDevice(deviceId);
     this.assertDeviceActive(device);
-    return this.createChallenge({ deviceId, purpose: "refresh" });
+    const challenge = this.createChallenge({ deviceId, purpose: "refresh" });
+    this.logger.info(
+      logEvents.refreshChallengeCreated,
+      "Refresh challenge created",
+      { deviceId },
+    );
+    return challenge;
   }
 
   public async refreshCredentials(input: {
@@ -479,6 +530,9 @@ export class DeviceAuthService {
       );
     }
 
+    this.logger.info(logEvents.refreshCompleted, "Credentials refreshed", {
+      deviceId: credential.deviceId,
+    });
     return rotation.credentials;
   }
 
@@ -515,12 +569,18 @@ export class DeviceAuthService {
       );
     }
 
-    return {
+    const device = {
       createdAt: token.deviceCreatedAt,
       displayName: token.deviceDisplayName,
       id: token.deviceId,
       revokedAt: token.deviceRevokedAt,
     };
+    this.logger.debug(
+      logEvents.accessAuthenticated,
+      "Access credential authenticated",
+      { deviceId: device.id },
+    );
+    return device;
   }
 
   public listDevices(): PairedDevice[] {
@@ -550,6 +610,9 @@ export class DeviceAuthService {
     })();
     if (changed) {
       this.closeDeviceConnections.closeDeviceConnections(deviceId);
+      this.logger.info(logEvents.deviceRevoked, "Device revoked", {
+        deviceId,
+      });
     }
     return changed;
   }
