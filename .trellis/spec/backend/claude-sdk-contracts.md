@@ -87,9 +87,25 @@ consumer and remains open until task close or coordinated shutdown.
   `~/.claude` files. Preserve every returned `SDKSessionInfo` and
   `SessionMessage` object; pagination cursors remain outside SDK rows.
 - Session-centric Queries omit PocketPilot model, permission-mode, and effort
-  startup overrides. A selected session supplies only `Options.resume`; a new
-  conversation supplies cwd only. Install the raw subscriber before opening
-  either Query so the original `system/init` reaches the client unchanged.
+  startup overrides. A selected session supplies only `Options.resume` and no
+  PocketPilot entrypoint override. A new conversation supplies cwd plus a
+  copied child environment containing
+  `CLAUDE_CODE_ENTRYPOINT=pocketpilot`. Install the raw subscriber before
+  opening either Query so the original `system/init` reaches the client
+  unchanged.
+- The new-conversation child environment inherits every current process value,
+  overrides only `CLAUDE_CODE_ENTRYPOINT`, and never mutates `process.env`.
+  `pocketpilot` truthfully identifies the creating host; never use `cli` to
+  impersonate a terminal session. Resume the selected SDK session ID without a
+  fork or reclassification.
+- For the pinned SDK, `listSessions({ includeProgrammatic: false })` is the
+  documented terminal `/resume` parity filter. A new PocketPilot session must
+  appear there before and after TaskManager resumes the same ID. Treat this as
+  an SDK/Claude Code upgrade gate because `CLAUDE_CODE_ENTRYPOINT` is an
+  installed-runtime contract rather than a documented SDK option.
+- Existing `sdk-ts` sessions remain available through PocketPilot's inclusive
+  catalog and are not migrated. Never edit Claude-owned transcript metadata to
+  change their visibility.
 - Query composer discovery uses `supportedModels()` and each model's
   `supportedEffortLevels`; permission choices cover every pinned SDK
   `PermissionMode`. The returned model list is a composer catalog, not an
@@ -134,6 +150,7 @@ consumer and remains open until task close or coordinated shutdown.
 | `max` effort is selected | Forward through the narrow live-settings adapter; do not reject a model-advertised SDK value. |
 | Live mode has no valid absolute test workspace | Fail before constructing Query; name only `CLAUDE_SDK_TEST_CWD`, not its value. |
 | Live Query emits `system/api_retry` | Preserve the raw event and allow a bounded retry window; diagnostics contain message categories only, never output content. |
+| New PocketPilot session is absent with `includeProgrammatic: false` | Fail the live compatibility gate; do not fall back to `cli`, PTY automation, or transcript edits. |
 
 ### 5. Good / Base / Bad Cases
 
@@ -143,6 +160,9 @@ consumer and remains open until task close or coordinated shutdown.
 - Good: a selected session uses `Options.resume`, emits its original init
   object after subscription, accepts a live effort change, then receives only
   the next raw SDK user message.
+- Good: a new Query receives the `pocketpilot` child entrypoint, appears under
+  terminal `/resume` parity filtering, and remains there after the same session
+  ID is resumed through TaskManager.
 - Base: historical messages are fetched for display and never concatenated
   into a prompt; Claude Code alone restores and compacts context on resume.
 - Base: an idle task receives `shouldQuery: false`; the SDK appends it without
@@ -155,6 +175,9 @@ consumer and remains open until task close or coordinated shutdown.
   that drifts from the installed SDK.
 - Bad: treating `supportedModels()[0]` as the current model or rejecting the
   raw init model because it is absent from that catalog.
+- Bad: labeling a PocketPilot Query as `cli`, applying the PocketPilot
+  entrypoint override to `Options.resume`, or rewriting a legacy transcript's
+  provenance.
 
 ### 6. Tests Required
 
@@ -170,12 +193,15 @@ consumer and remains open until task close or coordinated shutdown.
 - Keep an opt-in `pnpm test:sdk:live` scenario for the pinned package that
   requires `CLAUDE_SDK_TEST_CWD`, discovers initialization/models, submits
   multiple messages on one stream, changes controls between turns, resumes the
-  same session through `TaskManager`, and interrupts/shuts down cleanly. The
-  runner owns `CLAUDE_SDK_LIVE=1`; default tests assert the live scenario is
-  skipped.
+  same session through `TaskManager`, proves that ID remains visible with
+  `includeProgrammatic:false`, and interrupts/shuts down cleanly. The runner
+  owns `CLAUDE_SDK_LIVE=1`; default tests assert the live scenario is skipped.
 - Unit-test catalog option forwarding and object identity, effort including
   `max`/null, Query defaults versus resume, and subscribe-before-activation
   delivery of unwrapped `system/init`.
+- Unit-test that only new Queries receive a copied environment with the
+  `pocketpilot` entrypoint; resume Queries receive the original session ID and
+  no PocketPilot environment override.
 
 ### 7. Wrong vs Correct
 
@@ -202,3 +228,32 @@ for await (const sdkMessage of session.events()) {
 
 The SDK owns both message contracts; PocketPilot supplies only authenticated,
 task-scoped transport and lifecycle policy.
+
+#### Wrong: Reclassify every Query
+
+```ts
+const env = {
+  ...process.env,
+  CLAUDE_CODE_ENTRYPOINT: options.resume ? "cli" : "pocketpilot",
+};
+```
+
+This impersonates the terminal and applies a new classification while resuming
+an existing Claude-owned session.
+
+#### Correct: Label only new PocketPilot conversations
+
+```ts
+const entrypointEnvironment =
+  options.resume === undefined
+    ? {
+        env: {
+          ...process.env,
+          CLAUDE_CODE_ENTRYPOINT: "pocketpilot",
+        },
+      }
+    : {};
+```
+
+The creating host is truthful, the parent environment stays unchanged, and a
+selected session continues under its original ID/provenance.

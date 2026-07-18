@@ -194,6 +194,7 @@ describe("Claude SDK session adapter", () => {
 
   it("forwards a persisted SDK session ID through Options.resume", () => {
     const fakeQuery = createFakeQuery();
+    let environment: NodeJS.ProcessEnv | undefined;
     let resume: string | undefined;
 
     openClaudeSdkSession(
@@ -202,12 +203,35 @@ describe("Claude SDK session adapter", () => {
         resume: "00000000-0000-0000-0000-000000000002",
       },
       (params) => {
+        environment = params.options?.env;
         resume = params.options?.resume;
         return fakeQuery;
       },
     );
 
     expect(resume).toBe("00000000-0000-0000-0000-000000000002");
+    expect(environment).toBeUndefined();
+  });
+
+  it("labels a new conversation with a copied PocketPilot child environment", () => {
+    const parentEntrypoint = process.env.CLAUDE_CODE_ENTRYPOINT;
+    let environment: NodeJS.ProcessEnv | undefined;
+
+    openClaudeSdkSession({ cwd: process.cwd() }, (params) => {
+      environment = params.options?.env;
+      return createFakeQuery();
+    });
+
+    expect(environment).toBeDefined();
+    expect(environment).not.toBe(process.env);
+    expect(environment?.CLAUDE_CODE_ENTRYPOINT).toBe("pocketpilot");
+    expect(
+      Object.entries(process.env).every(
+        ([key, value]) =>
+          key === "CLAUDE_CODE_ENTRYPOINT" || environment?.[key] === value,
+      ),
+    ).toBe(true);
+    expect(process.env.CLAUDE_CODE_ENTRYPOINT).toBe(parentEntrypoint);
   });
 
   it("forwards task-selected model and permission mode when opening a session", () => {

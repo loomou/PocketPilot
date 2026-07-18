@@ -246,7 +246,10 @@ The live test uses the production SDK wrapper and `TaskManager`, consumes
 approximately three model turns in `plan` mode, does not approve tools, and
 leaves one `POCKETPILOT_LIVE_TEST` session in Claude's local history. The
 workspace path is process input only and must not be committed to the project.
-Allow several minutes when the Claude service reports a retry.
+It also verifies that the new session remains visible under the pinned SDK's
+terminal `/resume` filtering before and after TaskManager resumes it. Legacy
+PocketPilot `sdk-ts` sessions are not reclassified or migrated. Allow several
+minutes when the Claude service reports a retry.
 
 Run the complete Windows tarball installation and lifecycle smoke test with:
 

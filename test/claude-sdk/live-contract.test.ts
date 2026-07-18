@@ -43,6 +43,10 @@ describe.runIf(liveConfig.enabled)("Claude Agent SDK live contracts", () => {
     if (sessionInfo.firstPrompt !== undefined) {
       expect(sessionInfo.firstPrompt).toContain("POCKETPILOT_LIVE_TEST");
     }
+    expect(
+      (await waitForTerminalVisibleSession(liveConfig.cwd, sessionId))
+        .sessionId,
+    ).toBe(sessionId);
 
     await runTaskManagerPhase(liveConfig.cwd, sessionId);
   }, 600_000);
@@ -303,6 +307,9 @@ async function runTaskManagerPhase(
     expect(
       history.messages.every((message) => message.session_id === sessionId),
     ).toBe(true);
+    expect(
+      (await waitForTerminalVisibleSession(cwd, sessionId)).sessionId,
+    ).toBe(sessionId);
     expect(eventSink.taskStates()).toEqual(
       expect.arrayContaining(["executing", "idle"]),
     );
@@ -343,6 +350,21 @@ async function waitForSessionInfo(
       }),
     "SDK session catalog",
   );
+}
+
+async function waitForTerminalVisibleSession(
+  cwd: string,
+  sessionId: string,
+): Promise<SDKSessionInfo> {
+  return waitForValue(async () => {
+    const sessions = await installedClaudeSessionCatalog.list({
+      dir: cwd,
+      includeProgrammatic: false,
+      includeWorktrees: false,
+      limit: 100,
+    });
+    return sessions.find((session) => session.sessionId === sessionId);
+  }, "terminal-visible SDK session catalog");
 }
 
 async function waitForHistory(
