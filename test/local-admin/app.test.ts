@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { buildMobileOpenApiDocument } from "../../src/api-docs/mobile-openapi.js";
 import { buildLocalAdminApp } from "../../src/local-admin/app.js";
+import { createPocketPilotLogger } from "../../src/logging/logger.js";
 import { buildRemoteApiApp } from "../../src/remote-api/app.js";
 
 describe("local administration application", () => {
@@ -21,6 +22,7 @@ describe("local administration application", () => {
 
   it("keeps local status separate and protects unsafe local-admin requests", async () => {
     let shutdownRequests = 0;
+    const logs = createCapture();
     const app = await buildLocalAdminApp({
       csrfProtection: {
         expectedOrigin: () => "http://127.0.0.1:43183",
@@ -30,6 +32,11 @@ describe("local administration application", () => {
         localAdminListener: { host: "127.0.0.1", port: 43183 },
         remoteListener: { host: "127.0.0.1", port: 43182 },
         status: "running" as const,
+      }),
+      logger: createPocketPilotLogger({
+        color: false,
+        destination: logs,
+        level: "info",
       }),
       requestShutdown: () => {
         shutdownRequests += 1;
@@ -75,6 +82,10 @@ describe("local administration application", () => {
     expect(rejectedShutdown.statusCode).toBe(401);
     expect(acceptedShutdown.statusCode).toBe(202);
     expect(shutdownRequests).toBe(1);
+    expect(logs.value()).toContain("code=LOCAL_ADMIN_CSRF_REJECTED");
+    expect(logs.value()).toContain("code=RUNTIME_CONTROL_UNAUTHORIZED");
+    expect(logs.value()).not.toContain("csrf-token");
+    expect(logs.value()).not.toContain("runtime-control-token");
   });
 
   it("serves built administration assets locally but never remotely", async () => {
@@ -166,3 +177,18 @@ describe("local administration application", () => {
     expect(remoteYaml.statusCode).toBe(404);
   });
 });
+
+function createCapture(): {
+  isTTY: false;
+  value(): string;
+  write(chunk: string): void;
+} {
+  let output = "";
+  return {
+    isTTY: false,
+    value: () => output,
+    write(chunk): void {
+      output += chunk;
+    },
+  };
+}

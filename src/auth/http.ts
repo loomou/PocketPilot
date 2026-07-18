@@ -1,5 +1,12 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { logEvents } from "../logging/events.js";
+import {
+  noopLogger,
+  type PocketPilotLogger,
+  type SafeLogFields,
+  safeErrorFields,
+} from "../logging/logger.js";
 import { TaskError } from "../tasks/errors.js";
 import { DeviceAuthError } from "./errors.js";
 
@@ -16,20 +23,42 @@ export const authErrorResponses = {
   422: authErrorResponseSchema,
 } as const;
 
-export function registerDeviceAuthErrorHandler(app: FastifyInstance): void {
-  app.setErrorHandler((error, _request, reply) => {
+export function registerDeviceAuthErrorHandler(
+  app: FastifyInstance,
+  logger: PocketPilotLogger = noopLogger,
+): void {
+  app.setErrorHandler((error, request, reply) => {
     if (error instanceof DeviceAuthError) {
+      logger.warn(
+        logEvents.authRequestRejected,
+        "Authentication request rejected",
+        {
+          ...safeRequestFields(request),
+          code: error.code,
+          statusCode: error.statusCode,
+        },
+      );
       return reply.code(error.statusCode).send({
         code: error.code,
         message: error.message,
       });
     }
     if (error instanceof TaskError) {
+      logger.warn(logEvents.httpRequestRejected, "Task request rejected", {
+        ...safeRequestFields(request),
+        code: error.code,
+        statusCode: error.statusCode,
+      });
       return reply.code(error.statusCode).send({
         code: error.code,
         message: error.message,
       });
     }
+    logger.error(logEvents.httpRequestFailed, "HTTP request failed", {
+      ...safeRequestFields(request),
+      ...safeErrorFields(error),
+      statusCode: 500,
+    });
     return reply.send(error);
   });
 }
@@ -48,4 +77,27 @@ export function readBearerAccessToken(request: FastifyRequest): string {
     );
   }
   return match[1];
+}
+
+function safeRequestFields(request: FastifyRequest): SafeLogFields {
+  const fields: Record<string, string> = {
+    method: request.method,
+    route: request.routeOptions.url ?? "unknown",
+  };
+  if (
+    typeof request.params !== "object" ||
+    request.params === null ||
+    Array.isArray(request.params)
+  ) {
+    return fields;
+  }
+  for (const key of ["deviceId", "pairingId", "requestId", "taskId"] as const) {
+    if (key in request.params) {
+      const value = Reflect.get(request.params, key);
+      if (typeof value === "string") {
+        fields[key] = value;
+      }
+    }
+  }
+  return fields;
 }

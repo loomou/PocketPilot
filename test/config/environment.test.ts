@@ -8,6 +8,7 @@ import {
   loadPocketPilotEnvironment,
   readAgentDataDirectory,
   readLocalAdminPort,
+  readLogLevel,
 } from "../../src/config/environment.js";
 import { EnvironmentConfigurationError } from "../../src/config/errors.js";
 
@@ -34,6 +35,7 @@ describe("PocketPilot dotenv environment", () => {
         "AGENT_MASTER_KEY=child",
         "POCKETPILOT_DATA_DIR=child-data",
         "POCKETPILOT_LOCAL_ADMIN_PORT=44001",
+        "POCKETPILOT_LOG_LEVEL=debug",
         "ANTHROPIC_API_KEY=must-not-load",
       ].join("\n"),
     );
@@ -48,6 +50,7 @@ describe("PocketPilot dotenv environment", () => {
       EXISTING: "preserved",
       POCKETPILOT_DATA_DIR: "child-data",
       POCKETPILOT_LOCAL_ADMIN_PORT: "44001",
+      POCKETPILOT_LOG_LEVEL: "debug",
     });
     expect(environment.ANTHROPIC_API_KEY).toBeUndefined();
   });
@@ -105,6 +108,18 @@ describe("PocketPilot dotenv environment", () => {
       expect(() =>
         readLocalAdminPort({ POCKETPILOT_LOCAL_ADMIN_PORT: value }),
       ).toThrow("integer from 1 through 65535");
+    }
+  });
+
+  it("validates foreground log verbosity", () => {
+    expect(readLogLevel({})).toBe("info");
+    for (const level of ["debug", "info", "warn", "error"] as const) {
+      expect(readLogLevel({ POCKETPILOT_LOG_LEVEL: level })).toBe(level);
+    }
+    for (const value of ["", "trace", "INFO", "verbose"]) {
+      expect(() => readLogLevel({ POCKETPILOT_LOG_LEVEL: value })).toThrow(
+        "POCKETPILOT_LOG_LEVEL must be one of: debug, info, warn, error.",
+      );
     }
   });
 

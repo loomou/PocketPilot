@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
+import type { PocketPilotLogger } from "../logging/logger.js";
 
 import type { DeviceAuthService } from "./device-auth-service.js";
 import {
@@ -72,8 +73,9 @@ export type RemoteDeviceAuthRouteService = Pick<
 export function registerRemoteDeviceAuthRoutes(
   app: FastifyInstance,
   deviceAuthService: RemoteDeviceAuthRouteService,
+  logger?: PocketPilotLogger,
 ): void {
-  registerDeviceAuthErrorHandler(app);
+  registerDeviceAuthErrorHandler(app, logger);
   const typedApp = app.withTypeProvider<ZodTypeProvider>();
 
   typedApp.post(

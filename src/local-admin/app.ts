@@ -11,6 +11,8 @@ import type { DeviceAuthService } from "../auth/device-auth-service.js";
 import { registerLocalDeviceAuthRoutes } from "../auth/local-admin-routes.js";
 import { createHttpApp } from "../http/create-http-app.js";
 import { registerHealthRoute } from "../http/health.js";
+import { logEvents } from "../logging/events.js";
+import { noopLogger, type PocketPilotLogger } from "../logging/logger.js";
 import type { SettingsRepository } from "../storage/settings-repository.js";
 import {
   type AuthorizedDirectoryManager,
@@ -62,6 +64,7 @@ export type LocalAdminAppOptions = {
   settingsRepository?: SettingsRepository;
   sqlite?: BetterSqlite3.Database;
   getStatus(): LocalAdminStatus;
+  logger?: PocketPilotLogger;
   mobileOpenApiDocument?: MobileOpenApiDocument;
   requestShutdown(): void;
   shutdownControlToken: string;
@@ -75,7 +78,11 @@ export type LocalAdminAppOptions = {
 export async function buildLocalAdminApp(
   options: LocalAdminAppOptions,
 ): Promise<FastifyInstance> {
-  const app = await createHttpApp();
+  const logger = options.logger ?? noopLogger;
+  const app = await createHttpApp({
+    listenerKind: "local-admin",
+    logger,
+  });
   if (options.mobileOpenApiDocument !== undefined) {
     await app.register(fastifySwagger, {
       mode: "static",
@@ -108,6 +115,15 @@ export async function buildLocalAdminApp(
     }
 
     if (!hasValidLocalAdminCsrfToken(request, options.csrfProtection)) {
+      logger.warn(
+        logEvents.authRequestRejected,
+        "Local administration request rejected",
+        {
+          code: "LOCAL_ADMIN_CSRF_REJECTED",
+          method: request.method,
+          route: request.routeOptions.url ?? "unknown",
+        },
+      );
       return reply.code(403).send({
         code: "LOCAL_ADMIN_CSRF_REJECTED",
         message:
@@ -156,6 +172,15 @@ export async function buildLocalAdminApp(
         request.headers["x-pocketpilot-control-token"] !==
         options.shutdownControlToken
       ) {
+        logger.warn(
+          logEvents.authRequestRejected,
+          "Runtime control request rejected",
+          {
+            code: "RUNTIME_CONTROL_UNAUTHORIZED",
+            method: request.method,
+            route: request.routeOptions.url ?? "unknown",
+          },
+        );
         return reply.code(401).send({
           code: "RUNTIME_CONTROL_UNAUTHORIZED",
           message: "The local runtime control credential is invalid.",
@@ -168,7 +193,11 @@ export async function buildLocalAdminApp(
   );
 
   if (options.deviceAuthService !== undefined) {
-    registerLocalDeviceAuthRoutes(app, options.deviceAuthService);
+    registerLocalDeviceAuthRoutes(
+      app,
+      options.deviceAuthService,
+      options.logger,
+    );
   }
   if (
     options.settingsRepository !== undefined &&

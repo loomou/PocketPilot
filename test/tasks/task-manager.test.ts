@@ -22,6 +22,10 @@ import type {
   OpenClaudeSdkSessionOptions,
 } from "../../src/claude-sdk/session.js";
 import {
+  createPocketPilotLogger,
+  type PocketPilotLogger,
+} from "../../src/logging/logger.js";
+import {
   openStorage,
   type StorageConnection,
 } from "../../src/storage/database.js";
@@ -167,6 +171,69 @@ describe("TaskManager", () => {
     expect(executing.state).toBe("executing");
     expect(session.submissions).toEqual([appendOnly.message, querying.message]);
     expect(fixture.eventSink.begunTurns).toEqual([created.task.id]);
+  });
+
+  it("logs task and SDK lifecycle without conversation or configuration content", async () => {
+    const logs = createCapture();
+    const logger = createPocketPilotLogger({
+      color: false,
+      destination: logs,
+      level: "debug",
+    });
+    const fixture = createFixture(
+      connections,
+      temporaryDirectories,
+      managers,
+      undefined,
+      logger,
+    );
+    const created = await fixture.manager.createTask(
+      createTaskInput(fixture.workspace, {
+        model: "sensitive-model-name",
+        workspaceRiskAccepted: true,
+      }),
+    );
+    await fixture.manager.submitSdkMessage(
+      sdkInput(created.task.id, "sensitive user prompt"),
+    );
+    const session = fixture.sessionFor(created.task.id);
+    const decision = session.requestApproval("approval-observable");
+    await waitFor(
+      () =>
+        fixture.manager.getTask(created.task.id).state === "awaiting_approval",
+    );
+    await fixture.manager.resolveApproval({
+      ...operationInput(created.task.id),
+      requestId: "approval-observable",
+      result: { behavior: "allow" },
+    });
+    await expect(decision).resolves.toMatchObject({ behavior: "allow" });
+    session.emitResult();
+    await waitFor(
+      () => fixture.manager.getTask(created.task.id).state === "idle",
+    );
+
+    const output = logs.value();
+    for (const expected of [
+      "Task created",
+      "SDK user message accepted",
+      "SDK Query started",
+      "Task approval requested",
+      "Task approval resolved",
+      "SDK Query completed",
+      "Task state changed",
+    ]) {
+      expect(output).toContain(expected);
+    }
+    for (const forbidden of [
+      "sensitive-model-name",
+      "sensitive user prompt",
+      "README.md",
+      "file_path",
+      'result="done"',
+    ]) {
+      expect(output).not.toContain(forbidden);
+    }
   });
 
   it("cancels a pending approval on interrupt and rejects its stale response", async () => {
@@ -867,6 +934,7 @@ function createFixture(
   temporaryDirectories: string[],
   managers: TaskManager[],
   closeTaskSdkConnections?: { closeTaskConnections(taskId: string): void },
+  logger?: PocketPilotLogger,
 ): {
   connection: StorageConnection;
   directory: string;
@@ -905,6 +973,7 @@ function createFixture(
       return session;
     },
     eventSink,
+    ...(logger === undefined ? {} : { logger }),
     settingsRepository,
     sqlite: connection.database,
   });
@@ -933,6 +1002,21 @@ function createFixture(
     sessionFor,
     settingsRepository,
     workspace,
+  };
+}
+
+function createCapture(): {
+  isTTY: false;
+  value(): string;
+  write(chunk: string): void;
+} {
+  let output = "";
+  return {
+    isTTY: false,
+    value: () => output,
+    write(chunk): void {
+      output += chunk;
+    },
   };
 }
 

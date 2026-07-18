@@ -12,6 +12,12 @@ import {
 } from "../local-admin/app.js";
 import { DirectorySelectionService } from "../local-admin/directory-selection-service.js";
 import { WindowsDirectoryPicker } from "../local-admin/windows-directory-picker.js";
+import { logEvents } from "../logging/events.js";
+import {
+  noopLogger,
+  type PocketPilotLogger,
+  safeErrorFields,
+} from "../logging/logger.js";
 import { buildRemoteApiApp } from "../remote-api/app.js";
 import { InMemoryTaskSdkConnectionRegistry } from "../remote-api/task-sdk-connection-registry.js";
 import { openStorage, type StorageConnection } from "../storage/database.js";
@@ -45,9 +51,11 @@ export type AgentRuntimeStatus = LocalAdminStatus;
 
 export type AgentRuntimeOptions = {
   databasePath: string;
+  developmentMode?: boolean;
   environment?: NodeJS.ProcessEnv;
   installSignalHandlers?: boolean;
   localAdminPort?: number;
+  logger?: PocketPilotLogger;
   runtimeControlPath?: string;
 };
 
@@ -64,6 +72,7 @@ export class AgentRuntime {
     | undefined;
   private localAdminListener: BoundListener | undefined;
   private readonly localAdminPort: number;
+  private readonly logger: PocketPilotLogger;
   private masterKey: Buffer | undefined;
   private remoteApiApp:
     | Awaited<ReturnType<typeof buildRemoteApiApp>>
@@ -84,25 +93,29 @@ export class AgentRuntime {
       options.runtimeControlPath ??
       join(dirname(options.databasePath), "runtime-control.json");
     this.localAdminPort = options.localAdminPort ?? DEFAULT_LOCAL_ADMIN_PORT;
+    this.logger = options.logger ?? noopLogger;
     this.stoppedPromise = new Promise((resolve) => {
       this.stoppedResolver = resolve;
     });
   }
 
   public async start(): Promise<AgentRuntimeStatus> {
-    const masterKey = readAgentMasterKey(this.options.environment);
-    this.masterKey = masterKey;
+    this.logger.info(logEvents.runtimeStarting, "Runtime starting");
     try {
+      const masterKey = readAgentMasterKey(this.options.environment);
+      this.masterKey = masterKey;
       this.releaseAgentLock = await acquireAgentLock(this.options.databasePath);
       this.storage = openStorage({ databasePath: this.options.databasePath });
       ensureMasterKeyVerifier(this.storage.sqlite, masterKey);
       clearTransientEventOverflow(this.storage.sqlite);
       pruneStorage(this.storage.sqlite);
+      this.logger.info(logEvents.runtimeStorageReady, "Runtime storage ready");
 
       const settingsRepository = new SettingsRepository(this.storage.database);
       const settings = readRuntimeSettings(settingsRepository);
       this.deviceAuthService = new DeviceAuthService({
         closeDeviceConnections: this.deviceConnectionRegistry,
+        logger: this.logger,
         masterKey,
         settingsRepository,
         sqlite: this.storage.sqlite,
@@ -114,15 +127,38 @@ export class AgentRuntime {
       this.taskManager = new TaskManager({
         closeTaskSdkConnections: this.taskSdkConnectionRegistry,
         eventSink: this.taskEventJournal,
+        logger: this.logger,
         settingsRepository,
         sqlite: this.storage.database,
       });
-      this.taskManager.recoverFromUnexpectedRestart();
+      const recoveredTaskCount =
+        this.taskManager.recoverFromUnexpectedRestart();
       await this.startListeners(settings, this.deviceAuthService);
       this.installSignalHandlers();
       this.runtimeStarted = true;
-      return this.currentStatus(settings);
+      const status = this.currentStatus(settings);
+      this.logger.info(logEvents.runtimeStarted, "Runtime started", {
+        recoveredTaskCount,
+      });
+      this.logger.info(
+        logEvents.runtimeRemoteHealthReady,
+        `Remote health: http://${status.remoteListener.host}:${status.remoteListener.port}/healthz`,
+      );
+      this.logger.info(
+        logEvents.runtimeLocalAdminReady,
+        `Local administration: http://${status.localAdminListener.host}:${status.localAdminListener.port}`,
+      );
+      if (this.options.developmentMode === true) {
+        this.logger.info(
+          logEvents.runtimeSwaggerReady,
+          `Swagger documentation: http://${status.localAdminListener.host}:${status.localAdminListener.port}/documentation/`,
+        );
+      }
+      return status;
     } catch (error) {
+      this.logger.error(logEvents.runtimeStartFailed, "Runtime start failed", {
+        ...safeErrorFields(error),
+      });
       await this.shutdown();
       throw error;
     }
@@ -133,6 +169,10 @@ export class AgentRuntime {
       return this.shutdownPromise;
     }
 
+    this.logger.info(
+      logEvents.runtimeShutdownRequested,
+      "Runtime shutdown requested",
+    );
     this.shutdownPromise = this.stopResources();
     return this.shutdownPromise;
   }
@@ -172,6 +212,7 @@ export class AgentRuntime {
       staticRoot: resolveLocalAdminStaticRoot(),
       getStatus: () => this.currentStatus(settings),
       mobileOpenApiDocument,
+      logger: this.logger,
       requestShutdown: () => {
         setTimeout(() => {
           void this.shutdown();
@@ -189,6 +230,7 @@ export class AgentRuntime {
       ...(this.taskManager === undefined
         ? {}
         : { taskManager: this.taskManager }),
+      logger: this.logger,
       taskSdkConnectionRegistry: this.taskSdkConnectionRegistry,
     });
 
@@ -199,12 +241,22 @@ export class AgentRuntime {
     this.localAdminListener = listenerAddress(
       this.localAdminApp.server.address(),
     );
+    this.logger.debug(logEvents.runtimeListenerStarted, "Listener started", {
+      host: this.localAdminListener.host,
+      listener: "local-admin",
+      port: this.localAdminListener.port,
+    });
 
     await this.remoteApiApp.listen({
       host: settings.remoteListener.host,
       port: settings.remoteListener.port,
     });
     this.remoteListener = listenerAddress(this.remoteApiApp.server.address());
+    this.logger.debug(logEvents.runtimeListenerStarted, "Listener started", {
+      host: this.remoteListener.host,
+      listener: "remote",
+      port: this.remoteListener.port,
+    });
 
     await writeRuntimeControlState(this.controlStatePath, {
       localAdminPort: this.localAdminListener.port,
@@ -281,6 +333,7 @@ export class AgentRuntime {
         try {
           await releaseAgentLock?.();
         } finally {
+          this.logger.info(logEvents.runtimeStopped, "Runtime stopped");
           this.stoppedResolver?.();
           this.stoppedResolver = undefined;
         }

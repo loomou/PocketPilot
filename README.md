@@ -56,6 +56,7 @@ set the generated key:
 AGENT_MASTER_KEY=<generated-key>
 POCKETPILOT_DATA_DIR=D:\PocketPilotData
 POCKETPILOT_LOCAL_ADMIN_PORT=43183
+POCKETPILOT_LOG_LEVEL=info
 ```
 
 Run every `agent` command from that directory. PocketPilot reads only the exact
@@ -69,6 +70,7 @@ Existing process-environment values override `.env`. The dotenv allowlist is:
 - `AGENT_NEW_MASTER_KEY` for `agent rekey` only
 - `POCKETPILOT_DATA_DIR`
 - `POCKETPILOT_LOCAL_ADMIN_PORT`
+- `POCKETPILOT_LOG_LEVEL`
 
 Other `.env` keys are ignored. PocketPilot does not load `ANTHROPIC_*` or other
 Claude credentials from this file; Claude configuration remains owned by the
@@ -112,6 +114,53 @@ agent stop
 
 Both paths cancel all active Agent tasks and pending approvals before the
 process exits. The local administration page never starts or stops the Agent.
+
+## Runtime Logs
+
+`agent start` writes colored, human-readable diagnostics to its foreground
+terminal. The default `info` level shows runtime/listener startup and shutdown,
+pairing stages, authentication rejection, WebSocket lifecycle, task state,
+approvals, and Claude SDK Query boundaries. It never logs credentials,
+verification codes, authorization headers, prompts, SDK payloads, tool
+input/output, model configuration, or conversation history.
+
+Every successful development or production start lists these endpoints on
+separate lines:
+
+```text
+Remote health: http://192.168.31.223:43182/healthz
+Local administration: http://127.0.0.1:43183
+```
+
+`pnpm dev` runs from the TypeScript source entrypoint and additionally lists:
+
+```text
+Swagger documentation: http://127.0.0.1:43183/documentation/
+```
+
+Built production execution through `pnpm start` or `node dist/cli.js start`
+does not print the Swagger line. The local Swagger route remains available;
+only the production startup hint is omitted.
+
+For detailed HTTP route, status, and duration metadata, set the log level before
+starting the Agent or put the same key in the startup-directory `.env`:
+
+```powershell
+$env:POCKETPILOT_LOG_LEVEL = "debug"
+agent start
+Remove-Item Env:POCKETPILOT_LOG_LEVEL
+```
+
+Colors are disabled automatically when output is redirected. Set
+`NO_COLOR=1` to disable them in an interactive terminal. To collect a temporary
+diagnostic file for troubleshooting without changing PocketPilot storage:
+
+```powershell
+agent start 2>&1 | Tee-Object -FilePath .\pocketpilot-diagnostic.log
+```
+
+Review the file before sharing it. PocketPilot itself does not retain or expose
+runtime logs through either HTTP listener.
 
 ## Local Configuration
 

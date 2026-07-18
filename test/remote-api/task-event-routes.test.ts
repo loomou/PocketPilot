@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { InMemoryDeviceConnectionRegistry } from "../../src/auth/device-connection-registry.js";
 import { createHttpApp } from "../../src/http/create-http-app.js";
+import { createPocketPilotLogger } from "../../src/logging/logger.js";
 import { registerTaskEventRoutes } from "../../src/remote-api/task-event-routes.js";
 import type { TaskControlEventSubscriber } from "../../src/tasks/task-events.js";
 
@@ -17,6 +18,12 @@ describe("task control WebSocket", () => {
 
   it("subscribes only to PocketPilot control envelopes", async () => {
     const app = await createHttpApp({ websocket: true });
+    const logs = createCapture();
+    const logger = createPocketPilotLogger({
+      color: false,
+      destination: logs,
+      level: "info",
+    });
     let subscriber: TaskControlEventSubscriber | undefined;
     registerTaskEventRoutes(app, {
       connectionRegistry: new InMemoryDeviceConnectionRegistry(),
@@ -33,6 +40,7 @@ describe("task control WebSocket", () => {
           };
         },
       },
+      logger,
     });
     await app.ready();
     apps.push(app);
@@ -79,8 +87,26 @@ describe("task control WebSocket", () => {
       type: "event",
     });
     client.terminate();
+    expect(logs.value()).toContain("Control WebSocket connected");
+    expect(logs.value()).toContain("Control WebSocket subscribed");
+    expect(logs.value()).not.toContain("file_path");
   });
 });
+
+function createCapture(): {
+  isTTY: false;
+  value(): string;
+  write(chunk: string): void;
+} {
+  let output = "";
+  return {
+    isTTY: false,
+    value: () => output,
+    write(chunk): void {
+      output += chunk;
+    },
+  };
+}
 
 function nextMessage(socket: {
   once(event: "message", listener: (data: Buffer) => void): unknown;
