@@ -69,3 +69,37 @@ Implemented and validated the approved desktop-only shadcn local-admin redesign,
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Local admin internationalization
+
+**Date**: 2026-07-18
+**Task**: Local admin internationalization
+**Branch**: `feat/pocketpilot-development`
+
+### Summary
+
+Added registry-driven Simplified Chinese and English localization for the full local administration console, preserved state across locale switches, expanded regression coverage and frontend specs, and normalized Windows session fixture paths so the complete root quality gate passes.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b13003a` | (see git log) |
+| `cf4f5ce` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
