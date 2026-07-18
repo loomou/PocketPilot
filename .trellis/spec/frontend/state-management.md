@@ -25,6 +25,12 @@ After a mutation, keep the successful result/notice and refresh the collections
 that another device or the Agent may have changed. Never treat browser state as
 the authority for device revocation or pending-pairing status.
 
+Phone registration is asynchronous relative to QR generation. While the
+current QR is valid, replace only `snapshot.pendingPairings` from the typed
+pending endpoint. A failed poll leaves all state unchanged; a newer QR or
+unmount aborts the old poll. This follows the same partial-snapshot rule as
+authorized-directory refresh and preserves unsaved configuration values.
+
 For directory mutations, the returned snapshot is authoritative. On a stale
 removal response, refresh only `/admin/authorized-directories` and require the
 user to confirm the new revision/count; never auto-retry a P0 removal.
