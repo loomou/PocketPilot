@@ -31,6 +31,9 @@ session.initialize(): Promise<{
   models: ModelInfo[];
 }>;
 session.setEffortLevel(level: EffortLevel | null): Promise<void>;
+readLiveSdkTestConfig(environment?):
+  | { enabled: false }
+  | { cwd: string; enabled: true };
 
 catalog.list(options: ListSessionsOptions): Promise<SDKSessionInfo[]>;
 catalog.getInfo(sessionId, options): Promise<SDKSessionInfo | undefined>;
@@ -89,8 +92,16 @@ consumer and remains open until task close or coordinated shutdown.
   either Query so the original `system/init` reaches the client unchanged.
 - Query composer discovery uses `supportedModels()` and each model's
   `supportedEffortLevels`; permission choices cover every pinned SDK
-  `PermissionMode`. Observe raw `system/init`/`system/status` for actual model
-  and permission state instead of projecting those messages.
+  `PermissionMode`. The returned model list is a composer catalog, not an
+  exhaustive validation set for locally configured models; the active
+  `system:init.model` may be absent from it. Observe raw
+  `system:init`/`system/status` for actual model and permission state instead
+  of projecting those messages or selecting `models[0]` as current state.
+- `initializationResult()` and `supportedModels()` may resolve before a resumed
+  Query publishes raw `system:init`. Install the raw subscriber first, but do
+  not require activation alone to emit init; the first streaming input starts
+  raw delivery. A live contract may use `shouldQuery: false` to prove this
+  boundary without consuming another model turn.
 - Forward live model/mode/effort controls through `setModel()`,
   `setPermissionMode()`, and `applyFlagSettings()` on the existing streaming
   Query. They may run during an active turn and apply to the next turn; never
@@ -100,6 +111,11 @@ consumer and remains open until task close or coordinated shutdown.
   `ClaudeSdkSession.setEffortLevel()` and still call
   `applyFlagSettings({ effortLevel })`; never substitute deprecated
   `setMaxThinkingTokens()`.
+- The dedicated `pnpm test:sdk:live` runner sets `CLAUDE_SDK_LIVE=1` only for
+  its Vitest child and requires `CLAUDE_SDK_TEST_CWD` to name an absolute,
+  existing directory. Ordinary `pnpm test` remains offline and skips the live
+  scenario. Never commit a developer's concrete workspace or read its Claude
+  configuration directly.
 
 ### 4. Validation & Error Matrix
 
@@ -116,6 +132,8 @@ consumer and remains open until task close or coordinated shutdown.
 | SDK rejects model, permission, or effort | Return the control failure; retain the current Query and perform no PocketPilot fallback. |
 | Session catalog/history API fails | Translate to a safe task-domain error; never expose an SDK exception or local path. |
 | `max` effort is selected | Forward through the narrow live-settings adapter; do not reject a model-advertised SDK value. |
+| Live mode has no valid absolute test workspace | Fail before constructing Query; name only `CLAUDE_SDK_TEST_CWD`, not its value. |
+| Live Query emits `system/api_retry` | Preserve the raw event and allow a bounded retry window; diagnostics contain message categories only, never output content. |
 
 ### 5. Good / Base / Bad Cases
 
@@ -129,9 +147,14 @@ consumer and remains open until task close or coordinated shutdown.
   into a prompt; Claude Code alone restores and compacts context on resume.
 - Base: an idle task receives `shouldQuery: false`; the SDK appends it without
   PocketPilot inventing an active turn, while the same session remains usable.
+- Base: a resumed Query initializes composer controls before raw init, then a
+  `shouldQuery: false` input causes the unchanged init to reach the installed
+  subscriber before the next query-triggering input.
 - Bad: converting input from `{ instruction }`, dropping `user` output, or
   sending `{ kind: "sdk", payload: message }`. Each creates a second protocol
   that drifts from the installed SDK.
+- Bad: treating `supportedModels()[0]` as the current model or rejecting the
+  raw init model because it is absent from that catalog.
 
 ### 6. Tests Required
 
@@ -144,9 +167,12 @@ consumer and remains open until task close or coordinated shutdown.
 - Test every serializable `CanUseTool` option and complete allow/deny
   `PermissionResult`, plus SDK abort, replacement, interrupt, close, and
   shutdown cancellation.
-- Keep an opt-in `CLAUDE_SDK_LIVE=1` test for the pinned package that discovers
-  initialization/models, submits multiple messages on one stream, changes
-  controls between turns, and interrupts the session.
+- Keep an opt-in `pnpm test:sdk:live` scenario for the pinned package that
+  requires `CLAUDE_SDK_TEST_CWD`, discovers initialization/models, submits
+  multiple messages on one stream, changes controls between turns, resumes the
+  same session through `TaskManager`, and interrupts/shuts down cleanly. The
+  runner owns `CLAUDE_SDK_LIVE=1`; default tests assert the live scenario is
+  skipped.
 - Unit-test catalog option forwarding and object identity, effort including
   `max`/null, Query defaults versus resume, and subscribe-before-activation
   delivery of unwrapped `system/init`.

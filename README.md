@@ -229,6 +229,25 @@ The local administration workspace is in `apps/local-admin`. Use
 `pnpm dev:admin` for UI-only development. The production Agent serves the Vite
 build only from its localhost Fastify listener.
 
+### Live Claude SDK integration test
+
+The default `pnpm test` command does not start Claude Code. To verify the
+installed and authenticated Claude Agent SDK against a developer-selected
+workspace, set an absolute directory for the current process and run the
+explicit live test:
+
+```powershell
+$env:CLAUDE_SDK_TEST_CWD = "<absolute-workspace-path>"
+pnpm test:sdk:live
+Remove-Item Env:CLAUDE_SDK_TEST_CWD
+```
+
+The live test uses the production SDK wrapper and `TaskManager`, consumes
+approximately three model turns in `plan` mode, does not approve tools, and
+leaves one `POCKETPILOT_LIVE_TEST` session in Claude's local history. The
+workspace path is process input only and must not be committed to the project.
+Allow several minutes when the Claude service reports a retry.
+
 Run the complete Windows tarball installation and lifecycle smoke test with:
 
 ```powershell
