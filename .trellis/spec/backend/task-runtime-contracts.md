@@ -156,8 +156,10 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   before returning session data or persisting a runtime.
 - An approval uses the SDK `requestId`. The control payload is
   `{ toolName, input, options: Omit<CanUseToolOptions, "signal"> }`; the HTTP
-  response body is `{ operationId, result: PermissionResult }`. Return the
-  result unchanged to the deferred callback.
+  resolution request uses the path `requestId` plus body
+  `{ operationId, result: PermissionResult }`, and its response is the shared
+  `TaskOperationResult` metadata shape `{ action, task }`. Return the submitted
+  result unchanged to the deferred callback without echoing it in the response.
 - SDK and control journal APIs are disjoint. Raw subscribers receive only
   `SDKMessage`; control subscribers receive only PocketPilot envelopes. Never
   publish `{ kind: "sdk", payload }` on `/v1/events`.

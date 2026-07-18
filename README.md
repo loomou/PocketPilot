@@ -130,6 +130,11 @@ the remote API listener.
 
 ## Mobile API Documentation
 
+End-to-end integration guides:
+
+- [English mobile integration guide](docs/mobile-integration-guide.en.md)
+- [Simplified Chinese mobile integration guide](docs/mobile-integration-guide.zh-CN.md)
+
 With the Agent running, open the local Swagger UI at:
 
 ```text

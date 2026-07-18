@@ -78,8 +78,10 @@ emits `dist/openapi/mobile-v1.json`.
 - Document subscribe-before-activation for session-centric runtimes without
   changing the raw WebSocket schemas or adding an SDK envelope.
 - Document approval controls with every serializable `CanUseTool` option and
-  the HTTP response's complete `PermissionResult`; explicitly state that
-  `AbortSignal` remains local.
+  the HTTP resolution request's complete `PermissionResult`; explicitly state
+  that `AbortSignal` remains local. The response remains the shared
+  `taskOperationResultSchema` metadata shape rather than echoing the SDK
+  permission decision.
 - `pnpm build` writes deterministic, pretty-printed JSON. The packed tarball
   includes the same artifact and all Swagger runtime dependencies.
 
