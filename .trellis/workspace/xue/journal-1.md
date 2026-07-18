@@ -406,3 +406,36 @@ Added typed pending-pairing polling for the local admin QR flow, preserving stag
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: Simplify QR pairing approval
+
+**Date**: 2026-07-19
+**Task**: Simplify QR pairing approval
+**Branch**: `fix/pairing-code-approval-flow`
+
+### Summary
+
+Replaced local-admin pending-pairing polling with an explicit mobile-code approval flow. QR generation now shows a single code input, Approve submits the active pairing ID on click, successful responses update devices locally, failures preserve the QR/code, and frontend specs/tests were synchronized.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `540af86` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
