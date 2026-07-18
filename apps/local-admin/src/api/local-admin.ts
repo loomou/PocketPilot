@@ -179,6 +179,16 @@ export function loadAuthorizedDirectories(): Promise<AuthorizedDirectorySnapshot
   );
 }
 
+export function loadPendingPairings(
+  signal?: AbortSignal,
+): Promise<PendingPairing[]> {
+  return requestJson(
+    "/admin/pairings/pending",
+    z.array(pendingPairingSchema),
+    signal === undefined ? undefined : { signal },
+  );
+}
+
 export function pickAuthorizedDirectory(
   csrfToken: string,
 ): Promise<z.infer<typeof directoryPickResponseSchema>> {

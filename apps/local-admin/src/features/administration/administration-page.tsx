@@ -20,11 +20,13 @@ import {
   type AuthorizedDirectory,
   addAuthorizedDirectory,
   approvePairing,
+  type CreatedPairing,
   createPairing,
   LocalAdminApiError,
   type LocalAdminSnapshot,
   loadAuthorizedDirectories,
   loadLocalAdminSnapshot,
+  loadPendingPairings,
   pickAuthorizedDirectory,
   type RuntimeSettings,
   removeAuthorizedDirectory,
@@ -35,6 +37,9 @@ import {
 import { Button } from "@/components/ui/button";
 
 type Notice = { kind: "error" | "success"; message: string };
+type ActivePairing = Pick<CreatedPairing, "expiresAt" | "pairingId">;
+
+const pendingPairingPollIntervalMilliseconds = 1_000;
 
 export function AdministrationPage() {
   const [snapshot, setSnapshot] = useState<LocalAdminSnapshot>();
@@ -44,7 +49,7 @@ export function AdministrationPage() {
     {},
   );
   const [pairingQrUrl, setPairingQrUrl] = useState<string>();
-  const [pairingExpiry, setPairingExpiry] = useState<number>();
+  const [activePairing, setActivePairing] = useState<ActivePairing>();
 
   const refresh = useCallback(async (preserveNotice = false) => {
     try {
@@ -59,6 +64,42 @@ export function AdministrationPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (activePairing === undefined) return;
+
+    const abortController = new AbortController();
+    let cancelled = false;
+    let timeoutId: number | undefined;
+    const poll = async (): Promise<void> => {
+      if (cancelled || Date.now() >= activePairing.expiresAt) return;
+      try {
+        const pendingPairings = await loadPendingPairings(
+          abortController.signal,
+        );
+        if (!cancelled && Date.now() < activePairing.expiresAt) {
+          setSnapshot((current) =>
+            current === undefined ? current : { ...current, pendingPairings },
+          );
+        }
+      } catch {
+        // Polling is best-effort; retain the current UI and retry until expiry.
+      }
+      if (!cancelled && Date.now() < activePairing.expiresAt) {
+        timeoutId = window.setTimeout(
+          () => void poll(),
+          pendingPairingPollIntervalMilliseconds,
+        );
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      abortController.abort();
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, [activePairing]);
 
   const saveConfiguration = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
@@ -102,9 +143,11 @@ export function AdministrationPage() {
       setPairingQrUrl(
         `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
       );
-      setPairingExpiry(pairing.expiresAt);
+      setActivePairing({
+        expiresAt: pairing.expiresAt,
+        pairingId: pairing.pairingId,
+      });
       setNotice({ kind: "success", message: "Pairing QR generated." });
-      await refresh(true);
     } catch (error) {
       setNotice({ kind: "error", message: errorMessage(error) });
     } finally {
@@ -471,7 +514,7 @@ export function AdministrationPage() {
                         src={pairingQrUrl}
                       />
                       <p className="mt-2 text-xs text-slate-500">
-                        Expires {formatTimestamp(pairingExpiry)}
+                        Expires {formatTimestamp(activePairing?.expiresAt)}
                       </p>
                     </div>
                   )}

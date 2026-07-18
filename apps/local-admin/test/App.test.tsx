@@ -6,6 +6,7 @@ import { App } from "../src/App";
 describe("App", () => {
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -56,6 +57,78 @@ describe("App", () => {
     expect(
       screen.getByRole("button", { name: "Save configuration" }),
     ).toBeEnabled();
+  });
+
+  it("shows a scanned device without generating a second QR or resetting edits", async () => {
+    let pendingReadCount = 0;
+    let phoneRegistered = false;
+    const pairing = {
+      expiresAt: Date.now() + 5 * 60 * 1_000,
+      pairingId: "00000000-0000-4000-8000-000000000030",
+      qrPayload: {
+        agentId: "00000000-0000-4000-8000-000000000031",
+        baseUrl: "https://agent.example.test",
+        expiresAt: Date.now() + 5 * 60 * 1_000,
+        pairingId: "00000000-0000-4000-8000-000000000030",
+        version: 1,
+      },
+    } as const;
+    const pendingDevice = {
+      deviceDisplayName: "New phone",
+      expiresAt: pairing.expiresAt,
+      pairingId: pairing.pairingId,
+      verificationCode: "654321",
+    } as const;
+    const fetchMock = installFetchMock(
+      new Map<string, ResponseOverride>([
+        ["POST /admin/pairings", pairing],
+        [
+          "GET /admin/pairings/pending",
+          () => {
+            pendingReadCount += 1;
+            if (pendingReadCount === 2) {
+              throw new Error("transient poll failure");
+            }
+            return phoneRegistered ? [pendingDevice] : [];
+          },
+        ],
+      ]),
+    );
+    render(<App />);
+
+    const capacity = await screen.findByLabelText("Concurrent task capacity");
+    fireEvent.change(capacity, { target: { value: "9" } });
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Generate QR" }));
+    await vi.waitFor(() => {
+      expect(
+        screen.getByAltText("PocketPilot device pairing QR code"),
+      ).toBeInTheDocument();
+    });
+
+    phoneRegistered = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => {
+      expect(screen.getByText("New phone")).toBeInTheDocument();
+      expect(screen.getByLabelText("Mobile code")).toBeInTheDocument();
+    });
+
+    expect(screen.getByDisplayValue("9")).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.filter(
+        (call) =>
+          requestPath(call[0]) === "/admin/pairings" &&
+          call[1]?.method === "POST",
+      ),
+    ).toHaveLength(1);
+    const pollingSignal = fetchMock.mock.calls.find(
+      (call) =>
+        requestPath(call[0]) === "/admin/pairings/pending" &&
+        call[1]?.signal !== undefined,
+    )?.[1]?.signal;
+    expect(pollingSignal?.aborted).toBe(false);
+    cleanup();
+    expect(pollingSignal?.aborted).toBe(true);
   });
 
   it("rejects an invalid local API response before rendering its data", async () => {
@@ -164,7 +237,9 @@ describe("App", () => {
   });
 });
 
-function installFetchMock(overrides = new Map<string, unknown>()) {
+type ResponseOverride = unknown | (() => unknown | Promise<unknown>);
+
+function installFetchMock(overrides = new Map<string, ResponseOverride>()) {
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const path = requestPath(input);
@@ -176,11 +251,15 @@ function installFetchMock(overrides = new Map<string, unknown>()) {
         );
       }
       const methodPath = `${init?.method ?? "GET"} ${path}`;
-      const response = overrides.has(methodPath)
+      const selectedResponse = overrides.has(methodPath)
         ? overrides.get(methodPath)
         : overrides.has(path)
           ? overrides.get(path)
           : responses.get(path);
+      const response =
+        typeof selectedResponse === "function"
+          ? await selectedResponse()
+          : selectedResponse;
       if (response === undefined) {
         return jsonResponse(
           { code: "NOT_FOUND", message: "No mocked response." },

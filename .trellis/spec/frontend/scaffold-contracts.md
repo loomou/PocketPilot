@@ -10,6 +10,8 @@ Agent and is not a second mobile/task control application.
 
 - `App(): JSX.Element` composes `AdministrationPage`.
 - `loadLocalAdminSnapshot(): Promise<LocalAdminSnapshot>` owns initial reads.
+- `loadPendingPairings(signal?): Promise<PendingPairing[]>` owns the scoped
+  pairing-registration refresh.
 - Browser mutations: `saveRuntimeSettings`, `saveTaskSettings`,
   `createPairing`, `approvePairing`, and `revokeDevice`.
 - Directory mutations: `pickAuthorizedDirectory`, `addAuthorizedDirectory`,
@@ -34,6 +36,12 @@ Agent and is not a second mobile/task control application.
   form edits.
 - QR rendering encodes the complete server-returned `qrPayload` as JSON. The
   UI never invents an Agent ID, pairing ID, base URL, or expiry.
+- A generated QR starts one serial pending-pairing poller for that QR's
+  lifetime. It reads only `/admin/pairings/pending`, replaces only
+  `snapshot.pendingPairings`, retries transient failure without changing the
+  notice, and aborts the in-flight request when the QR is replaced or the page
+  unmounts. It never refreshes the complete snapshot because that would discard
+  staged configuration edits.
 - `App.tsx` remains composition-only. Stateful application behavior lives in
   `features/administration`; shadcn-style primitives remain under
   `components/ui`.
@@ -54,6 +62,7 @@ Agent and is not a second mobile/task control application.
 | Selected row is a volume root | Require browser confirmation before sending `volumeRootRiskAccepted: true`. |
 | Removal returns `AUTHORIZED_DIRECTORY_SNAPSHOT_STALE` | Reload only directories, keep form edits, and require a new confirmation. |
 | Pairing approval code is not six digits | Keep the Approve action disabled. |
+| Pending-pairing poll fails transiently | Preserve the QR, notice, snapshot, and form edits; retry until QR expiry. |
 | Device is already revoked | Show revoked state and no revoke action. |
 
 ## 5. Good / Base / Bad Cases
@@ -66,6 +75,9 @@ Agent and is not a second mobile/task control application.
   state unchanged.
 - Base: empty pending/device/audit arrays render explicit empty rows while the
   configuration form stays usable.
+- Base: a phone registers after the one-time QR mutation response; the scoped
+  poll reveals its pending row and Mobile code input without another Generate
+  QR action.
 - Bad: casting `await response.json()` to a component-local interface,
   sending a manually typed directory path, refreshing the whole snapshot after
   Add/Remove, or adding mobile task operations to the localhost page.
@@ -76,6 +88,9 @@ Agent and is not a second mobile/task control application.
   status, and audit sections from mocked local API responses.
 - Save behavior asserts both PUT requests contain the fetched CSRF token and
   JSON content type.
+- Pairing polling tests start from an empty pending list, tolerate one failed
+  poll, reveal the later registered device after one QR generation, preserve a
+  staged form edit, and assert unmount aborts the poll signal.
 - Add/Remove tests assert picker-selected payloads, volume/stale confirmation,
   current revision/count, and preservation of staged capacity/runtime values.
 - Backend/static integration separately proves the bundle is never served by
@@ -88,6 +103,7 @@ Agent and is not a second mobile/task control application.
 
 ```ts
 const configuration = (await response.json()) as Configuration;
+await refresh(); // Full snapshot polling also overwrites staged form edits.
 ```
 
 The component trusts unknown HTTP data and privately redefines the server
@@ -98,6 +114,10 @@ contract.
 ```ts
 const payload: unknown = await response.json();
 const configuration = configurationSchema.parse(payload);
+const pendingPairings = await loadPendingPairings(signal);
+setSnapshot((current) =>
+  current === undefined ? current : { ...current, pendingPairings },
+);
 ```
 
 The API boundary validates once and exports the inferred type to the feature.
