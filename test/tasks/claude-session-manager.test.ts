@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -496,10 +496,13 @@ type Fixture = {
 
 function createFixture(fixtures: Fixture[]): Fixture {
   const directory = mkdtempSync(join(tmpdir(), "pocketpilot-sessions-"));
-  const workspace = join(directory, "workspace");
-  const outside = join(directory, "outside");
-  mkdirSync(workspace);
-  mkdirSync(outside);
+  const workspacePath = join(directory, "workspace");
+  const outsidePath = join(directory, "outside");
+  mkdirSync(workspacePath);
+  mkdirSync(outsidePath);
+  // Match node:fs/promises realpath, including Windows 8.3 expansion.
+  const workspace = realpathSync.native(workspacePath);
+  const outside = realpathSync.native(outsidePath);
   const connection = openStorage({
     databasePath: join(directory, "agent.sqlite"),
   });
