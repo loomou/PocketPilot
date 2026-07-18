@@ -26,7 +26,6 @@ import {
   type LocalAdminSnapshot,
   loadAuthorizedDirectories,
   loadLocalAdminSnapshot,
-  loadPendingPairings,
   pickAuthorizedDirectory,
   type RuntimeSettings,
   removeAuthorizedDirectory,
@@ -39,15 +38,11 @@ import { Button } from "@/components/ui/button";
 type Notice = { kind: "error" | "success"; message: string };
 type ActivePairing = Pick<CreatedPairing, "expiresAt" | "pairingId">;
 
-const pendingPairingPollIntervalMilliseconds = 1_000;
-
 export function AdministrationPage() {
   const [snapshot, setSnapshot] = useState<LocalAdminSnapshot>();
   const [notice, setNotice] = useState<Notice>();
   const [busyAction, setBusyAction] = useState<string>();
-  const [approvalCodes, setApprovalCodes] = useState<Record<string, string>>(
-    {},
-  );
+  const [approvalCode, setApprovalCode] = useState("");
   const [pairingQrUrl, setPairingQrUrl] = useState<string>();
   const [activePairing, setActivePairing] = useState<ActivePairing>();
 
@@ -64,42 +59,6 @@ export function AdministrationPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  useEffect(() => {
-    if (activePairing === undefined) return;
-
-    const abortController = new AbortController();
-    let cancelled = false;
-    let timeoutId: number | undefined;
-    const poll = async (): Promise<void> => {
-      if (cancelled || Date.now() >= activePairing.expiresAt) return;
-      try {
-        const pendingPairings = await loadPendingPairings(
-          abortController.signal,
-        );
-        if (!cancelled && Date.now() < activePairing.expiresAt) {
-          setSnapshot((current) =>
-            current === undefined ? current : { ...current, pendingPairings },
-          );
-        }
-      } catch {
-        // Polling is best-effort; retain the current UI and retry until expiry.
-      }
-      if (!cancelled && Date.now() < activePairing.expiresAt) {
-        timeoutId = window.setTimeout(
-          () => void poll(),
-          pendingPairingPollIntervalMilliseconds,
-        );
-      }
-    };
-
-    void poll();
-    return () => {
-      cancelled = true;
-      abortController.abort();
-      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
-    };
-  }, [activePairing]);
 
   const saveConfiguration = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
@@ -147,6 +106,7 @@ export function AdministrationPage() {
         expiresAt: pairing.expiresAt,
         pairingId: pairing.pairingId,
       });
+      setApprovalCode("");
       setNotice({ kind: "success", message: "Pairing QR generated." });
     } catch (error) {
       setNotice({ kind: "error", message: errorMessage(error) });
@@ -155,14 +115,25 @@ export function AdministrationPage() {
     }
   };
 
-  const approve = async (pairingId: string): Promise<void> => {
-    if (snapshot === undefined) return;
-    const verificationCode = approvalCodes[pairingId] ?? "";
+  const approve = async (): Promise<void> => {
+    if (snapshot === undefined || activePairing === undefined) return;
+    const pairingId = activePairing.pairingId;
     setBusyAction(`approve:${pairingId}`);
     try {
-      await approvePairing(snapshot.csrfToken, pairingId, verificationCode);
+      const device = await approvePairing(
+        snapshot.csrfToken,
+        pairingId,
+        approvalCode,
+      );
+      setSnapshot((current) =>
+        current === undefined
+          ? current
+          : { ...current, devices: [...current.devices, device] },
+      );
+      setActivePairing(undefined);
+      setPairingQrUrl(undefined);
+      setApprovalCode("");
       setNotice({ kind: "success", message: "Device pairing approved." });
-      await refresh(true);
     } catch (error) {
       setNotice({ kind: "error", message: errorMessage(error) });
     } finally {
@@ -521,59 +492,39 @@ export function AdministrationPage() {
                 </div>
                 <div className="border-y border-slate-200 bg-white">
                   <h3 className="border-b border-slate-200 px-5 py-3 text-sm font-semibold">
-                    Pending approvals
+                    Approve this device
                   </h3>
-                  {snapshot.pendingPairings.length === 0 ? (
-                    <EmptyRow label="No devices are waiting for approval." />
+                  {activePairing === undefined ? (
+                    <EmptyRow label="Generate a QR to enter the mobile code." />
                   ) : (
-                    snapshot.pendingPairings.map((pairing) => (
-                      <div
-                        className="grid gap-3 border-b border-slate-100 px-5 py-4 last:border-b-0 sm:grid-cols-[1fr_150px_auto] sm:items-end"
-                        key={pairing.pairingId}
-                      >
-                        <div>
-                          <p className="font-medium">
-                            {pairing.deviceDisplayName}
-                          </p>
-                          <p className="mt-1 font-mono text-sm text-slate-600">
-                            Agent code: {pairing.verificationCode}
-                          </p>
-                        </div>
-                        <Field
-                          id={`approval-${pairing.pairingId}`}
-                          label="Mobile code"
-                        >
-                          <input
-                            className={inputClassName}
-                            id={`approval-${pairing.pairingId}`}
-                            inputMode="numeric"
-                            maxLength={6}
-                            onChange={(event) =>
-                              setApprovalCodes((current) => ({
-                                ...current,
-                                [pairing.pairingId]: event.target.value.replace(
-                                  /\D/g,
-                                  "",
-                                ),
-                              }))
-                            }
-                            value={approvalCodes[pairing.pairingId] ?? ""}
-                          />
-                        </Field>
-                        <Button
-                          disabled={
-                            busyAction !== undefined ||
-                            (approvalCodes[pairing.pairingId] ?? "").length !==
-                              6
+                    <div className="grid gap-3 px-5 py-4 sm:grid-cols-[1fr_auto] sm:items-end">
+                      <Field id="pairing-mobile-code" label="Mobile code">
+                        <input
+                          autoComplete="one-time-code"
+                          className={inputClassName}
+                          id="pairing-mobile-code"
+                          inputMode="numeric"
+                          maxLength={6}
+                          onChange={(event) =>
+                            setApprovalCode(
+                              event.target.value.replace(/\D/g, "").slice(0, 6),
+                            )
                           }
-                          onClick={() => void approve(pairing.pairingId)}
-                          type="button"
-                        >
-                          <Check aria-hidden="true" className="size-4" />
-                          Approve
-                        </Button>
-                      </div>
-                    ))
+                          pattern="[0-9]{6}"
+                          value={approvalCode}
+                        />
+                      </Field>
+                      <Button
+                        disabled={
+                          busyAction !== undefined || approvalCode.length !== 6
+                        }
+                        onClick={() => void approve()}
+                        type="button"
+                      >
+                        <Check aria-hidden="true" className="size-4" />
+                        Approve
+                      </Button>
+                    </div>
                   )}
                 </div>
               </div>

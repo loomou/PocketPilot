@@ -79,13 +79,6 @@ const createdPairingSchema = z.object({
   qrPayload: qrPayloadSchema,
 });
 
-const pendingPairingSchema = z.object({
-  deviceDisplayName: z.string().min(1),
-  expiresAt: z.number().int(),
-  pairingId: z.uuid(),
-  verificationCode: z.string().regex(/^\d{6}$/),
-});
-
 const deviceSchema = z.object({
   createdAt: z.number().int(),
   displayName: z.string().min(1),
@@ -118,7 +111,6 @@ export type AuditRecord = z.infer<typeof auditRecordSchema>;
 export type Configuration = z.infer<typeof configurationSchema>;
 export type CreatedPairing = z.infer<typeof createdPairingSchema>;
 export type Device = z.infer<typeof deviceSchema>;
-export type PendingPairing = z.infer<typeof pendingPairingSchema>;
 export type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>;
 export type TaskSettings = z.infer<typeof taskSettingsSchema>;
 
@@ -128,7 +120,6 @@ export type LocalAdminSnapshot = {
   configuration: Configuration;
   csrfToken: string;
   devices: Device[];
-  pendingPairings: PendingPairing[];
   status: AgentStatus;
 };
 
@@ -143,23 +134,18 @@ export class LocalAdminApiError extends Error {
 }
 
 export async function loadLocalAdminSnapshot(): Promise<LocalAdminSnapshot> {
-  const [
-    csrf,
-    configuration,
-    status,
-    pendingPairings,
-    devices,
-    audits,
-    authorizedDirectories,
-  ] = await Promise.all([
-    getJson("/admin/csrf", csrfSchema),
-    getJson("/admin/configuration", configurationSchema),
-    getJson("/admin/status", agentStatusSchema),
-    getJson("/admin/pairings/pending", z.array(pendingPairingSchema)),
-    getJson("/admin/devices", z.array(deviceSchema)),
-    getJson("/admin/audits", z.array(auditRecordSchema)),
-    getJson("/admin/authorized-directories", authorizedDirectorySnapshotSchema),
-  ]);
+  const [csrf, configuration, status, devices, audits, authorizedDirectories] =
+    await Promise.all([
+      getJson("/admin/csrf", csrfSchema),
+      getJson("/admin/configuration", configurationSchema),
+      getJson("/admin/status", agentStatusSchema),
+      getJson("/admin/devices", z.array(deviceSchema)),
+      getJson("/admin/audits", z.array(auditRecordSchema)),
+      getJson(
+        "/admin/authorized-directories",
+        authorizedDirectorySnapshotSchema,
+      ),
+    ]);
 
   return {
     audits,
@@ -167,7 +153,6 @@ export async function loadLocalAdminSnapshot(): Promise<LocalAdminSnapshot> {
     configuration,
     csrfToken: csrf.token,
     devices,
-    pendingPairings,
     status,
   };
 }
@@ -176,16 +161,6 @@ export function loadAuthorizedDirectories(): Promise<AuthorizedDirectorySnapshot
   return getJson(
     "/admin/authorized-directories",
     authorizedDirectorySnapshotSchema,
-  );
-}
-
-export function loadPendingPairings(
-  signal?: AbortSignal,
-): Promise<PendingPairing[]> {
-  return requestJson(
-    "/admin/pairings/pending",
-    z.array(pendingPairingSchema),
-    signal === undefined ? undefined : { signal },
   );
 }
 

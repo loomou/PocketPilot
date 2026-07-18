@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
+- **Total Sessions**: 13
 - **Last Active**: 2026-07-19
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~408 | Active |
+| `journal-1.md` | ~441 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-07-19 | Simplify QR pairing approval | `540af86` | `fix/pairing-code-approval-flow` |
 | 12 | 2026-07-19 | Refresh pairing approval input after QR scan | `d02ea37` | `fix/pairing-verification-input-refresh` |
 | 11 | 2026-07-19 | Runtime observability logs | `7461a25` | `feature/runtime-observability-logs` |
 | 10 | 2026-07-18 | Claude Code resume-visible PocketPilot sessions | `7d3e040` | `fix/claude-resume-visible-sessions` |

@@ -27,7 +27,6 @@ describe("App", () => {
     expect(
       screen.getByRole("heading", { name: "Pair a mobile device" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Pixel 9")).toBeInTheDocument();
     expect(screen.getByText("My phone")).toBeInTheDocument();
     expect(screen.getByText("task.created")).toBeInTheDocument();
     expect(screen.getByText("127.0.0.1:43183")).toBeInTheDocument();
@@ -59,9 +58,7 @@ describe("App", () => {
     ).toBeEnabled();
   });
 
-  it("shows a scanned device without generating a second QR or resetting edits", async () => {
-    let pendingReadCount = 0;
-    let phoneRegistered = false;
+  it("approves the active QR code only after clicking and preserves edits", async () => {
     const pairing = {
       expiresAt: Date.now() + 5 * 60 * 1_000,
       pairingId: "00000000-0000-4000-8000-000000000030",
@@ -73,62 +70,182 @@ describe("App", () => {
         version: 1,
       },
     } as const;
-    const pendingDevice = {
-      deviceDisplayName: "New phone",
-      expiresAt: pairing.expiresAt,
-      pairingId: pairing.pairingId,
-      verificationCode: "654321",
+    const approvedDevice = {
+      createdAt: Date.now(),
+      displayName: "New phone",
+      id: "00000000-0000-4000-8000-000000000032",
+      revokedAt: null,
     } as const;
     const fetchMock = installFetchMock(
       new Map<string, ResponseOverride>([
         ["POST /admin/pairings", pairing],
-        [
-          "GET /admin/pairings/pending",
-          () => {
-            pendingReadCount += 1;
-            if (pendingReadCount === 2) {
-              throw new Error("transient poll failure");
-            }
-            return phoneRegistered ? [pendingDevice] : [];
-          },
-        ],
+        [`POST /admin/pairings/${pairing.pairingId}/approve`, approvedDevice],
       ]),
     );
     render(<App />);
 
     const capacity = await screen.findByLabelText("Concurrent task capacity");
     fireEvent.change(capacity, { target: { value: "9" } });
-    vi.useFakeTimers();
     fireEvent.click(screen.getByRole("button", { name: "Generate QR" }));
-    await vi.waitFor(() => {
-      expect(
-        screen.getByAltText("PocketPilot device pairing QR code"),
-      ).toBeInTheDocument();
-    });
+    expect(
+      await screen.findByAltText("PocketPilot device pairing QR code"),
+    ).toBeInTheDocument();
 
-    phoneRegistered = true;
-    await vi.advanceTimersByTimeAsync(1_000);
-    await vi.waitFor(() => {
-      expect(screen.getByText("New phone")).toBeInTheDocument();
-      expect(screen.getByLabelText("Mobile code")).toBeInTheDocument();
-    });
+    const mobileCode = screen.getByLabelText("Mobile code");
+    const approveButton = screen.getByRole("button", { name: "Approve" });
+    expect(approveButton).toBeDisabled();
+    expect(
+      fetchMock.mock.calls.some(
+        (call) => requestPath(call[0]) === "/admin/pairings/pending",
+      ),
+    ).toBe(false);
+
+    fireEvent.change(mobileCode, { target: { value: "65a43-21" } });
+    expect(mobileCode).toHaveValue("654321");
+    expect(approveButton).toBeEnabled();
+    expect(
+      fetchMock.mock.calls.some(
+        (call) =>
+          requestPath(call[0]) ===
+          `/admin/pairings/${pairing.pairingId}/approve`,
+      ),
+    ).toBe(false);
+
+    fireEvent.click(approveButton);
+    expect(
+      await screen.findByText("Device pairing approved."),
+    ).toBeInTheDocument();
 
     expect(screen.getByDisplayValue("9")).toBeInTheDocument();
+    expect(screen.getByText("New phone")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Mobile code")).not.toBeInTheDocument();
+    expect(
+      screen.queryByAltText("PocketPilot device pairing QR code"),
+    ).not.toBeInTheDocument();
+
+    const approvalRequest = fetchMock.mock.calls.find(
+      (call) =>
+        requestPath(call[0]) === `/admin/pairings/${pairing.pairingId}/approve`,
+    );
+    expect(approvalRequest?.[1]?.method).toBe("POST");
+    expect(JSON.parse(String(approvalRequest?.[1]?.body))).toEqual({
+      verificationCode: "654321",
+    });
+    expect(
+      new Headers(approvalRequest?.[1]?.headers).get(
+        "x-pocketpilot-csrf-token",
+      ),
+    ).toBe("csrf-token");
+  });
+
+  it("keeps the QR and code after a rejected approval", async () => {
+    const pairing = {
+      expiresAt: Date.now() + 5 * 60 * 1_000,
+      pairingId: "00000000-0000-4000-8000-000000000040",
+      qrPayload: {
+        agentId: "00000000-0000-4000-8000-000000000041",
+        baseUrl: "https://agent.example.test",
+        expiresAt: Date.now() + 5 * 60 * 1_000,
+        pairingId: "00000000-0000-4000-8000-000000000040",
+        version: 1,
+      },
+    } as const;
+    const fetchMock = installFetchMock(
+      new Map<string, ResponseOverride>([
+        ["POST /admin/pairings", pairing],
+        [
+          `POST /admin/pairings/${pairing.pairingId}/approve`,
+          () =>
+            jsonResponse(
+              {
+                code: "PAIRING_VERIFICATION_CODE_MISMATCH",
+                message: "The pairing verification code does not match.",
+              },
+              409,
+            ),
+        ],
+      ]),
+    );
+    render(<App />);
+
+    await screen.findByDisplayValue("https://agent.example.test");
+    fireEvent.click(screen.getByRole("button", { name: "Generate QR" }));
+    expect(
+      await screen.findByAltText("PocketPilot device pairing QR code"),
+    ).toBeInTheDocument();
+    const mobileCode = screen.getByLabelText("Mobile code");
+    fireEvent.change(mobileCode, { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    expect(
+      await screen.findByText("The pairing verification code does not match."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByAltText("PocketPilot device pairing QR code"),
+    ).toBeInTheDocument();
+    expect(screen.getByDisplayValue("123456")).toBeInTheDocument();
     expect(
       fetchMock.mock.calls.filter(
         (call) =>
-          requestPath(call[0]) === "/admin/pairings" &&
-          call[1]?.method === "POST",
+          requestPath(call[0]) ===
+          `/admin/pairings/${pairing.pairingId}/approve`,
       ),
     ).toHaveLength(1);
-    const pollingSignal = fetchMock.mock.calls.find(
-      (call) =>
-        requestPath(call[0]) === "/admin/pairings/pending" &&
-        call[1]?.signal !== undefined,
-    )?.[1]?.signal;
-    expect(pollingSignal?.aborted).toBe(false);
-    cleanup();
-    expect(pollingSignal?.aborted).toBe(true);
+  });
+
+  it("clears the previous code when a new QR replaces it", async () => {
+    const pairings = [
+      {
+        expiresAt: Date.now() + 5 * 60 * 1_000,
+        pairingId: "00000000-0000-4000-8000-000000000050",
+        qrPayload: {
+          agentId: "00000000-0000-4000-8000-000000000051",
+          baseUrl: "https://agent.example.test",
+          expiresAt: Date.now() + 5 * 60 * 1_000,
+          pairingId: "00000000-0000-4000-8000-000000000050",
+          version: 1,
+        },
+      },
+      {
+        expiresAt: Date.now() + 5 * 60 * 1_000,
+        pairingId: "00000000-0000-4000-8000-000000000052",
+        qrPayload: {
+          agentId: "00000000-0000-4000-8000-000000000053",
+          baseUrl: "https://agent.example.test",
+          expiresAt: Date.now() + 5 * 60 * 1_000,
+          pairingId: "00000000-0000-4000-8000-000000000052",
+          version: 1,
+        },
+      },
+    ] as const;
+    let pairingCallCount = 0;
+    const fetchMock = installFetchMock(
+      new Map<string, ResponseOverride>([
+        ["POST /admin/pairings", () => pairings[pairingCallCount++]],
+      ]),
+    );
+    render(<App />);
+
+    await screen.findByDisplayValue("https://agent.example.test");
+    fireEvent.click(screen.getByRole("button", { name: "Generate QR" }));
+    await screen.findByLabelText("Mobile code");
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Generate QR" })).toBeEnabled(),
+    );
+    fireEvent.change(screen.getByLabelText("Mobile code"), {
+      target: { value: "123456" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Generate QR" }));
+
+    await vi.waitFor(() => expect(pairingCallCount).toBe(2));
+    await vi.waitFor(() =>
+      expect(screen.getByLabelText("Mobile code")).toHaveValue(""),
+    );
+    expect(
+      fetchMock.mock.calls.filter(
+        (call) => requestPath(call[0]) === "/admin/pairings/pending",
+      ),
+    ).toHaveLength(0);
   });
 
   it("rejects an invalid local API response before rendering its data", async () => {
@@ -237,7 +354,10 @@ describe("App", () => {
   });
 });
 
-type ResponseOverride = unknown | (() => unknown | Promise<unknown>);
+type ResponseOverride =
+  | unknown
+  | Response
+  | (() => unknown | Response | Promise<unknown | Response>);
 
 function installFetchMock(overrides = new Map<string, ResponseOverride>()) {
   const fetchMock = vi.fn(
@@ -260,6 +380,7 @@ function installFetchMock(overrides = new Map<string, ResponseOverride>()) {
         typeof selectedResponse === "function"
           ? await selectedResponse()
           : selectedResponse;
+      if (response instanceof Response) return response;
       if (response === undefined) {
         return jsonResponse(
           { code: "NOT_FOUND", message: "No mocked response." },
@@ -323,14 +444,6 @@ const snapshot = {
       revokedAt: null,
     },
   ],
-  pairings: [
-    {
-      deviceDisplayName: "Pixel 9",
-      expiresAt: 1_900_000_000_000,
-      pairingId: "00000000-0000-4000-8000-000000000002",
-      verificationCode: "321654",
-    },
-  ],
   status: {
     localAdminListener: { host: "127.0.0.1", port: 43_183 },
     mobileBaseUrl: "https://agent.example.test",
@@ -343,7 +456,6 @@ const responses = new Map<string, unknown>([
   ["/admin/csrf", snapshot.csrf],
   ["/admin/configuration", snapshot.configuration],
   ["/admin/status", snapshot.status],
-  ["/admin/pairings/pending", snapshot.pairings],
   ["/admin/devices", snapshot.devices],
   ["/admin/audits", snapshot.audits],
   ["/admin/authorized-directories", snapshot.authorizedDirectories],
