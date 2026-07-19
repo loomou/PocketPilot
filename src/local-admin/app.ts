@@ -8,12 +8,17 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import type { MobileOpenApiDocument } from "../api-docs/mobile-openapi.js";
 import type { DeviceAuthService } from "../auth/device-auth-service.js";
+import { sendDeviceAuthOrTaskError } from "../auth/http.js";
 import { registerLocalDeviceAuthRoutes } from "../auth/local-admin-routes.js";
 import { createHttpApp } from "../http/create-http-app.js";
 import { registerHealthRoute } from "../http/health.js";
 import { logEvents } from "../logging/events.js";
 import { noopLogger, type PocketPilotLogger } from "../logging/logger.js";
 import type { SettingsRepository } from "../storage/settings-repository.js";
+import {
+  WorkspaceAuthorizationCoordinator,
+  WorkspaceAuthorizationError,
+} from "../tasks/workspace-authorization-coordinator.js";
 import {
   type AuthorizedDirectoryManager,
   registerAuthorizedDirectoryRoutes,
@@ -25,6 +30,10 @@ import {
   type LocalAdminCsrfProtection,
 } from "./csrf.js";
 import type { DirectorySelectionService } from "./directory-selection-service.js";
+import {
+  DirectoryBrowserError,
+  DirectoryBrowserService,
+} from "./directory-browser-service.js";
 
 const localAdminListenerSchema = z.object({
   host: z.string().min(1),
@@ -61,8 +70,10 @@ export type LocalAdminAppOptions = {
   csrfProtection: LocalAdminCsrfProtection;
   deviceAuthService?: DeviceAuthService;
   directorySelectionService?: DirectorySelectionService;
+  directoryBrowserService?: DirectoryBrowserService;
   settingsRepository?: SettingsRepository;
   sqlite?: BetterSqlite3.Database;
+  workspaceAuthorizationCoordinator?: WorkspaceAuthorizationCoordinator;
   getStatus(): LocalAdminStatus;
   logger?: PocketPilotLogger;
   mobileOpenApiDocument?: MobileOpenApiDocument;
@@ -204,8 +215,16 @@ export async function buildLocalAdminApp(
     options.sqlite !== undefined
   ) {
     registerConfigurationRoutes(app, {
+      directoryBrowserService:
+        options.directoryBrowserService ?? new DirectoryBrowserService(),
       settingsRepository: options.settingsRepository,
       sqlite: options.sqlite,
+      workspaceAuthorizationCoordinator:
+        options.workspaceAuthorizationCoordinator ??
+        new WorkspaceAuthorizationCoordinator({
+          settingsRepository: options.settingsRepository,
+          strictSavedIdentity: true,
+        }),
     });
   }
   if (
@@ -217,6 +236,22 @@ export async function buildLocalAdminApp(
       taskManager: options.authorizedDirectoryManager,
     });
   }
+
+  app.setErrorHandler((error, _request, reply) => {
+    if (sendDeviceAuthOrTaskError(error, reply)) {
+      return;
+    }
+    if (
+      error instanceof WorkspaceAuthorizationError ||
+      error instanceof DirectoryBrowserError
+    ) {
+      return reply.code(error.statusCode).send({
+        code: error.code,
+        message: error.message,
+      });
+    }
+    return reply.send(error);
+  });
 
   return app;
 }

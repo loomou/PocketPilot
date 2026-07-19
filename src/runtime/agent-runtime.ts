@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+﻿import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
@@ -30,6 +30,7 @@ import { readAgentMasterKey } from "../storage/master-key.js";
 import { SettingsRepository } from "../storage/settings-repository.js";
 import { TaskEventJournal } from "../tasks/task-event-journal.js";
 import { TaskManager } from "../tasks/task-manager.js";
+import { WorkspaceAuthorizationCoordinator } from "../tasks/workspace-authorization-coordinator.js";
 import { acquireAgentLock, type ReleaseAgentLock } from "./agent-lock.js";
 import {
   removeRuntimeControlState,
@@ -86,6 +87,9 @@ export class AgentRuntime {
   private readonly stoppedPromise: Promise<void>;
   private taskManager: TaskManager | undefined;
   private taskEventJournal: TaskEventJournal | undefined;
+  private workspaceAuthorizationCoordinator:
+    | WorkspaceAuthorizationCoordinator
+    | undefined;
   private runtimeStarted = false;
 
   public constructor(private readonly options: AgentRuntimeOptions) {
@@ -112,6 +116,13 @@ export class AgentRuntime {
       this.logger.info(logEvents.runtimeStorageReady, "Runtime storage ready");
 
       const settingsRepository = new SettingsRepository(this.storage.database);
+      const workspaceAuthorizationCoordinator =
+        new WorkspaceAuthorizationCoordinator({
+          settingsRepository,
+          strictSavedIdentity: true,
+        });
+      this.workspaceAuthorizationCoordinator =
+        workspaceAuthorizationCoordinator;
       const settings = readRuntimeSettings(settingsRepository);
       this.deviceAuthService = new DeviceAuthService({
         closeDeviceConnections: this.deviceConnectionRegistry,
@@ -126,6 +137,7 @@ export class AgentRuntime {
       });
       this.taskManager = new TaskManager({
         closeTaskSdkConnections: this.taskSdkConnectionRegistry,
+        authorizationCoordinator: workspaceAuthorizationCoordinator,
         eventSink: this.taskEventJournal,
         logger: this.logger,
         settingsRepository,
@@ -209,6 +221,12 @@ export class AgentRuntime {
         new WindowsDirectoryPicker(),
       ),
       settingsRepository: new SettingsRepository(storage.database),
+      ...(this.workspaceAuthorizationCoordinator === undefined
+        ? {}
+        : {
+            workspaceAuthorizationCoordinator:
+              this.workspaceAuthorizationCoordinator,
+          }),
       staticRoot: resolveLocalAdminStaticRoot(),
       getStatus: () => this.currentStatus(settings),
       mobileOpenApiDocument,
@@ -320,6 +338,7 @@ export class AgentRuntime {
       this.deviceAuthService = undefined;
       this.taskManager = undefined;
       this.taskEventJournal = undefined;
+      this.workspaceAuthorizationCoordinator = undefined;
       this.runtimeStarted = false;
       const releaseAgentLock = this.releaseAgentLock;
       this.releaseAgentLock = undefined;

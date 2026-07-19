@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { PocketPilotLogger } from "../logging/logger.js";
 
 import type { DeviceAuthService } from "./device-auth-service.js";
-import { authErrorResponses, registerDeviceAuthErrorHandler } from "./http.js";
+import { authErrorResponses } from "./http.js";
 
 const pairingIdParamsSchema = z.object({
   pairingId: z.uuid(),

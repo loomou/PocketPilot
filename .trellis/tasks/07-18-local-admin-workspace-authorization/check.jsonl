@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/task-runtime-contracts.md","reason":"Verify runtime admission and workspace authorization contracts match the implemented coordinator and TaskManager behavior."}
+{"file":".trellis/spec/backend/local-admin-contracts.md","reason":"Verify local route security, directory-browser response boundaries, and task-settings transport contract."}
+{"file":".trellis/spec/frontend/scaffold-contracts.md","reason":"Verify API decoding and Authorized directories UI behavior against the implementation and tests."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Verify draft/transient state ownership and Save/Discard/locale reconciliation behavior."}
+{"file":".trellis/spec/frontend/i18n-guidelines.md","reason":"Verify bilingual resource and state-preservation requirements for the authorization flow."}

@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/task-runtime-contracts.md","reason":"Workspace authorization coordinator, canonical saved-root identity, availability-aware discovery, revision races, and current-turn revocation semantics."}
+{"file":".trellis/spec/backend/local-admin-contracts.md","reason":"Local-only directory browse/inspect routes, bounded metadata responses, CSRF/origin protection, and write-only high-risk confirmation."}
+{"file":".trellis/spec/frontend/scaffold-contracts.md","reason":"Authorized directories tabs, draft-only root editing, directory-browser UX, and API boundary ownership."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Draft roots, transient confirmation/listing/modal state, Save/Discard reconciliation, and locale-preserving state ownership."}
+{"file":".trellis/spec/frontend/i18n-guidelines.md","reason":"Locale switching must preserve authorized-directory interaction state and keep filesystem values opaque."}

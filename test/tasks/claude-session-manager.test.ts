@@ -31,6 +31,7 @@ import {
   TaskManager,
   type TaskSdkSession,
 } from "../../src/tasks/task-manager.js";
+import { WorkspaceAuthorizationCoordinator } from "../../src/tasks/workspace-authorization-coordinator.js";
 
 const deviceId = "00000000-0000-4000-8000-000000000001";
 
@@ -194,6 +195,19 @@ describe("Claude session-centric task manager", () => {
       permissionMode: null,
       sdkSessionId: session.sessionId,
       state: "idle",
+    });
+
+    await fixture.authorizationCoordinator.replaceTaskRuntimeSettings({
+      concurrentTaskCapacity: 1,
+      workspaceRoots: [],
+    });
+    await expect(
+      fixture.manager.activateSdkSession(firstAttach.task.id),
+    ).rejects.toMatchObject({ code: "WORKSPACE_NOT_AUTHORIZED" });
+    expect(fixture.sessions).toHaveLength(0);
+    await fixture.authorizationCoordinator.replaceTaskRuntimeSettings({
+      concurrentTaskCapacity: 1,
+      workspaceRoots: [fixture.workspace],
     });
 
     await fixture.manager.activateSdkSession(firstAttach.task.id);
@@ -484,6 +498,7 @@ class AsyncQueue<T> implements AsyncIterable<T> {
 }
 
 type Fixture = {
+  authorizationCoordinator: WorkspaceAuthorizationCoordinator;
   catalog: FakeCatalog;
   connection: StorageConnection;
   directory: string;
@@ -517,6 +532,10 @@ function createFixture(fixtures: Fixture[]): Fixture {
     workspaceRoots: [workspace],
   });
   const catalog = new FakeCatalog();
+  const authorizationCoordinator = new WorkspaceAuthorizationCoordinator({
+    settingsRepository: settings,
+    strictSavedIdentity: false,
+  });
   const sessions: FakeSession[] = [];
   const models = [
     {
@@ -529,6 +548,7 @@ function createFixture(fixtures: Fixture[]): Fixture {
     } as ModelInfo,
   ];
   const manager = new TaskManager({
+    authorizationCoordinator,
     claudeSessionCatalog: catalog,
     createSession(options) {
       const session = new FakeSession(options, models, options.resume);
@@ -539,6 +559,7 @@ function createFixture(fixtures: Fixture[]): Fixture {
     sqlite: connection.database,
   });
   const fixture = {
+    authorizationCoordinator,
     catalog,
     connection,
     directory,

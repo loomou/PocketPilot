@@ -123,6 +123,63 @@ export const en = {
     workspaceRootsLabel: "Workspace roots",
     requireApprovalLabel: "Require approval for shell tools",
     autoLockLabel: "Auto-lock when idle",
+
+    configurationTabs: "Configuration tabs",
+    generalTab: "General",
+    authorizedTab: "Authorized directories",
+    authorizedTitle: "Authorized directories",
+    authorizedDescription:
+      "Choose the local directories that Claude tasks may use. Changes remain a draft until you save.",
+    addDirectory: "Add directory",
+    authorizedSummary: (count: number) =>
+      `${count} configured ${count === 1 ? "directory" : "directories"}`,
+    authorizedSummaryDescription:
+      "Only available directories can authorize new work; saved unavailable rows remain visible until removed.",
+    inspectingDirectories: "Checking directories?",
+    emptyDirectoriesTitle: "No authorized directories",
+    emptyDirectoriesDescription:
+      "Add a directory to let Claude tasks work there. The browser only returns directory metadata.",
+    pathColumn: "Path",
+    statusColumn: "Status",
+    coverageColumn: "Scope / coverage",
+    actionsColumn: "Actions",
+    highRiskBadge: "High risk",
+    directCoverage: "Explicit root",
+    coveredBy: (path: string) => `Covered by ${path}`,
+    remove: "Remove",
+    removeDirectory: (path: string) => `Remove ${path}`,
+    availableStatus: "Available",
+    unavailableStatus: "Unavailable",
+    checkingStatus: "Checking?",
+    statusUnknown: "Unknown",
+    browserTitle: "Choose a directory",
+    browserDescription:
+      "Navigate directories available to the local Agent. Files and file contents are never shown.",
+    closeBrowser: "Close directory browser",
+    addressLabel: "Absolute path",
+    addressPlaceholder: "C:\\work or /work",
+    goToDirectory: "Go",
+    rootsAndHome: "Roots and home",
+    directories: "Directories",
+    upOneLevel: "Up",
+    loadingDirectories: "Loading directories?",
+    noSubdirectories: "No accessible subdirectories",
+    truncatedListing:
+      "This listing is truncated. Use the address bar to navigate deeper.",
+    selectDirectory: "Select a directory to authorize",
+    cancel: "Cancel",
+    authorizeDirectory: "Authorize directory",
+    highRiskTitle: "Confirm high-risk directory",
+    highRiskDescription:
+      "This directory is a filesystem, volume, or UNC share root.",
+    highRiskWarning:
+      "Authorizing a filesystem root grants access to a very broad area.",
+    highRiskImpact:
+      "Only confirm this when the broad scope is intentional. The directory will remain marked as high risk.",
+    backToBrowser: "Back",
+    confirmHighRisk: "Confirm and authorize",
+    directoryUnavailable: "This directory is not currently available.",
+    duplicateDirectory: "This directory is already configured.",
   },
   devices: {
     active: "Paired",

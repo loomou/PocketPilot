@@ -51,6 +51,28 @@ const removeAuthorizedDirectoryResponseSchema = z.object({
   stoppedTaskCount: z.number().int().min(0),
 });
 
+const directoryEntrySchema = z.object({
+  accessible: z.boolean(),
+  name: z.string(),
+  path: z.string(),
+  root: z.boolean(),
+});
+
+const directoryBrowseResultSchema = z.object({
+  currentPath: z.string().nullable(),
+  entries: z.array(directoryEntrySchema),
+  parentPath: z.string().nullable(),
+  truncated: z.boolean(),
+});
+
+const workspaceInspectionSchema = z.object({
+  canonicalPath: z.string().optional(),
+  configuredPath: z.string(),
+  coveredBy: z.string().optional(),
+  highRisk: z.boolean(),
+  status: z.enum(["available", "unavailable"]),
+});
+
 const configurationSchema = z.object({
   runtime: runtimeSettingsSchema,
   tasks: taskSettingsSchema,
@@ -111,8 +133,12 @@ export type AuditRecord = z.infer<typeof auditRecordSchema>;
 export type Configuration = z.infer<typeof configurationSchema>;
 export type CreatedPairing = z.infer<typeof createdPairingSchema>;
 export type Device = z.infer<typeof deviceSchema>;
+export type DirectoryBrowseResult = z.infer<typeof directoryBrowseResultSchema>;
+export type DirectoryEntry = z.infer<typeof directoryEntrySchema>;
+export type PendingPairing = z.infer<typeof pendingPairingSchema>;
 export type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>;
 export type TaskSettings = z.infer<typeof taskSettingsSchema>;
+export type WorkspaceInspection = z.infer<typeof workspaceInspectionSchema>;
 
 export type LocalAdminSnapshot = {
   audits: AuditRecord[];
@@ -224,13 +250,40 @@ export function saveRuntimeSettings(
 export function saveTaskSettings(
   csrfToken: string,
   settings: TaskSettings,
+  confirmedHighRiskRoots: readonly string[] = [],
 ): Promise<TaskSettings> {
   return mutateJson(
     "/admin/configuration/tasks",
     "PUT",
     csrfToken,
-    settings,
+    { ...settings, confirmedHighRiskRoots: [...confirmedHighRiskRoots] },
     taskSettingsSchema,
+  );
+}
+
+export function browseDirectories(
+  csrfToken: string,
+  path?: string,
+): Promise<DirectoryBrowseResult> {
+  return mutateJson(
+    "/admin/directories/browse",
+    "POST",
+    csrfToken,
+    path === undefined ? {} : { path },
+    directoryBrowseResultSchema,
+  );
+}
+
+export function inspectDirectories(
+  csrfToken: string,
+  paths: readonly string[],
+): Promise<WorkspaceInspection[]> {
+  return mutateJson(
+    "/admin/directories/inspect",
+    "POST",
+    csrfToken,
+    { paths: [...paths] },
+    z.array(workspaceInspectionSchema),
   );
 }
 

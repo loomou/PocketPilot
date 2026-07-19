@@ -109,3 +109,16 @@ setNotice({ kind: "success", code: "configurationSaved" });
 
 `NoticeBanner` resolves the code from current messages, while the provider
 updates context without replacing the stateful page.
+
+## Authorized Directory State Preservation
+
+The authorization UI is stateful and must not be keyed by locale. Switching
+locale while the Authorized directories tab or browser modal is open preserves
+the draft roots, confirmation state, current address, loaded listing,
+inspection results, and focus target. Path values, canonical paths, directory
+names, backend error messages, and truncation metadata remain server-owned or
+opaque; only labels and client-owned notice codes are translated.
+
+Required regression assertion: switch between `zh-CN` and `en` during an
+unsaved add/remove flow and while the modal is navigated to an absolute path;
+the same tab, modal, address, listing, and draft rows must remain present.

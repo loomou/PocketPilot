@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/App";
@@ -27,7 +33,8 @@ describe("App", () => {
     expect(
       await screen.findByDisplayValue("https://agent.example.test"),
     ).toBeInTheDocument();
-    expect(screen.getByDisplayValue("C:\\code")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "已授权目录" }));
+    expect(await screen.findByText("C:\\code")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "设备" }));
     expect(
@@ -79,7 +86,11 @@ describe("App", () => {
         path: "/admin/configuration/runtime",
       },
       {
-        body: { concurrentTaskCapacity: 5, workspaceRoots: ["C:\\code"] },
+        body: {
+          concurrentTaskCapacity: 5,
+          confirmedHighRiskRoots: [],
+          workspaceRoots: ["C:\\code"],
+        },
         path: "/admin/configuration/tasks",
       },
     ]);
@@ -164,6 +175,112 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps directory authorization changes as a discardable draft", async () => {
+    installFetchMock(directoryOverrides());
+    renderApp();
+
+    await screen.findByText("127.0.0.1:43183");
+    fireEvent.click(screen.getByRole("button", { name: "配置" }));
+    fireEvent.click(screen.getByRole("tab", { name: "已授权目录" }));
+    expect(await screen.findByText("C:\\code")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "添加目录" }));
+    const address = await screen.findByLabelText("绝对路径");
+    fireEvent.change(address, { target: { value: "C:\\work" } });
+    fireEvent.click(screen.getByRole("button", { name: "前往" }));
+    expect(await screen.findByText("C:\\work")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "授权目录" }));
+
+    expect(await screen.findByText("已配置 2 个目录")).toBeInTheDocument();
+    expect(screen.getByText("存在尚未保存的配置更改。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "放弃更改" }));
+
+    expect(await screen.findByText("已配置 1 个目录")).toBeInTheDocument();
+    expect(screen.queryByText("C:\\work")).not.toBeInTheDocument();
+  });
+
+  it("requires confirmation before saving a filesystem root", async () => {
+    const fetchMock = installFetchMock(directoryOverrides());
+    renderApp("en");
+
+    await screen.findByText("127.0.0.1:43183");
+    fireEvent.click(screen.getByRole("button", { name: "Configuration" }));
+    fireEvent.click(
+      screen.getByRole("tab", { name: "Authorized directories" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add directory" }));
+    const address = await screen.findByLabelText("Absolute path");
+    fireEvent.change(address, { target: { value: "/" } });
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    await screen.findByText("No accessible subdirectories");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Authorize directory" }),
+    );
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Confirm high-risk directory",
+      }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm and authorize" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    await screen.findByText(
+      "Configuration saved. Listener changes take effect the next time the Agent starts.",
+    );
+
+    const taskWrite = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        requestPath(input) === "/admin/configuration/tasks" &&
+        init?.method === "PUT",
+    );
+    expect(JSON.parse(String(taskWrite?.[1]?.body))).toEqual({
+      concurrentTaskCapacity: 5,
+      confirmedHighRiskRoots: ["/"],
+      workspaceRoots: ["C:\\code", "/"],
+    });
+  });
+
+  it("preserves the authorization tab and browser state across locale changes", async () => {
+    installFetchMock(directoryOverrides());
+    renderApp();
+
+    await screen.findByText("127.0.0.1:43183");
+    fireEvent.click(screen.getByRole("button", { name: "配置" }));
+    fireEvent.click(screen.getByRole("tab", { name: "已授权目录" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "移除 C:\\code" }),
+    );
+    const addButton = screen.getByRole("button", { name: "添加目录" });
+    fireEvent.click(addButton);
+    const address = await screen.findByLabelText("绝对路径");
+    fireEvent.change(address, { target: { value: "/work" } });
+    fireEvent.click(screen.getByRole("button", { name: "前往" }));
+    expect(await screen.findByText("alpha")).toBeInTheDocument();
+    fireEvent.change(address, { target: { value: "/work/typed" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
+
+    expect(
+      screen.getByRole("tab", { name: "Authorized directories" }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByLabelText("Absolute path")).toHaveValue("/work/typed");
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+    expect(screen.queryByText("C:\\code")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Add directory" }),
+      ).toHaveFocus(),
+    );
+  });
+
   it("rejects an invalid local API response before rendering its data", async () => {
     installFetchMock(
       new Map([["/admin/configuration", { runtime: "not-an-object" }]]),
@@ -245,20 +362,26 @@ function renderApp(locale: "en" | "zh-CN" = "zh-CN") {
   );
 }
 
-function installFetchMock(overrides = new Map<string, unknown | Response>()) {
+type FetchOverride =
+  | unknown
+  | Response
+  | ((init: RequestInit | undefined) => unknown | Response);
+
+function installFetchMock(overrides = new Map<string, FetchOverride>()) {
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const path = requestPath(input);
       if (init?.method === "PUT") {
-        return jsonResponse(
-          path.endsWith("/runtime")
-            ? snapshot.configuration.runtime
-            : snapshot.configuration.tasks,
-        );
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        if (path.endsWith("/runtime")) return jsonResponse(body);
+        const { confirmedHighRiskRoots: _confirmed, ...taskSettings } = body;
+        return jsonResponse(taskSettings);
       }
-      const response = overrides.has(path)
-        ? overrides.get(path)
-        : responses.get(path);
+      const override = overrides.has(path) ? overrides.get(path) : undefined;
+      const response =
+        typeof override === "function"
+          ? override(init)
+          : (override ?? responses.get(path));
       if (response instanceof Response) return response;
       if (response === undefined) {
         return jsonResponse(
@@ -271,6 +394,63 @@ function installFetchMock(overrides = new Map<string, unknown | Response>()) {
   );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+function directoryOverrides(): Map<string, FetchOverride> {
+  return new Map([
+    [
+      "/admin/directories/browse",
+      (init: RequestInit | undefined) => {
+        const requestedPath = (
+          JSON.parse(String(init?.body)) as { path?: string }
+        ).path;
+        if (requestedPath === "C:\\work") {
+          return {
+            currentPath: "C:\\work",
+            entries: [],
+            parentPath: "C:\\",
+            truncated: false,
+          };
+        }
+        if (requestedPath === "/") {
+          return {
+            currentPath: "/",
+            entries: [],
+            parentPath: null,
+            truncated: false,
+          };
+        }
+        if (requestedPath === "/work") {
+          return {
+            currentPath: "/work",
+            entries: [
+              {
+                accessible: true,
+                name: "alpha",
+                path: "/work/alpha",
+                root: false,
+              },
+            ],
+            parentPath: "/",
+            truncated: false,
+          };
+        }
+        return responses.get("/admin/directories/browse");
+      },
+    ],
+    [
+      "/admin/directories/inspect",
+      (init: RequestInit | undefined) => {
+        const { paths } = JSON.parse(String(init?.body)) as { paths: string[] };
+        return paths.map((path) => ({
+          canonicalPath: path,
+          configuredPath: path,
+          highRisk: path === "/",
+          status: "available",
+        }));
+      },
+    ],
+  ]);
 }
 
 function requestPath(input: RequestInfo | URL): string {
@@ -335,4 +515,31 @@ const responses = new Map<string, unknown>([
   ["/admin/pairings/pending", snapshot.pairings],
   ["/admin/devices", snapshot.devices],
   ["/admin/audits", snapshot.audits],
+  [
+    "/admin/directories/inspect",
+    [
+      {
+        canonicalPath: "C:\\code",
+        configuredPath: "C:\\code",
+        highRisk: false,
+        status: "available",
+      },
+    ],
+  ],
+  [
+    "/admin/directories/browse",
+    {
+      currentPath: null,
+      entries: [
+        {
+          accessible: true,
+          name: "C:\\",
+          path: "C:\\",
+          root: true,
+        },
+      ],
+      parentPath: null,
+      truncated: false,
+    },
+  ],
 ]);

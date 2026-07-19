@@ -1,5 +1,5 @@
 import QRCode from "qrcode";
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   approvePairing,
@@ -57,9 +57,11 @@ export function AdministrationPage() {
     void refresh();
   }, [refresh]);
 
-  const saveConfiguration = async (event: FormEvent): Promise<void> => {
-    event.preventDefault();
-    if (snapshot === undefined || configurationDraft === undefined) return;
+  const saveConfiguration = async (
+    confirmedHighRiskRoots: readonly string[],
+  ): Promise<boolean> => {
+    if (snapshot === undefined || configurationDraft === undefined)
+      return false;
     setBusyAction("save");
     try {
       const runtime = await saveRuntimeSettings(
@@ -69,13 +71,16 @@ export function AdministrationPage() {
       const tasks = await saveTaskSettings(
         snapshot.csrfToken,
         configurationDraft.tasks,
+        confirmedHighRiskRoots,
       );
       const configuration = { runtime, tasks };
       setSnapshot({ ...snapshot, configuration });
       setConfigurationDraft(configuration);
       setNotice({ kind: "success", code: "configurationSaved" });
+      return true;
     } catch (error) {
       setNotice(errorNotice(error));
+      return false;
     } finally {
       setBusyAction(undefined);
     }
@@ -223,7 +228,9 @@ function ActiveView({
   onGeneratePairing: () => Promise<void>;
   onNavigate: (section: AdminSection) => void;
   onRevoke: (deviceId: string) => Promise<void>;
-  onSaveConfiguration: (event: FormEvent) => void;
+  onSaveConfiguration: (
+    confirmedHighRiskRoots: readonly string[],
+  ) => Promise<boolean>;
   pairing: PairingPresentation | undefined;
   snapshot: LocalAdminSnapshot;
 }) {
@@ -235,6 +242,7 @@ function ActiveView({
         <ConfigurationView
           busy={busyAction !== undefined}
           configuration={configurationDraft}
+          csrfToken={snapshot.csrfToken}
           dirty={configurationDirty}
           onChange={onConfigurationChange}
           onDiscard={onDiscardConfiguration}

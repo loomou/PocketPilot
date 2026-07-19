@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { logEvents } from "../logging/events.js";
 import {
@@ -29,30 +29,20 @@ export function registerDeviceAuthErrorHandler(
 ): void {
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof DeviceAuthError) {
-      logger.warn(
-        logEvents.authRequestRejected,
-        "Authentication request rejected",
-        {
-          ...safeRequestFields(request),
-          code: error.code,
-          statusCode: error.statusCode,
-        },
-      );
-      return reply.code(error.statusCode).send({
+      logger.warn(logEvents.authRequestRejected, "Authentication request rejected", {
+        ...safeRequestFields(request),
         code: error.code,
-        message: error.message,
+        statusCode: error.statusCode,
       });
-    }
-    if (error instanceof TaskError) {
+    } else if (error instanceof TaskError) {
       logger.warn(logEvents.httpRequestRejected, "Task request rejected", {
         ...safeRequestFields(request),
         code: error.code,
         statusCode: error.statusCode,
       });
-      return reply.code(error.statusCode).send({
-        code: error.code,
-        message: error.message,
-      });
+    }
+    if (sendDeviceAuthOrTaskError(error, reply)) {
+      return;
     }
     logger.error(logEvents.httpRequestFailed, "HTTP request failed", {
       ...safeRequestFields(request),
@@ -61,6 +51,21 @@ export function registerDeviceAuthErrorHandler(
     });
     return reply.send(error);
   });
+}
+
+/** Sends the stable HTTP response for errors shared by authenticated routes. */
+export function sendDeviceAuthOrTaskError(
+  error: unknown,
+  reply: FastifyReply,
+): boolean {
+  if (!(error instanceof DeviceAuthError) && !(error instanceof TaskError)) {
+    return false;
+  }
+  void reply.code(error.statusCode).send({
+    code: error.code,
+    message: error.message,
+  });
+  return true;
 }
 
 export function readBearerAccessToken(request: FastifyRequest): string {

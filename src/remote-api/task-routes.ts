@@ -147,7 +147,7 @@ export function registerTaskRoutes(
     {
       schema: {
         description:
-          "Lists the workspace roots authorized by the computer's local task policy.",
+          "Lists the currently available configured workspace roots authorized by the computer's local task policy.",
         operationId: "listAuthorizedWorkspaces",
         response: {
           200: authorizedWorkspacesResponseSchema,
@@ -161,7 +161,9 @@ export function registerTaskRoutes(
     async (request) => {
       authenticate(request);
       return {
-        workspaceRoots: [...options.taskManager.authorizedWorkspaceRoots()],
+        workspaceRoots: [
+          ...(await options.taskManager.authorizedWorkspaceRoots()),
+        ],
       };
     },
   );
