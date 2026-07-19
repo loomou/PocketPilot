@@ -10,20 +10,27 @@ export const taskStateSchema = z.enum([
 
 export type TaskState = z.infer<typeof taskStateSchema>;
 
-export const taskOriginSchema = z.enum(["pocketpilot", "claude-session"]);
+export const taskOriginSchema = z.enum([
+  "agent-conversation",
+  "pocketpilot",
+  "claude-session",
+]);
 
 export type TaskOrigin = z.infer<typeof taskOriginSchema>;
 
 export const taskSnapshotSchema = z.object({
+  activeTurnId: z.string().min(1).nullable(),
   createdAt: z.number().int(),
   id: z.uuid(),
   initialCwd: z.string().min(1),
   interruptedAt: z.number().int().nullable(),
   model: z.string().min(1).nullable(),
+  nativeConversationId: z.string().min(1).nullable(),
   nativeProtocolVersion: z
     .string()
     .min(1)
     .default("@anthropic-ai/claude-agent-sdk@0.3.210"),
+  nativeSessionId: z.string().min(1).nullable(),
   origin: taskOriginSchema.default("pocketpilot"),
   permissionMode: z.string().min(1).nullable(),
   provider: z.string().trim().min(1).max(64).default("claude"),

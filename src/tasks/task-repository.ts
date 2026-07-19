@@ -27,8 +27,11 @@ import {
 } from "./task-types.js";
 
 type TaskUpdate = {
+  activeTurnId?: string | null;
   interruptedAt?: number | null;
   model?: string | null;
+  nativeConversationId?: string | null;
+  nativeSessionId?: string | null;
   origin?: TaskOrigin;
   permissionMode?: string | null;
   sdkSessionId?: string | null;
@@ -80,11 +83,14 @@ export class TaskRepository {
   }
 
   public create(input: {
+    activeTurnId?: string | null;
     createdAt: number;
     id: string;
     initialCwd: string;
     model: string | null;
+    nativeConversationId?: string | null;
     nativeProtocolVersion: string;
+    nativeSessionId?: string | null;
     origin: TaskOrigin;
     permissionMode: string | null;
     provider: string;
@@ -93,11 +99,14 @@ export class TaskRepository {
     this.database
       .insert(tasks)
       .values({
+        activeTurnId: input.activeTurnId ?? null,
         createdAt: input.createdAt,
         id: input.id,
         initialCwd: input.initialCwd,
         model: input.model,
+        nativeConversationId: input.nativeConversationId ?? null,
         nativeProtocolVersion: input.nativeProtocolVersion,
+        nativeSessionId: input.nativeSessionId ?? null,
         origin: input.origin,
         permissionMode: input.permissionMode,
         provider: input.provider,
@@ -132,6 +141,24 @@ export class TaskRepository {
     return row === undefined ? undefined : parseTaskRow(row);
   }
 
+  public findNonTerminalByProviderConversationId(
+    provider: string,
+    nativeConversationId: string,
+  ): TaskSnapshot | undefined {
+    const row = this.database
+      .select()
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.provider, provider),
+          eq(tasks.nativeConversationId, nativeConversationId),
+          ne(tasks.state, "terminal"),
+        ),
+      )
+      .get();
+    return row === undefined ? undefined : parseTaskRow(row);
+  }
+
   public list(): TaskSnapshot[] {
     return this.database
       .select()
@@ -145,6 +172,7 @@ export class TaskRepository {
     return this.database
       .update(tasks)
       .set({
+        activeTurnId: null,
         interruptedAt: now,
         state: "interrupted",
         updatedAt: now,
@@ -157,6 +185,7 @@ export class TaskRepository {
     return this.database
       .update(tasks)
       .set({
+        activeTurnId: null,
         state: "terminal",
         terminalAt: now,
         updatedAt: now,
@@ -402,12 +431,15 @@ function parseTaskRow(row: typeof tasks.$inferSelect): TaskSnapshot {
   }
 
   return {
+    activeTurnId: row.activeTurnId,
     createdAt: row.createdAt,
     id: row.id,
     initialCwd: row.initialCwd,
     interruptedAt: row.interruptedAt,
     model: row.model,
+    nativeConversationId: row.nativeConversationId,
     nativeProtocolVersion: row.nativeProtocolVersion,
+    nativeSessionId: row.nativeSessionId,
     origin: origin.data,
     permissionMode: row.permissionMode,
     provider: row.provider,

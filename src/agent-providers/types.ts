@@ -85,12 +85,21 @@ export type AgentTaskStreamAdapter = {
   ): () => void;
 };
 
+export type AgentTaskLifecycleAdapter = {
+  close(taskId: string): Promise<void>;
+  interrupt(taskId: string): Promise<void>;
+  resume(taskId: string): Promise<void>;
+};
+
+export type AgentTaskController = AgentTaskLifecycleAdapter;
+
 /**
  * Provider-specific behavior behind the common Agent lifecycle.
  * Native rows and messages intentionally remain opaque to this layer.
  */
 export interface AgentProviderAdapter {
   readonly descriptor: AgentProviderDescriptor;
+  readonly taskLifecycle?: AgentTaskLifecycleAdapter;
   readonly taskStream: AgentTaskStreamAdapter;
 
   attachConversation(

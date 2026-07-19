@@ -211,12 +211,15 @@ function fakeProvider(
 
 function taskSnapshot(provider: string): TaskSnapshot {
   return {
+    activeTurnId: null,
     createdAt: 1,
     id: "00000000-0000-4000-8000-000000000002",
     initialCwd: "C:\\workspace",
     interruptedAt: null,
     model: null,
+    nativeConversationId: null,
     nativeProtocolVersion: "fake-1",
+    nativeSessionId: null,
     origin: "pocketpilot",
     permissionMode: null,
     provider,

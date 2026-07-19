@@ -1,6 +1,9 @@
 export const logEvents = {
   accessAuthenticated: "auth.access.authenticated",
   authRequestRejected: "auth.request.rejected",
+  codexAppServerExited: "codex.app-server.exited",
+  codexAppServerStarted: "codex.app-server.started",
+  codexAppServerStderr: "codex.app-server.stderr",
   deviceRevoked: "device.revoked",
   httpRequestCompleted: "http.request.completed",
   httpRequestFailed: "http.request.failed",

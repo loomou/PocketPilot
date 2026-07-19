@@ -148,6 +148,7 @@ describe("mobile OpenAPI generation", () => {
     const agentOperation = document.paths["/v1/tasks/{taskId}/agent"]?.get;
     const agent = websocketExtensionSchema.parse(agentOperation)["x-websocket"];
     expect(agent.clientMessages).toHaveProperty("claudeSdkUserMessage");
+    expect(agent.clientMessages).toHaveProperty("codexJsonRpcFrame");
     expect(agent.serverMessages).toHaveProperty("providerNativeMessage");
     expect(agent.closeCodes).toEqual({
       "4000": "SDK_MESSAGE_INVALID",
@@ -160,7 +161,7 @@ describe("mobile OpenAPI generation", () => {
       "@anthropic-ai/claude-agent-sdk@0.3.210",
     );
     expect(agent.notes.join(" ")).toContain("no PocketPilot wrapper");
-    expect(agent.notes.join(" ")).toContain("afterUuid cursor");
+    expect(agent.notes.join(" ")).toContain("afterCursor query");
     expect(agent.notes.join(" ")).toContain("before activating");
     const historyOperation =
       document.paths[

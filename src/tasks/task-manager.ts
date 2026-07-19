@@ -12,6 +12,7 @@ import type {
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import type { AgentTaskController } from "../agent-providers/types.js";
 import {
   createToolApprovalHandler,
   type PendingToolApproval,
@@ -245,6 +246,7 @@ export class TaskManager {
   readonly #taskLanes = new Map<string, TaskOperationScheduler>();
   readonly #publishedTaskStates = new Map<string, TaskSnapshot["state"]>();
   #authorizationRevision = 0;
+  #providerTaskController: AgentTaskController | undefined;
   #shuttingDown = false;
 
   public constructor(options: TaskManagerOptions) {
@@ -267,6 +269,10 @@ export class TaskManager {
     this.#settingsRepository = options.settingsRepository;
     this.#supportedPermissionModes =
       options.supportedPermissionModes ?? pinnedPermissionModes;
+  }
+
+  public setProviderTaskController(controller: AgentTaskController): void {
+    this.#providerTaskController = controller;
   }
 
   /** Converts unfinished active work from a prior unexpected exit to interrupted. */
@@ -498,11 +504,19 @@ export class TaskManager {
           "Authorization for this task's workspace was removed.",
         );
         liveTask.pendingQueryCount = 0;
-        const interrupt = this.interruptSession(liveTask.session);
-        if (interrupt !== undefined) {
-          interruptions.push(interrupt);
+        const cleanup =
+          terminalTask.provider === "claude"
+            ? this.interruptSession(liveTask.session)
+            : this.#providerTaskController?.close(terminalTask.id);
+        if (cleanup !== undefined) {
+          interruptions.push(cleanup);
         }
         this.closeSession(liveTask.session);
+      } else if (terminalTask.provider !== "claude") {
+        const cleanup = this.#providerTaskController?.close(terminalTask.id);
+        if (cleanup !== undefined) {
+          interruptions.push(cleanup);
+        }
       }
       this.publishTaskState(terminalTask);
       this.#eventSink?.endTurn(terminalTask.id);
@@ -935,7 +949,10 @@ export class TaskManager {
       this.publishTaskState(interrupted);
       this.#eventSink?.endTurn(task.id);
 
-      const interrupt = this.interruptSession(liveTask.session);
+      const interrupt =
+        task.provider === "claude"
+          ? this.interruptSession(liveTask.session)
+          : this.#providerTaskController?.interrupt(task.id);
       await Promise.allSettled(interrupt === undefined ? [] : [interrupt]);
       liveTask.interrupting = false;
 
@@ -944,6 +961,7 @@ export class TaskManager {
         current.state === "terminal"
           ? current
           : this.#repository.update(task.id, {
+              activeTurnId: null,
               interruptedAt: null,
               state: "idle",
               updatedAt: this.#now(),
@@ -981,6 +999,7 @@ export class TaskManager {
       this.cancelPendingApproval(liveTask, "The user closed this task.");
       liveTask.pendingQueryCount = 0;
       const terminal = this.#repository.update(task.id, {
+        activeTurnId: null,
         state: "terminal",
         terminalAt: this.#now(),
         updatedAt: this.#now(),
@@ -988,7 +1007,10 @@ export class TaskManager {
       this.publishTaskState(terminal);
       this.#eventSink?.endTurn(task.id);
       this.#closeTaskAgentConnections.closeTaskConnections(task.id);
-      const interrupt = this.interruptSession(liveTask.session);
+      const interrupt =
+        task.provider === "claude"
+          ? this.interruptSession(liveTask.session)
+          : this.#providerTaskController?.close(task.id);
       this.closeSession(liveTask.session);
       await Promise.allSettled(interrupt === undefined ? [] : [interrupt]);
       this.#logger.info(logEvents.taskControlCompleted, "Task closed", {
@@ -1009,7 +1031,7 @@ export class TaskManager {
     this.assertTaskId(input.taskId);
 
     return this.executeIdempotent(identity, async () =>
-      this.runTaskLane(input.taskId, (lease) => {
+      this.runTaskLane(input.taskId, async (lease) => {
         this.assertAcceptingWork();
         const task = this.requireTask(input.taskId);
         if (task.state !== "interrupted") {
@@ -1018,6 +1040,20 @@ export class TaskManager {
             409,
             "Only an interrupted task can be resumed.",
           );
+        }
+        if (task.provider !== "claude") {
+          await this.#providerTaskController?.resume(task.id);
+          lease.assertCurrent();
+          const resumed = this.#repository.update(task.id, {
+            interruptedAt: null,
+            state: "idle",
+            updatedAt: this.#now(),
+          });
+          return {
+            action: "resumed" as const,
+            auditResult: "resumed",
+            task: resumed,
+          };
         }
         if (task.sdkSessionId === null) {
           throw new TaskError(
@@ -1287,12 +1323,22 @@ export class TaskManager {
         liveTask.interrupting = false;
         this.cancelPendingApproval(liveTask, "The Agent is shutting down.");
         liveTask.pendingQueryCount = 0;
-        if (liveTask.session !== undefined) {
+        if (task.provider === "claude" && liveTask.session !== undefined) {
           const interrupt = this.interruptSession(liveTask.session);
           if (interrupt !== undefined) {
             interruptions.push(interrupt);
           }
           this.closeSession(liveTask.session);
+        } else if (task.provider !== "claude") {
+          const cleanup = this.#providerTaskController?.close(task.id);
+          if (cleanup !== undefined) {
+            interruptions.push(cleanup);
+          }
+        }
+      } else if (task.provider !== "claude") {
+        const cleanup = this.#providerTaskController?.close(task.id);
+        if (cleanup !== undefined) {
+          interruptions.push(cleanup);
         }
       }
       const terminal = this.requireTask(task.id);

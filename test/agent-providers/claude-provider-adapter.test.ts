@@ -253,12 +253,15 @@ function createFixture() {
 }
 
 const task: TaskSnapshot = {
+  activeTurnId: null,
   createdAt: 1,
   id: "00000000-0000-4000-8000-000000000004",
   initialCwd: "C:\\workspace",
   interruptedAt: null,
   model: null,
+  nativeConversationId: null,
   nativeProtocolVersion: "@anthropic-ai/claude-agent-sdk@0.3.210",
+  nativeSessionId: null,
   origin: "claude-session",
   permissionMode: null,
   provider: "claude",

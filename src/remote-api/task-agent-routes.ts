@@ -20,7 +20,7 @@ export const agentWebSocketClose = {
 
 const taskAgentParamsSchema = z.object({ taskId: z.uuid() });
 const taskAgentQuerySchema = z.object({
-  afterUuid: z.string().min(1).max(512).optional(),
+  afterCursor: z.string().min(1).max(512).optional(),
 });
 
 export const taskAgentRouteDocumentation = {
@@ -152,7 +152,7 @@ export function registerTaskAgentRoutes(
       try {
         unsubscribe = provider.taskStream.subscribe(
           taskId,
-          request.query.afterUuid,
+          request.query.afterCursor,
           {
             send(message): void {
               if (closed) {

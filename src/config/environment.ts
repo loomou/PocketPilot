@@ -14,6 +14,7 @@ export const AGENT_DATA_DIRECTORY_ENVIRONMENT_VARIABLE = "POCKETPILOT_DATA_DIR";
 export const LOCAL_ADMIN_PORT_ENVIRONMENT_VARIABLE =
   "POCKETPILOT_LOCAL_ADMIN_PORT";
 export const LOG_LEVEL_ENVIRONMENT_VARIABLE = "POCKETPILOT_LOG_LEVEL";
+export const CODEX_COMMAND_ENVIRONMENT_VARIABLE = "POCKETPILOT_CODEX_COMMAND";
 
 const dotenvAllowlist = [
   AGENT_MASTER_KEY_ENVIRONMENT_VARIABLE,
@@ -21,6 +22,7 @@ const dotenvAllowlist = [
   AGENT_DATA_DIRECTORY_ENVIRONMENT_VARIABLE,
   LOCAL_ADMIN_PORT_ENVIRONMENT_VARIABLE,
   LOG_LEVEL_ENVIRONMENT_VARIABLE,
+  CODEX_COMMAND_ENVIRONMENT_VARIABLE,
 ] as const;
 
 const localAdminPortSchema = z
@@ -110,6 +112,21 @@ export function readLogLevel(
     );
   }
   return result.data;
+}
+
+export function readCodexCommand(
+  environment: NodeJS.ProcessEnv,
+): string | undefined {
+  const value = environment[CODEX_COMMAND_ENVIRONMENT_VARIABLE];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value.trim().length === 0) {
+    throw invalidEnvironmentValue(
+      "POCKETPILOT_CODEX_COMMAND must be a non-empty executable command.",
+    );
+  }
+  return value;
 }
 
 function invalidEnvironmentValue(

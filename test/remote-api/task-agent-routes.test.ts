@@ -32,7 +32,7 @@ describe("task Agent WebSocket", () => {
   it("passes provider-native frames unchanged and subscribes before activation", async () => {
     const fixture = await createFixture(apps);
     const client = await fixture.app.injectWS(
-      `/v1/tasks/${taskId}/agent?afterUuid=message-anchor`,
+      `/v1/tasks/${taskId}/agent?afterCursor=message-anchor`,
       { headers: { authorization: "Bearer access-token" } },
     );
 
@@ -236,12 +236,15 @@ async function createFixture(
 
 function taskSnapshot(): TaskSnapshot {
   return {
+    activeTurnId: null,
     createdAt: 1,
     id: taskId,
     initialCwd: "C:\\workspace",
     interruptedAt: null,
     model: null,
+    nativeConversationId: null,
     nativeProtocolVersion: "@anthropic-ai/claude-agent-sdk@0.3.210",
+    nativeSessionId: null,
     origin: "pocketpilot",
     permissionMode: "default",
     provider: "claude",

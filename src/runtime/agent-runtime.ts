@@ -10,6 +10,12 @@ import { buildMobileOpenApiDocument } from "../api-docs/mobile-openapi.js";
 import { DeviceAuthService } from "../auth/device-auth-service.js";
 import { InMemoryDeviceConnectionRegistry } from "../auth/device-connection-registry.js";
 import {
+  CodexAppServerBridge,
+  isCodexCommandAvailable,
+} from "../codex-app-server/bridge.js";
+import { CodexProviderAdapter } from "../codex-app-server/provider-adapter.js";
+import { readCodexCommand } from "../config/environment.js";
+import {
   buildLocalAdminApp,
   type LocalAdminStatus,
 } from "../local-admin/app.js";
@@ -33,6 +39,7 @@ import { readAgentMasterKey } from "../storage/master-key.js";
 import { SettingsRepository } from "../storage/settings-repository.js";
 import { TaskEventJournal } from "../tasks/task-event-journal.js";
 import { TaskManager } from "../tasks/task-manager.js";
+import { TaskRepository } from "../tasks/task-repository.js";
 import { acquireAgentLock, type ReleaseAgentLock } from "./agent-lock.js";
 import {
   removeRuntimeControlState,
@@ -78,6 +85,7 @@ export class AgentRuntime {
   private readonly localAdminPort: number;
   private readonly logger: PocketPilotLogger;
   private masterKey: Buffer | undefined;
+  private codexProviderAdapter: CodexProviderAdapter | undefined;
   private remoteApiApp:
     | Awaited<ReturnType<typeof buildRemoteApiApp>>
     | undefined;
@@ -106,7 +114,8 @@ export class AgentRuntime {
   public async start(): Promise<AgentRuntimeStatus> {
     this.logger.info(logEvents.runtimeStarting, "Runtime starting");
     try {
-      const masterKey = readAgentMasterKey(this.options.environment);
+      const environment = this.options.environment ?? process.env;
+      const masterKey = readAgentMasterKey(environment);
       this.masterKey = masterKey;
       this.releaseAgentLock = await acquireAgentLock(this.options.databasePath);
       this.storage = openStorage({ databasePath: this.options.databasePath });
@@ -135,12 +144,63 @@ export class AgentRuntime {
         settingsRepository,
         sqlite: this.storage.database,
       });
-      this.agentRuntimeManager = new AgentRuntimeManager(
+      const codexCommand = readCodexCommand(environment);
+      const resolvedCodexCommand = codexCommand ?? "codex";
+      const codexAvailable = isCodexCommandAvailable(
+        resolvedCodexCommand,
+        environment,
+      );
+      this.codexProviderAdapter = new CodexProviderAdapter({
+        bridge: new CodexAppServerBridge({
+          command: resolvedCodexCommand,
+          environment,
+          logger: this.logger,
+        }),
+        logger: this.logger,
+        repository: new TaskRepository(this.storage.database),
+        ...(codexAvailable
+          ? {}
+          : {
+              status: "not_installed" as const,
+              statusReasonCode: "CODEX_COMMAND_NOT_FOUND",
+            }),
+      });
+      const agentRuntimeManager = new AgentRuntimeManager(
         new AgentProviderRegistry([
           new ClaudeProviderAdapter(this.taskManager, this.taskEventJournal),
+          this.codexProviderAdapter,
         ]),
         this.taskManager,
       );
+      this.agentRuntimeManager = agentRuntimeManager;
+      this.taskManager.setProviderTaskController({
+        close(taskId) {
+          const lifecycle =
+            agentRuntimeManager.taskProvider(taskId).taskLifecycle;
+          if (lifecycle === undefined) {
+            throw new Error("The Agent provider does not support task close.");
+          }
+          return lifecycle.close(taskId);
+        },
+        interrupt(taskId) {
+          const lifecycle =
+            agentRuntimeManager.taskProvider(taskId).taskLifecycle;
+          if (lifecycle === undefined) {
+            throw new Error(
+              "The Agent provider does not support interruption.",
+            );
+          }
+          return lifecycle.interrupt(taskId);
+        },
+        resume(taskId) {
+          const lifecycle =
+            agentRuntimeManager.taskProvider(taskId).taskLifecycle;
+          if (lifecycle === undefined) {
+            throw new Error("The Agent provider does not support task resume.");
+          }
+          return lifecycle.resume(taskId);
+        },
+      });
       const recoveredTaskCount =
         this.taskManager.recoverFromUnexpectedRestart();
       await this.startListeners(settings, this.deviceAuthService);
@@ -322,14 +382,21 @@ export class AgentRuntime {
       this.runtimeStarted && this.taskManager !== undefined
         ? this.taskManager.shutdown()
         : undefined;
+    const codexShutdown = this.codexProviderAdapter?.shutdown();
     try {
-      await taskShutdown;
+      await Promise.allSettled(
+        [taskShutdown, codexShutdown].filter(
+          (promise): promise is Promise<void> => promise !== undefined,
+        ),
+      );
     } finally {
       await Promise.allSettled(closers);
       this.storage?.close();
       this.storage = undefined;
       this.masterKey?.fill(0);
       this.masterKey = undefined;
+      this.agentRuntimeManager = undefined;
+      this.codexProviderAdapter = undefined;
       this.deviceAuthService = undefined;
       this.taskManager = undefined;
       this.taskEventJournal = undefined;

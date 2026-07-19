@@ -151,17 +151,39 @@ function addAgentWebSocketExtension(document: MobileOpenApiDocument): void {
     additionalProperties: true,
     description:
       "Provider-native message JSON object. The selected provider protocol is the source of truth for variants and fields.",
-    properties: { type: { type: "string" } },
-    required: ["type"],
+    properties: {
+      error: { type: "object" },
+      id: { oneOf: [{ type: "integer" }, { type: "string" }] },
+      method: { type: "string" },
+      params: { type: "object" },
+      result: {},
+      type: { type: "string" },
+    },
     type: "object",
   };
   const sdkUserMessageSchema = z.toJSONSchema(sdkUserMessageTransportSchema);
+  const codexJsonRpcFrameSchema = {
+    additionalProperties: true,
+    description:
+      "Codex App Server JSON-RPC request or response. Method, params, result, and error remain Codex-native.",
+    properties: {
+      error: { type: "object" },
+      id: { oneOf: [{ type: "integer" }, { type: "string" }] },
+      method: { type: "string" },
+      params: { type: "object" },
+      result: {},
+    },
+    type: "object",
+  };
 
   const extendedOperation: OpenAPIV3.OperationObject<WebSocketExtension> = {
     ...operation,
     "x-websocket": {
       authentication: { scheme: "bearerAuth", stage: "handshake" },
-      clientMessages: { claudeSdkUserMessage: sdkUserMessageSchema },
+      clientMessages: {
+        claudeSdkUserMessage: sdkUserMessageSchema,
+        codexJsonRpcFrame: codexJsonRpcFrameSchema,
+      },
       closeCodes: Object.fromEntries(
         Object.values(agentWebSocketClose).map(({ code, reason }) => [
           String(code),
@@ -174,7 +196,7 @@ function addAgentWebSocketExtension(document: MobileOpenApiDocument): void {
         "For Claude, wire types are owned by @anthropic-ai/claude-agent-sdk@0.3.210 and remain raw SDKUserMessage/SDKMessage objects.",
         "For a session-centric runtime, PocketPilot installs this raw subscriber before activating the new or resumed Query so the original system/init message is delivered unchanged.",
         "History uses the separate SDK SessionMessage API; clients virtualize, prepend older pages, and deduplicate history/live rows by SDK UUID where available.",
-        "The optional afterUuid cursor is interpreted by the selected provider; for Claude it is an SDK UUID and a missing or unknown value replays the current active turn from its beginning.",
+        "The optional afterCursor query is interpreted by the selected provider; for Claude it contains an SDK UUID, while Codex uses PocketPilot's out-of-band native-frame cursor. A missing or unknown value replays the retained window from its beginning.",
         "Swagger UI displays this contract but does not execute WebSocket messages.",
       ],
       serverMessages: { providerNativeMessage: nativeMessageSchema },
