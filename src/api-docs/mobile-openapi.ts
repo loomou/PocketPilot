@@ -1,11 +1,16 @@
 import type { OpenAPI, OpenAPIV3 } from "openapi-types";
 import { z } from "zod";
 
+import { sdkUserMessageTransportSchema } from "../claude-sdk/transport.js";
 import {
   buildRemoteApiApp,
   type RemoteApiAppOptions,
   type RemoteApiDeviceAuthService,
 } from "../remote-api/app.js";
+import {
+  agentWebSocketClose,
+  taskAgentRouteDocumentation,
+} from "../remote-api/task-agent-routes.js";
 import {
   eventDeliveryMessageSchema,
   eventErrorMessageSchema,
@@ -13,11 +18,6 @@ import {
   eventSubscriptionMessageSchema,
   taskEventRouteDocumentation,
 } from "../remote-api/task-event-routes.js";
-import {
-  sdkUserMessageTransportSchema,
-  sdkWebSocketClose,
-  taskSdkRouteDocumentation,
-} from "../remote-api/task-sdk-routes.js";
 
 type WebSocketExtension = {
   "x-websocket": {
@@ -56,7 +56,7 @@ export async function buildMobileOpenApiDocument(): Promise<MobileOpenApiDocumen
 
 function addWebSocketExtensions(document: MobileOpenApiDocument): void {
   addControlWebSocketExtension(document);
-  addSdkWebSocketExtension(document);
+  addAgentWebSocketExtension(document);
 }
 
 function addControlWebSocketExtension(document: MobileOpenApiDocument): void {
@@ -138,19 +138,19 @@ const approvalRequestedControlEventSchema = {
   type: "object",
 };
 
-function addSdkWebSocketExtension(document: MobileOpenApiDocument): void {
-  const route = "/v1/tasks/{taskId}/sdk";
+function addAgentWebSocketExtension(document: MobileOpenApiDocument): void {
+  const route = "/v1/tasks/{taskId}/agent";
   const path = document.paths[route];
   const operation = path?.get ?? {
-    ...taskSdkRouteDocumentation,
+    ...taskAgentRouteDocumentation,
     responses: {
       101: { description: "WebSocket protocol switch accepted." },
     },
   };
-  const sdkMessageSchema = {
+  const nativeMessageSchema = {
     additionalProperties: true,
     description:
-      "Raw SDKMessage JSON object. The installed SDK package is the source of truth for all variants and fields.",
+      "Provider-native message JSON object. The selected provider protocol is the source of truth for variants and fields.",
     properties: { type: { type: "string" } },
     required: ["type"],
     type: "object",
@@ -161,22 +161,23 @@ function addSdkWebSocketExtension(document: MobileOpenApiDocument): void {
     ...operation,
     "x-websocket": {
       authentication: { scheme: "bearerAuth", stage: "handshake" },
-      clientMessages: { sdkUserMessage: sdkUserMessageSchema },
+      clientMessages: { claudeSdkUserMessage: sdkUserMessageSchema },
       closeCodes: Object.fromEntries(
-        Object.values(sdkWebSocketClose).map(({ code, reason }) => [
+        Object.values(agentWebSocketClose).map(({ code, reason }) => [
           String(code),
           reason,
         ]),
       ),
       notes: [
-        "Wire types are owned by @anthropic-ai/claude-agent-sdk@0.3.210.",
-        "Client frames are raw SDKUserMessage objects and server frames are raw SDKMessage objects with no PocketPilot wrapper.",
+        "Read task.provider and task.nativeProtocolVersion before opening this stream and select the matching provider codec.",
+        "Client and server frames are provider-native objects with no PocketPilot wrapper.",
+        "For Claude, wire types are owned by @anthropic-ai/claude-agent-sdk@0.3.210 and remain raw SDKUserMessage/SDKMessage objects.",
         "For a session-centric runtime, PocketPilot installs this raw subscriber before activating the new or resumed Query so the original system/init message is delivered unchanged.",
         "History uses the separate SDK SessionMessage API; clients virtualize, prepend older pages, and deduplicate history/live rows by SDK UUID where available.",
-        "afterUuid resumes after a retained SDK UUID; a missing or unknown value replays the current active turn from its beginning.",
+        "The optional afterUuid cursor is interpreted by the selected provider; for Claude it is an SDK UUID and a missing or unknown value replays the current active turn from its beginning.",
         "Swagger UI displays this contract but does not execute WebSocket messages.",
       ],
-      serverMessages: { sdkMessage: sdkMessageSchema },
+      serverMessages: { providerNativeMessage: nativeMessageSchema },
     },
   };
   document.paths[route] = { ...path, get: extendedOperation };
@@ -204,28 +205,36 @@ const documentationDeviceAuthService: RemoteApiDeviceAuthService = {
 const documentationTaskManager: NonNullable<
   RemoteApiAppOptions["taskManager"]
 > = {
-  activateSdkSession: unavailableDocumentationHandler,
-  attachClaudeSession: unavailableDocumentationHandler,
   authorizedWorkspaceRoots: unavailableDocumentationHandler,
   closeTask: unavailableDocumentationHandler,
   createTask: unavailableDocumentationHandler,
-  createClaudeConversation: unavailableDocumentationHandler,
   getComposerOptions: unavailableDocumentationHandler,
   getTask: unavailableDocumentationHandler,
   interruptTask: unavailableDocumentationHandler,
   listTasks: unavailableDocumentationHandler,
-  listClaudeSessions: unavailableDocumentationHandler,
-  readClaudeSessionHistory: unavailableDocumentationHandler,
   resolveApproval: unavailableDocumentationHandler,
   resumeTask: unavailableDocumentationHandler,
   setModel: unavailableDocumentationHandler,
   setEffortLevel: unavailableDocumentationHandler,
   setPermissionMode: unavailableDocumentationHandler,
-  submitSdkMessage: unavailableDocumentationHandler,
   supportedPermissionModes: unavailableDocumentationHandler,
 };
 
+const documentationAgentRuntimeManager: NonNullable<
+  RemoteApiAppOptions["agentRuntimeManager"]
+> = {
+  attachConversation: unavailableDocumentationHandler,
+  createConversation: unavailableDocumentationHandler,
+  listConversations: unavailableDocumentationHandler,
+  listProviders: unavailableDocumentationHandler,
+  providerCapabilities: unavailableDocumentationHandler,
+  readConversation: unavailableDocumentationHandler,
+  task: unavailableDocumentationHandler,
+  taskProvider: unavailableDocumentationHandler,
+};
+
 const documentationDependencies = {
+  agentRuntimeManager: documentationAgentRuntimeManager,
   connectionRegistry: {
     add: unavailableDocumentationHandler,
     closeDeviceConnections: unavailableDocumentationHandler,
@@ -233,7 +242,9 @@ const documentationDependencies = {
   deviceAuthService: documentationDeviceAuthService,
   eventJournal: {
     subscribeControl: unavailableDocumentationHandler,
-    subscribeSdk: unavailableDocumentationHandler,
+  },
+  taskAgentConnectionRegistry: {
+    add: unavailableDocumentationHandler,
   },
   taskManager: documentationTaskManager,
 };

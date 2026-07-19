@@ -84,8 +84,10 @@ export class TaskRepository {
     id: string;
     initialCwd: string;
     model: string | null;
+    nativeProtocolVersion: string;
     origin: TaskOrigin;
     permissionMode: string | null;
+    provider: string;
     sdkSessionId?: string | null;
   }): TaskSnapshot {
     this.database
@@ -95,8 +97,10 @@ export class TaskRepository {
         id: input.id,
         initialCwd: input.initialCwd,
         model: input.model,
+        nativeProtocolVersion: input.nativeProtocolVersion,
         origin: input.origin,
         permissionMode: input.permissionMode,
+        provider: input.provider,
         sdkSessionId: input.sdkSessionId ?? null,
         state: "idle",
         updatedAt: input.createdAt,
@@ -403,8 +407,10 @@ function parseTaskRow(row: typeof tasks.$inferSelect): TaskSnapshot {
     initialCwd: row.initialCwd,
     interruptedAt: row.interruptedAt,
     model: row.model,
+    nativeProtocolVersion: row.nativeProtocolVersion,
     origin: origin.data,
     permissionMode: row.permissionMode,
+    provider: row.provider,
     sdkSessionId: row.sdkSessionId,
     state: state.data,
     terminalAt: row.terminalAt,

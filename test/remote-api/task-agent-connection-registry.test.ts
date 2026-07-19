@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { InMemoryTaskSdkConnectionRegistry } from "../../src/remote-api/task-sdk-connection-registry.js";
+import { InMemoryTaskAgentConnectionRegistry } from "../../src/remote-api/task-agent-connection-registry.js";
 
-describe("InMemoryTaskSdkConnectionRegistry", () => {
+describe("InMemoryTaskAgentConnectionRegistry", () => {
   it("closes only sockets for the terminalized task", () => {
-    const registry = new InMemoryTaskSdkConnectionRegistry();
+    const registry = new InMemoryTaskAgentConnectionRegistry();
     const first = { close: vi.fn() };
     const second = { close: vi.fn() };
     registry.add("task-a", first);

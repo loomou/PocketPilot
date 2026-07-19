@@ -110,8 +110,12 @@ export const tasks = sqliteTable(
     initialCwd: text("initial_cwd").notNull(),
     interruptedAt: integer("interrupted_at"),
     model: text("model"),
+    nativeProtocolVersion: text("native_protocol_version")
+      .notNull()
+      .default("@anthropic-ai/claude-agent-sdk@0.3.210"),
     origin: text("origin").notNull().default("pocketpilot"),
     permissionMode: text("permission_mode"),
+    provider: text("provider").notNull().default("claude"),
     sdkSessionId: text("sdk_session_id"),
     state: text("state").notNull(),
     terminalAt: integer("terminal_at"),

@@ -20,6 +20,7 @@ import {
 import {
   type ClaudeSdkInitialization,
   type ClaudeSdkSession,
+  claudeAgentSdkProtocolVersion,
   type OpenClaudeSdkSessionOptions,
   openClaudeSdkSession,
   pinnedEffortLevels,
@@ -171,7 +172,7 @@ export type TaskSdkSessionFactory = (
 
 export type TaskManagerOptions = {
   claudeSessionCatalog?: ClaudeSessionCatalog;
-  closeTaskSdkConnections?: { closeTaskConnections(taskId: string): void };
+  closeTaskAgentConnections?: { closeTaskConnections(taskId: string): void };
   createSession?: TaskSdkSessionFactory;
   directoryResolver?: WorkspaceDirectoryResolver;
   eventSink?: TaskEventSink;
@@ -223,7 +224,7 @@ export class TaskManager {
   readonly #attachmentLane = new SerialExecutor();
   readonly #capacityLane = new SerialExecutor();
   readonly #claudeSessionCatalog: ClaudeSessionCatalog;
-  readonly #closeTaskSdkConnections: {
+  readonly #closeTaskAgentConnections: {
     closeTaskConnections(taskId: string): void;
   };
   readonly #createSession: TaskSdkSessionFactory;
@@ -249,7 +250,7 @@ export class TaskManager {
   public constructor(options: TaskManagerOptions) {
     this.#claudeSessionCatalog =
       options.claudeSessionCatalog ?? installedClaudeSessionCatalog;
-    this.#closeTaskSdkConnections = options.closeTaskSdkConnections ?? {
+    this.#closeTaskAgentConnections = options.closeTaskAgentConnections ?? {
       closeTaskConnections: () => undefined,
     };
     this.#createSession = options.createSession ?? openClaudeSdkSession;
@@ -295,6 +296,16 @@ export class TaskManager {
     return [
       ...readTaskRuntimeSettings(this.#settingsRepository).workspaceRoots,
     ];
+  }
+
+  /**
+   * Canonicalizes and verifies a workspace before provider-native work runs.
+   * Provider-neutral orchestration uses this boundary so every adapter gets
+   * the same directory policy, while Claude retains checks for direct callers.
+   */
+  public async authorizeWorkspace(workspace: string): Promise<string> {
+    const settings = readTaskRuntimeSettings(this.#settingsRepository);
+    return this.authorizeInitialWorkspace(workspace, settings.workspaceRoots);
   }
 
   public async authorizedDirectorySnapshot(): Promise<AuthorizedDirectorySnapshot> {
@@ -495,7 +506,7 @@ export class TaskManager {
       }
       this.publishTaskState(terminalTask);
       this.#eventSink?.endTurn(terminalTask.id);
-      this.#closeTaskSdkConnections.closeTaskConnections(terminalTask.id);
+      this.#closeTaskAgentConnections.closeTaskConnections(terminalTask.id);
     }
     await Promise.allSettled(interruptions);
 
@@ -658,8 +669,10 @@ export class TaskManager {
             id: randomUUID(),
             initialCwd,
             model: null,
+            nativeProtocolVersion: claudeAgentSdkProtocolVersion,
             origin: "claude-session",
             permissionMode: null,
+            provider: "claude",
             sdkSessionId: null,
           });
           this.#logger.info(logEvents.taskCreated, "Task created", {
@@ -823,8 +836,10 @@ export class TaskManager {
             id: randomUUID(),
             initialCwd,
             model: parsed.data.model ?? null,
+            nativeProtocolVersion: claudeAgentSdkProtocolVersion,
             origin: "pocketpilot",
             permissionMode: parsed.data.permissionMode,
+            provider: "claude",
           });
           this.#logger.info(logEvents.taskCreated, "Task created", {
             origin: task.origin,
@@ -972,7 +987,7 @@ export class TaskManager {
       });
       this.publishTaskState(terminal);
       this.#eventSink?.endTurn(task.id);
-      this.#closeTaskSdkConnections.closeTaskConnections(task.id);
+      this.#closeTaskAgentConnections.closeTaskConnections(task.id);
       const interrupt = this.interruptSession(liveTask.session);
       this.closeSession(liveTask.session);
       await Promise.allSettled(interrupt === undefined ? [] : [interrupt]);
@@ -1283,7 +1298,7 @@ export class TaskManager {
       const terminal = this.requireTask(task.id);
       this.publishTaskState(terminal);
       this.#eventSink?.endTurn(task.id);
-      this.#closeTaskSdkConnections.closeTaskConnections(task.id);
+      this.#closeTaskAgentConnections.closeTaskConnections(task.id);
     }
     await Promise.allSettled(interruptions);
     this.#liveTasks.clear();
@@ -1336,8 +1351,10 @@ export class TaskManager {
         id: randomUUID(),
         initialCwd,
         model: null,
+        nativeProtocolVersion: claudeAgentSdkProtocolVersion,
         origin: "claude-session",
         permissionMode: null,
+        provider: "claude",
         sdkSessionId,
       });
     } catch {

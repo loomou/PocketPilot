@@ -20,8 +20,13 @@ export const taskSnapshotSchema = z.object({
   initialCwd: z.string().min(1),
   interruptedAt: z.number().int().nullable(),
   model: z.string().min(1).nullable(),
+  nativeProtocolVersion: z
+    .string()
+    .min(1)
+    .default("@anthropic-ai/claude-agent-sdk@0.3.210"),
   origin: taskOriginSchema.default("pocketpilot"),
   permissionMode: z.string().min(1).nullable(),
+  provider: z.string().trim().min(1).max(64).default("claude"),
   sdkSessionId: z.string().min(1).nullable(),
   state: taskStateSchema,
   terminalAt: z.number().int().nullable(),

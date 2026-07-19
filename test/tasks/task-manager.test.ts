@@ -933,7 +933,7 @@ function createFixture(
   connections: StorageConnection[],
   temporaryDirectories: string[],
   managers: TaskManager[],
-  closeTaskSdkConnections?: { closeTaskConnections(taskId: string): void },
+  closeTaskAgentConnections?: { closeTaskConnections(taskId: string): void },
   logger?: PocketPilotLogger,
 ): {
   connection: StorageConnection;
@@ -964,9 +964,9 @@ function createFixture(
   const unassignedSessions: FakeTaskSession[] = [];
   const eventSink = new RecordingTaskEventSink();
   const manager = new TaskManager({
-    ...(closeTaskSdkConnections === undefined
+    ...(closeTaskAgentConnections === undefined
       ? {}
-      : { closeTaskSdkConnections }),
+      : { closeTaskAgentConnections }),
     createSession: (options) => {
       const session = new FakeTaskSession(options, `sdk-${randomUUID()}`);
       unassignedSessions.push(session);

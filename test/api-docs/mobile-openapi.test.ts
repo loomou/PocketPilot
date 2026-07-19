@@ -18,11 +18,14 @@ const expectedPaths = [
   "/v1/pair/{pairingId}/claim",
   "/v1/pair/{pairingId}/claim-challenge",
   "/v1/pair/{pairingId}/register",
-  "/v1/sessions",
-  "/v1/sessions/{sessionId}/attach",
-  "/v1/sessions/{sessionId}/messages",
+  "/v1/providers",
+  "/v1/providers/{providerId}/capabilities",
+  "/v1/providers/{providerId}/conversations",
+  "/v1/providers/{providerId}/conversations/{conversationId}",
+  "/v1/providers/{providerId}/conversations/{conversationId}/attach",
   "/v1/tasks",
   "/v1/tasks/{taskId}",
+  "/v1/tasks/{taskId}/agent",
   "/v1/tasks/{taskId}/approvals/{requestId}",
   "/v1/tasks/{taskId}/close",
   "/v1/tasks/{taskId}/composer-options",
@@ -31,7 +34,6 @@ const expectedPaths = [
   "/v1/tasks/{taskId}/model",
   "/v1/tasks/{taskId}/permission-mode",
   "/v1/tasks/{taskId}/resume",
-  "/v1/tasks/{taskId}/sdk",
   "/v1/workspaces",
 ] as const;
 
@@ -143,33 +145,29 @@ describe("mobile OpenAPI generation", () => {
       expect(controlSerialized).toContain(field);
     }
 
-    const sdkOperation = document.paths["/v1/tasks/{taskId}/sdk"]?.get;
-    const sdk = websocketExtensionSchema.parse(sdkOperation)["x-websocket"];
-    expect(sdk.clientMessages).toHaveProperty("sdkUserMessage");
-    expect(sdk.serverMessages).toHaveProperty("sdkMessage");
-    expect(sdk.closeCodes).toEqual({
+    const agentOperation = document.paths["/v1/tasks/{taskId}/agent"]?.get;
+    const agent = websocketExtensionSchema.parse(agentOperation)["x-websocket"];
+    expect(agent.clientMessages).toHaveProperty("claudeSdkUserMessage");
+    expect(agent.serverMessages).toHaveProperty("providerNativeMessage");
+    expect(agent.closeCodes).toEqual({
       "4000": "SDK_MESSAGE_INVALID",
       "4003": "AUTHENTICATION_FAILED",
       "4004": "TASK_NOT_FOUND",
       "4009": "TASK_SESSION_UNAVAILABLE",
       "4011": "SDK_TRANSPORT_FAILED",
     });
-    expect(sdk.notes.join(" ")).toContain(
+    expect(agent.notes.join(" ")).toContain(
       "@anthropic-ai/claude-agent-sdk@0.3.210",
     );
-    expect(sdk.notes.join(" ")).toContain("no PocketPilot wrapper");
-    expect(sdk.notes.join(" ")).toContain("afterUuid");
-    expect(sdk.notes.join(" ")).toContain("before activating");
+    expect(agent.notes.join(" ")).toContain("no PocketPilot wrapper");
+    expect(agent.notes.join(" ")).toContain("afterUuid cursor");
+    expect(agent.notes.join(" ")).toContain("before activating");
     const historyOperation =
-      document.paths["/v1/sessions/{sessionId}/messages"]?.get;
+      document.paths[
+        "/v1/providers/{providerId}/conversations/{conversationId}"
+      ]?.get;
     const historySerialized = JSON.stringify(historyOperation);
-    for (const contract of [
-      "beforeUuid",
-      "hasMoreBefore",
-      "HISTORY_CURSOR_STALE",
-      "includeSystemMessages",
-      "@anthropic-ai/claude-agent-sdk@0.3.210",
-    ]) {
+    for (const contract of ["cursor", "hasMore", "includeSystemMessages"]) {
       expect(historySerialized).toContain(contract);
     }
     expect(

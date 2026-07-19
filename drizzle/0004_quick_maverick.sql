@@ -1,0 +1,2 @@
+ALTER TABLE `tasks` ADD `native_protocol_version` text DEFAULT '@anthropic-ai/claude-agent-sdk@0.3.210' NOT NULL;--> statement-breakpoint
+ALTER TABLE `tasks` ADD `provider` text DEFAULT 'claude' NOT NULL;

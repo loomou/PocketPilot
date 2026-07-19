@@ -3,6 +3,9 @@ import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ClaudeProviderAdapter } from "../agent-providers/claude-provider-adapter.js";
+import { AgentProviderRegistry } from "../agent-providers/registry.js";
+import { AgentRuntimeManager } from "../agent-providers/runtime-manager.js";
 import { buildMobileOpenApiDocument } from "../api-docs/mobile-openapi.js";
 import { DeviceAuthService } from "../auth/device-auth-service.js";
 import { InMemoryDeviceConnectionRegistry } from "../auth/device-connection-registry.js";
@@ -19,7 +22,7 @@ import {
   safeErrorFields,
 } from "../logging/logger.js";
 import { buildRemoteApiApp } from "../remote-api/app.js";
-import { InMemoryTaskSdkConnectionRegistry } from "../remote-api/task-sdk-connection-registry.js";
+import { InMemoryTaskAgentConnectionRegistry } from "../remote-api/task-agent-connection-registry.js";
 import { openStorage, type StorageConnection } from "../storage/database.js";
 import {
   clearTransientEventOverflow,
@@ -63,8 +66,9 @@ export type AgentRuntimeOptions = {
 export class AgentRuntime {
   private readonly deviceConnectionRegistry =
     new InMemoryDeviceConnectionRegistry();
-  private readonly taskSdkConnectionRegistry =
-    new InMemoryTaskSdkConnectionRegistry();
+  private readonly taskAgentConnectionRegistry =
+    new InMemoryTaskAgentConnectionRegistry();
+  private agentRuntimeManager: AgentRuntimeManager | undefined;
   private controlStatePath: string;
   private deviceAuthService: DeviceAuthService | undefined;
   private localAdminApp:
@@ -125,12 +129,18 @@ export class AgentRuntime {
         sqlite: this.storage.sqlite,
       });
       this.taskManager = new TaskManager({
-        closeTaskSdkConnections: this.taskSdkConnectionRegistry,
+        closeTaskAgentConnections: this.taskAgentConnectionRegistry,
         eventSink: this.taskEventJournal,
         logger: this.logger,
         settingsRepository,
         sqlite: this.storage.database,
       });
+      this.agentRuntimeManager = new AgentRuntimeManager(
+        new AgentProviderRegistry([
+          new ClaudeProviderAdapter(this.taskManager, this.taskEventJournal),
+        ]),
+        this.taskManager,
+      );
       const recoveredTaskCount =
         this.taskManager.recoverFromUnexpectedRestart();
       await this.startListeners(settings, this.deviceAuthService);
@@ -222,6 +232,9 @@ export class AgentRuntime {
       sqlite: storage.sqlite,
     });
     this.remoteApiApp = await buildRemoteApiApp({
+      ...(this.agentRuntimeManager === undefined
+        ? {}
+        : { agentRuntimeManager: this.agentRuntimeManager }),
       connectionRegistry: this.deviceConnectionRegistry,
       deviceAuthService,
       ...(this.taskEventJournal === undefined
@@ -231,7 +244,7 @@ export class AgentRuntime {
         ? {}
         : { taskManager: this.taskManager }),
       logger: this.logger,
-      taskSdkConnectionRegistry: this.taskSdkConnectionRegistry,
+      taskAgentConnectionRegistry: this.taskAgentConnectionRegistry,
     });
 
     await this.localAdminApp.listen({
