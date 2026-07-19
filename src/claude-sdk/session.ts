@@ -179,6 +179,7 @@ export function openClaudeSdkSession(
   const input = new ClaudeSdkInputStream();
   const queryOptions: Options = {
     cwd: options.cwd,
+    includePartialMessages: true,
     ...(options.resume === undefined
       ? {
           env: {

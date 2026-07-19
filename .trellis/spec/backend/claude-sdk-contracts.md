@@ -61,6 +61,9 @@ consumer and remains open until task close or coordinated shutdown.
   including `user`, `assistant`, `stream_event`, `result`, system, tool, and
   future/open variants. It may observe `session_id` before yielding, but it
   must not wrap, clone, filter, project, or normalize the message.
+- Every new and resumed Query sets `Options.includePartialMessages` to `true`
+  so the SDK emits raw `stream_event` deltas before the final authoritative
+  `assistant` message. PocketPilot never fabricates token-by-token output.
 - The raw task SDK WebSocket is JSON serialization around those two SDK-owned
   types. PocketPilot task state, approval notifications, cursors, task IDs, and
   timestamps are not SDK messages and never appear as wrappers on that socket.
@@ -199,6 +202,8 @@ consumer and remains open until task close or coordinated shutdown.
 - Unit-test catalog option forwarding and object identity, effort including
   `max`/null, Query defaults versus resume, and subscribe-before-activation
   delivery of unwrapped `system/init`.
+- Unit-test that both new and resumed Query factories receive
+  `includePartialMessages: true`.
 - Unit-test that only new Queries receive a copied environment with the
   `pocketpilot` entrypoint; resume Queries receive the original session ID and
   no PocketPilot environment override.
