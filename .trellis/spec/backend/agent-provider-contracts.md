@@ -133,7 +133,7 @@ protocol.
 
 ```ts
 const provider = runtime.taskProvider(taskId);
-const unsubscribe = provider.taskStream.subscribe(taskId, afterUuid, subscriber);
+const unsubscribe = provider.taskStream.subscribe(taskId, afterCursor, subscriber);
 await provider.taskStream.activate(taskId);
 ```
 

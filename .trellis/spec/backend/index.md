@@ -18,6 +18,7 @@ This directory records the conventions for the PocketPilot TypeScript Agent.
 | [Environment Configuration Contracts](./environment-configuration-contracts.md) | Allowlisted cwd dotenv loading and bootstrap validation | Established |
 | [Mobile API Documentation Contracts](./api-documentation-contracts.md) | OpenAPI generation, local Swagger delivery, and WebSocket documentation | Established |
 | [Agent Provider Contracts](./agent-provider-contracts.md) | Provider registry, common lifecycle, native protocols, and adapter boundaries | Established |
+| [Codex App Server Contracts](./codex-app-server-contracts.md) | Native Codex stdio bridge, JSON-RPC identity, lifecycle, and approvals | Established |
 | [Claude Agent SDK Contracts](./claude-sdk-contracts.md) | Raw message passthrough, long-lived input, controls, and approval boundaries | Established |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | Established |
 | [Database Guidelines](./database-guidelines.md) | SQLite, encryption, retention, and migration contracts | Established |

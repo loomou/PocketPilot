@@ -94,7 +94,7 @@ wrap SDK messages in a second protocol.
 | `conversationId` | Provider-native conversation identity used in provider-scoped REST paths | For Claude this is the SDK session ID selected from an unchanged `SDKSessionInfo` row. |
 | `taskId` | PocketPilot runtime/control handle for routing, state, approvals, replay, scheduling, and one live Query | Stable across turns and `conversation_reset`. Keep it out of user-facing conversation identity. |
 | `sdkSessionId` / raw `session_id` | Claude persistence and resume identity | Observe SDK-owned values. Never derive it from `taskId` or replay history as a substitute. |
-| SDK `uuid` | Identity for an SDK history/live message and SDK replay anchor | Use for history/live deduplication and `afterUuid` when present. A valid live message can omit it. |
+| SDK `uuid` | Identity for an SDK history/live message and SDK replay anchor | Use for history/live deduplication and the provider-native value carried by `afterCursor` when present. A valid live message can omit it. |
 | `new_conversation_id` | New transcript boundary emitted by raw `conversation_reset` | Mount a fresh transcript and clear cached title state. Do not rotate `taskId`. Do not assume it equals `session_id`. |
 | `operationId` | Client-generated UUID for idempotent HTTP mutations | Generate once per distinct mutation; reuse only when retrying that same mutation. Never put it in raw SDK frames. |
 | approval `requestId` | SDK permission callback identity | Resolve only the currently pending request. It is unrelated to HTTP `operationId`. |
@@ -452,7 +452,7 @@ wss://agent.example.test/v1/tasks/60000000-0000-4000-8000-000000000001/agent
 Authorization: Bearer <accessToken>
 ```
 
-Optionally append `?afterUuid=<lastSdkUuid>` when reconnecting. The WebSocket
+Optionally append `?afterCursor=<providerCursor>` when reconnecting. The WebSocket
 route subscribes to raw delivery before it activates a new/resumed
 session-centric Query, preventing the original `system/init` from being missed.
 Do not add a separate activation request.
@@ -516,13 +516,13 @@ PocketPilot wrapper.
 ### 8.3 SDK replay and reconnect
 
 - Save the last processed SDK UUID per `taskId` when one is present.
-- A known `afterUuid` replays later retained messages, then continues live.
-- A missing or unknown `afterUuid` replays the retained current turn from its
+- A known `afterCursor` replays later retained messages, then continues live.
+- A missing or unknown `afterCursor` replays the retained current turn from its
   beginning. Deduplicate by UUID.
 - Retention covers only the active turn and is deleted at turn end, terminal
   cleanup, shutdown, and secure startup. Reconnect at idle may have no replay.
 - A message without UUID is delivered and retained but cannot be an
-  `afterUuid` anchor.
+  `afterCursor` anchor.
 - Socket disconnect never interrupts Claude. Reconnect with the same `taskId`;
   do not create a task merely because the network changed.
 
@@ -878,7 +878,7 @@ shape. Branch on `code`; present `message` only as user-safe context.
 | Both | `4003 AUTHENTICATION_FAILED` or device-revoked reason | Refresh/validate credentials; pair again when revoked |
 | Raw SDK | `4004 TASK_NOT_FOUND` | Stop reconnecting task; attach/create again |
 | Raw SDK | `4009 TASK_SESSION_UNAVAILABLE` | Refresh task; wait/re-attach unless terminal |
-| Raw SDK | `4011 SDK_TRANSPORT_FAILED` | Back off, refresh task state, reconnect with last `afterUuid`; never auto-resend prompt |
+| Raw SDK | `4011 SDK_TRANSPORT_FAILED` | Back off, refresh task state, reconnect with last `afterCursor`; never auto-resend prompt |
 
 The control socket additionally sends
 `EVENT_SUBSCRIPTION_INVALID` as a JSON message without closing. Neither socket
@@ -974,7 +974,7 @@ sequenceDiagram
     M->>R: POST selected session attach
     R-->>M: task.id (opaque taskId)
     M->>C: Connect and subscribe(taskId, afterCursor)
-    M->>S: Connect /tasks/{taskId}/agent?afterUuid
+    M->>S: Connect /tasks/{taskId}/agent?afterCursor
     S->>S: Install raw subscriber
     S->>Q: Activate with Options.resume
     Q-->>S: Raw system/init
@@ -1074,7 +1074,7 @@ sequenceDiagram
     participant R as REST
     S--xM: Network disconnect
     C--xM: Network disconnect
-    M->>S: Reconnect with afterUuid
+    M->>S: Reconnect with afterCursor
     S-->>M: Raw replay then live SDKMessage
     M->>M: Deduplicate by SDK uuid
     M->>C: Reconnect and subscribe afterCursor

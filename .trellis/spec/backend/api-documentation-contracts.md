@@ -73,7 +73,7 @@ emits `dist/openapi/mobile-v1.json`.
   exported `sdkUserMessageTransportSchema` for the documented base guard;
   describe SDK output as an open SDK-owned object instead of hand-copying its
   evolving union into Zod.
-- Document `afterUuid`, absent/unknown replay fallback, no PocketPilot wrapper,
+- Document `afterCursor`, absent/unknown replay fallback, no PocketPilot wrapper,
   and close codes `4000`, `4003`, `4004`, `4009`, and `4011`. Keep
   `afterCursor` and `EVENT_SUBSCRIPTION_INVALID` specific to the control
   socket.

@@ -91,7 +91,7 @@ function route(message: SDKMessage) {
 - 移动端不能从 `taskId` 推导 `session_id`，也不能把自己的 UI 会话 ID 写入 SDK 消息。
 
 除非本文特别说明，SDK 消息通常都带有 `uuid` 和 `session_id`。`uuid` 用于历史与
-实时消息去重以及 `afterUuid` 回放；没有 `uuid` 的消息仍然是合法消息，不能因为缺少
+实时消息去重以及 `afterCursor` 回放（Claude provider 的 cursor 值是 SDK UUID）；没有 `uuid` 的消息仍然是合法消息，不能因为缺少
 它而丢弃。
 
 ## 2. 一轮会话的典型顺序
