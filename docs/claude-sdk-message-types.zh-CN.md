@@ -106,8 +106,8 @@ assistant（工具结果之后的下一段完整回复）
 result
 ```
 
-当 SDK 配置 `includePartialMessages: true` 时，模型响应还会在完整
-`assistant` 之前产生：
+PocketPilot 后端在创建和恢复 Claude SDK Query 时固定设置
+`includePartialMessages: true`，因此模型响应会在完整 `assistant` 之前产生：
 
 ```text
 stream_event: message_start
@@ -226,8 +226,8 @@ Query 初始化消息。它包含 Claude 当前使用的工作目录、模型、
 
 ### 3.5 `SDKPartialAssistantMessage`：`type: "stream_event"`
 
-只有设置 `includePartialMessages: true` 才会出现。它是原始 Claude API 事件，不是
-已拼好的文本。
+PocketPilot 默认开启 `includePartialMessages: true`，因此实时回合会收到这种原始
+Claude API 事件。它不是已经拼好的文本，客户端仍需按事件顺序合并。
 
 ```json
 {
@@ -474,7 +474,7 @@ task_started -> task_progress ... -> task_updated -> task_notification
 
 ## 8. 流式消息如何拼接
 
-开启 `includePartialMessages` 时，客户端至少要处理以下事件：
+PocketPilot 已默认开启 `includePartialMessages`，客户端至少要处理以下事件：
 
 ### 8.1 文本流
 
@@ -591,7 +591,8 @@ PocketPilot 有两个不同的 WebSocket：
 
 部分事件还受 Claude Code 版本或 SDK option 控制，例如：
 
-- `stream_event` 需要 `includePartialMessages: true`；
+- PocketPilot 已为新建和恢复 Query 开启 `includePartialMessages: true`，因此
+  `stream_event` 是正常实时输出的一部分；其他 SDK 使用者仍需自行开启该选项；
 - `prompt_suggestion` 需要启用 prompt suggestions；
 - `plugin_install` 需要启用插件安装同步；
 - `background_tasks_changed`、`thinking_tokens`、`conversation_reset` 等需要足够新的
@@ -614,4 +615,3 @@ SDK 升级后，移动端至少要重新检查：
 - [Agent SDK：How the agent loop works](https://platform.claude.com/docs/en/agent-sdk/agent-loop)
 - [Agent SDK：Streaming output](https://platform.claude.com/docs/en/agent-sdk/streaming-output)
 - [Agent SDK：Work with sessions](https://platform.claude.com/docs/en/agent-sdk/sessions)
-

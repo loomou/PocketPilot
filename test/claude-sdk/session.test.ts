@@ -213,6 +213,27 @@ describe("Claude SDK session adapter", () => {
     expect(environment).toBeUndefined();
   });
 
+  it("enables raw partial SDK events for new and resumed queries", () => {
+    const streamingOptions: boolean[] = [];
+
+    openClaudeSdkSession({ cwd: process.cwd() }, (params) => {
+      streamingOptions.push(params.options?.includePartialMessages === true);
+      return createFakeQuery();
+    });
+    openClaudeSdkSession(
+      {
+        cwd: process.cwd(),
+        resume: "00000000-0000-0000-0000-000000000002",
+      },
+      (params) => {
+        streamingOptions.push(params.options?.includePartialMessages === true);
+        return createFakeQuery();
+      },
+    );
+
+    expect(streamingOptions).toEqual([true, true]);
+  });
+
   it("labels a new conversation with a copied PocketPilot child environment", () => {
     const parentEntrypoint = process.env.CLAUDE_CODE_ENTRYPOINT;
     let environment: NodeJS.ProcessEnv | undefined;

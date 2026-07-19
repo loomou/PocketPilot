@@ -297,8 +297,11 @@ leaves one `POCKETPILOT_LIVE_TEST` session in Claude's local history. The
 workspace path is process input only and must not be committed to the project.
 It also verifies that the new session remains visible under the pinned SDK's
 terminal `/resume` filtering before and after TaskManager resumes it. Legacy
-PocketPilot `sdk-ts` sessions are not reclassified or migrated. Allow several
-minutes when the Claude service reports a retry.
+PocketPilot `sdk-ts` sessions are not reclassified or migrated. Every tested
+model turn must emit a raw `stream_event`, and the resumed TaskManager path must
+preserve at least one such event; a complete `assistant` response without
+partial events fails the live contract. Allow several minutes when the Claude
+service reports a retry.
 
 Run the complete Windows tarball installation and lifecycle smoke test with:
 
