@@ -169,3 +169,36 @@ Implemented canonical, revision-safe workspace authorization across local-admin 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Local Admin configuration integration guides
+
+**Date**: 2026-07-19
+**Task**: Local Admin configuration integration guides
+**Branch**: `feat/pocketpilot-development`
+
+### Summary
+
+Audited Local Admin backend and browser flows, added separate English and Simplified Chinese integration guides, documented alignment gaps and recovery guidance, linked both guides from README, and passed lint, typecheck, tests, build, JSON example, bilingual endpoint, and diff checks.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d8a99e9` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
