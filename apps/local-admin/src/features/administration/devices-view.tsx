@@ -60,6 +60,8 @@ export function DevicesView({
     (device) => device.revokedAt === null,
   ).length;
   const revokedDevices = snapshot.devices.length - activeDevices;
+  const activeApprovalCode =
+    pairing === undefined ? "" : (approvalCodes[pairing.pairingId] ?? "");
 
   return (
     <div className="space-y-5">
@@ -299,6 +301,42 @@ export function DevicesView({
                   {formatTimestamp(pairing.expiresAt, languageTag)}
                 </p>
               </div>
+              <Field
+                id={`pairing-approval-${pairing.pairingId}`}
+                label={messages.devices.approvalCode}
+              >
+                <input
+                  aria-label={messages.devices.approvalCodeAria(
+                    pairing.pairingId,
+                  )}
+                  className={inputClassName}
+                  id={`pairing-approval-${pairing.pairingId}`}
+                  inputMode="numeric"
+                  maxLength={6}
+                  onChange={(event) =>
+                    onApprovalCodeChange(
+                      pairing.pairingId,
+                      event.target.value.replace(/\D/g, "").slice(0, 6),
+                    )
+                  }
+                  placeholder="000000"
+                  value={activeApprovalCode}
+                />
+                <p className="mt-1.5 text-xs leading-5 text-slate-500">
+                  {messages.devices.approveDescription}
+                </p>
+              </Field>
+              <Button
+                className="w-full"
+                disabled={
+                  busyAction !== undefined || activeApprovalCode.length !== 6
+                }
+                onClick={() => void onApprove(pairing.pairingId)}
+                type="button"
+              >
+                <Check aria-hidden="true" className="size-3.5" />
+                {messages.devices.approve}
+              </Button>
               <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800">
                 {messages.devices.qrStaticDescription}
               </div>

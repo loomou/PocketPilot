@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -44,6 +45,95 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "审计记录" }));
     expect(screen.getByText("task.created")).toBeInTheDocument();
+  });
+
+  it("approves a generated pairing directly from the QR dialog", async () => {
+    const pairingId = "00000000-0000-4000-8000-000000000005";
+    const pairedDevice = {
+      createdAt: 1_700_000_000_100,
+      displayName: "Tablet",
+      id: "00000000-0000-4000-8000-000000000006",
+      revokedAt: null,
+    };
+    let approved = false;
+    const fetchMock = installFetchMock(
+      new Map<string, FetchOverride>([
+        [
+          "/admin/pairings",
+          {
+            expiresAt: 1_900_000_000_000,
+            pairingId,
+            qrPayload: {
+              agentId: "00000000-0000-4000-8000-000000000001",
+              baseUrl: "https://agent.example.test",
+              expiresAt: 1_900_000_000_000,
+              pairingId,
+              version: 1,
+            },
+          },
+        ],
+        [
+          `/admin/pairings/${pairingId}/approve`,
+          () => {
+            approved = true;
+            return pairedDevice;
+          },
+        ],
+        [
+          "/admin/devices",
+          () =>
+            approved ? [...snapshot.devices, pairedDevice] : snapshot.devices,
+        ],
+        ["/admin/pairings/pending", () => (approved ? [] : snapshot.pairings)],
+      ]),
+    );
+    renderApp("en");
+
+    await screen.findByText("127.0.0.1:43183");
+    fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Generate pairing QR code" }),
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByRole("img", {
+        name: "PocketPilot device pairing QR code",
+      }),
+    ).toBeInTheDocument();
+    const codeInput = within(dialog).getByRole("textbox", {
+      name: `Mobile verification code for ${pairingId}`,
+    });
+    const approveButton = within(dialog).getByRole("button", {
+      name: "Approve",
+    });
+
+    expect(codeInput).toBeInTheDocument();
+    expect(approveButton).toBeDisabled();
+    fireEvent.change(codeInput, { target: { value: "12a34" } });
+    expect(codeInput).toHaveValue("1234");
+    expect(approveButton).toBeDisabled();
+    fireEvent.change(codeInput, { target: { value: "1234567" } });
+    expect(codeInput).toHaveValue("123456");
+    expect(approveButton).toBeEnabled();
+    fireEvent.click(approveButton);
+
+    expect(
+      await screen.findByText("Device pairing approved."),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByText("Tablet")).toBeInTheDocument();
+
+    const approvalRequest = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        requestPath(input) === `/admin/pairings/${pairingId}/approve` &&
+        init?.method === "POST",
+    );
+    expect(JSON.parse(String(approvalRequest?.[1]?.body))).toEqual({
+      verificationCode: "123456",
+    });
   });
 
   it("sends both configuration writes with the CSRF token", async () => {

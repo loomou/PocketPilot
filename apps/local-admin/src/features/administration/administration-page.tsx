@@ -125,6 +125,9 @@ export function AdministrationPage() {
         delete next[pairingId];
         return next;
       });
+      setPairing((current) =>
+        current?.pairingId === pairingId ? undefined : current,
+      );
       setNotice({ kind: "success", code: "pairingApproved" });
       await refresh(true);
     } catch (error) {
