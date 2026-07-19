@@ -77,6 +77,13 @@ Correct SDK output:
 }
 ```
 
+PocketPilot enables `includePartialMessages: true` for every new and resumed
+Agent SDK Query. A live turn therefore normally emits several raw
+`stream_event` messages (including `content_block_delta`) before the complete
+`assistant` message. Merge the deltas immediately, then reconcile the final
+content with `assistant.message.content[]`. Do not fabricate token animation or
+wrap SDK messages in a second protocol.
+
 ### 2.2 Identity table
 
 | Identifier | Owner and purpose | Lifetime and client rule |

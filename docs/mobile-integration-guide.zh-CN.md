@@ -71,6 +71,12 @@
 }
 ```
 
+PocketPilot 后端会为新建和恢复的 Agent SDK Query 默认设置
+`includePartialMessages: true`。因此一次实时回复通常会先收到多个原始
+`stream_event`（包括 `content_block_delta`），再收到完整的 `assistant` 消息。
+移动端应立即合并增量，并在完整 `assistant` 到达时用其 `content[]` 校准最终内容；
+不要自行伪造逐字动画，也不要把 SDK 消息包装成第二套协议。
+
 ### 2.2 身份标识表
 
 | 标识符 | 所有者与用途 | 生命周期与客户端规则 |
