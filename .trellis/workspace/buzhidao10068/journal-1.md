@@ -103,3 +103,36 @@ Added registry-driven Simplified Chinese and English localization for the full l
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: Local admin workspace authorization
+
+**Date**: 2026-07-19
+**Task**: Local admin workspace authorization
+**Branch**: `feat/pocketpilot-development`
+
+### Summary
+
+Implemented canonical, revision-safe workspace authorization across local-admin configuration, directory browsing, mobile discovery, and task admission; added bilingual draft-based UI, comprehensive regression tests, executable Trellis contracts, and passed the full lint/typecheck/test/build gate plus deterministic OpenAPI generation.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `783f42b` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
