@@ -201,9 +201,10 @@ all documentation URLs. Protected operations use the opaque access credential
 as a Bearer token.
 
 The OpenAPI `x-websocket` extensions describe two isolated protocols:
-`/v1/tasks/{taskId}/sdk` exchanges raw `SDKUserMessage` and `SDKMessage`
-objects owned by `@anthropic-ai/claude-agent-sdk@0.3.210`, while `/v1/events`
-carries only PocketPilot task and approval controls. SDK reconnect uses the
+`/v1/tasks/{taskId}/agent` exchanges provider-native frames; for Claude these
+are raw `SDKUserMessage` and `SDKMessage` objects owned by
+`@anthropic-ai/claude-agent-sdk@0.3.210`, while `/v1/events` carries only
+PocketPilot task and approval controls. SDK reconnect uses the
 optional `afterUuid` query parameter; the control stream retains its
 subscription cursor. Swagger UI displays these protocols but does not execute
 WebSocket messages.

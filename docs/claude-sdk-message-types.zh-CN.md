@@ -2,7 +2,7 @@
 
 > 面向 PocketPilot 移动端接入。
 >
-> 本文描述的是 `/v1/tasks/{taskId}/sdk` WebSocket 中传输的原始
+> 本文描述的是 `/v1/tasks/{taskId}/agent` WebSocket 中传输的原始
 > `@anthropic-ai/claude-agent-sdk` 消息，不是 PocketPilot 自己定义的事件包装格式。
 > 当前项目验证版本为 `@anthropic-ai/claude-agent-sdk@0.3.210`，验证日期为
 > 2026-07-19。
@@ -550,7 +550,7 @@ PocketPilot 有两个不同的 WebSocket：
 
 | WebSocket | 内容 | 是否包含原始 SDK 消息 |
 | --- | --- | --- |
-| `/v1/tasks/{taskId}/sdk` | 移动端发送原始 `SDKUserMessage`；服务端返回原始 `SDKMessage` | 是 |
+| `/v1/tasks/{taskId}/agent` | 移动端发送原始 `SDKUserMessage`；服务端返回原始 `SDKMessage` | 是 |
 | `/v1/events` | `task.state`、`approval.requested` 等 PocketPilot 控制事件 | 否 |
 
 控制 WebSocket 的消息可以有 PocketPilot 自己的 `kind`，但不能把 SDK 消息塞进控制

@@ -54,11 +54,14 @@ output.
   retryable `CLAUDE_HISTORY_UNAVAILABLE` and a disappeared UUID anchor to
   `HISTORY_CURSOR_STALE`; never include a summary, prompt, message, raw SDK
   error, or machine path in these responses.
-- The raw SDK WebSocket never sends PocketPilot error JSON. Translate invalid
-  input, authentication, missing task, unavailable session, and unexpected
-  transport failure to stable close code/reason pairs `4000`, `4003`, `4004`,
-  `4009`, and `4011`. Never use raw SDK input or exception text as a close
-  reason.
+- The provider-native Agent WebSocket never sends PocketPilot error JSON.
+  Translate invalid input, authentication, missing task, unavailable session,
+  and unexpected transport failure to stable close code/reason pairs `4000`,
+  `4003`, `4004`,
+  `4009`, and `4011`. Use `SDK_MESSAGE_INVALID`, `TASK_NOT_FOUND`,
+  `TASK_SESSION_UNAVAILABLE`, and `SDK_TRANSPORT_FAILED` as stable reasons on
+  the provider-native Agent socket; never use raw SDK input or exception text as
+  a close reason.
 
 ## Common Mistakes
 

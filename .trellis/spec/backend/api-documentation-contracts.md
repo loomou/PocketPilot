@@ -19,9 +19,8 @@ eventSubscribedMessageSchema: ZodType;
 eventDeliveryMessageSchema: ZodType;
 eventErrorMessageSchema: ZodType;
 sdkUserMessageTransportSchema: ZodType;
-sdkSessionInfoSchema: ZodType;
-sdkSessionMessageSchema: ZodType;
-sdkWebSocketClose: Record<string, { code: number; reason: string }>;
+agentProviderDescriptorSchema: ZodType;
+agentWebSocketClose: Record<string, { code: number; reason: string }>;
 ```
 
 Documentation endpoints are local-only: `GET /documentation/`,
@@ -40,15 +39,17 @@ emits `dist/openapi/mobile-v1.json`.
   list as `{ workspaceRoots: string[] }`. Its response schema is derived from
   `taskRuntimeSettingsSchema.pick({ workspaceRoots: true })`, matching the
   settings owner used by task authorization.
-- The `Sessions` tag owns protected `GET/POST /v1/sessions`,
-  `GET /v1/sessions/{sessionId}/messages`, and
-  `POST /v1/sessions/{sessionId}/attach`. Document workspace authorization,
-  transparent attachment, the opaque task transport handle, and that SDK
-  `0.3.210` owns open/passthrough session and message rows.
+- The `Providers` and `Conversations` tags own protected provider discovery,
+  capability, list/create/read/attach routes under
+  `/v1/providers/{providerId}/conversations`. Document common workspace
+  authorization, transparent attachment, the opaque task transport handle,
+  and that each provider owns its native conversation rows.
 - History documentation specifies chronological latest/older pages of at most
-  50, the out-of-band `beforeUuid`/`hasMoreBefore` metadata,
-  `includeSystemMessages` consistency, stale-cursor reload, repeated local SDK
-  parse cost, and client-side virtualization/history-live UUID deduplication.
+  50 using the common `page.cursor`/`page.hasMore` envelope,
+  `includeSystemMessages` consistency, stale-cursor reload, repeated local
+  provider parse cost, and client-side virtualization/history-live UUID
+  deduplication. Claude's cursor is an SDK offset for list pages and a message
+  UUID for history pages.
 - Composer documentation owns `GET /v1/tasks/{taskId}/composer-options` and
   `POST /v1/tasks/{taskId}/effort` alongside model and permission routes. State
   that controls update the existing Query for the next turn and must complete
@@ -64,9 +65,10 @@ emits `dist/openapi/mobile-v1.json`.
   static mode and serves Swagger UI only on its loopback listener.
 - Document two isolated WebSockets. `/v1/events` uses exported runtime Zod
   schemas for PocketPilot subscribe/subscribed/event/error messages and never
-  claims to carry SDK conversation data. `/v1/tasks/{taskId}/sdk` carries raw
-  `SDKUserMessage` client frames and raw `SDKMessage` server frames.
-- The SDK WebSocket extension identifies
+  claims to carry provider conversation data. `/v1/tasks/{taskId}/agent` carries
+  provider-native client and server frames; Claude uses raw `SDKUserMessage`
+  and `SDKMessage` objects.
+- The Agent WebSocket extension identifies Claude's
   `@anthropic-ai/claude-agent-sdk@0.3.210` as the wire-contract owner. Reuse the
   exported `sdkUserMessageTransportSchema` for the documented base guard;
   describe SDK output as an open SDK-owned object instead of hand-copying its
@@ -125,11 +127,12 @@ emits `dist/openapi/mobile-v1.json`.
 - Validate representative WebSocket messages with the exported runtime Zod
   schemas; reject malformed control subscriptions and invalid/binary SDK
   frames.
-- Assert the complete path set contains `/v1/tasks/{taskId}/sdk`, omits
+- Assert the complete path set contains `/v1/tasks/{taskId}/agent`, omits
   `/v1/tasks/{taskId}/instruction`, includes protected `/v1/workspaces`, and
   names the approval parameter `requestId`.
-- Assert the path set includes session list/create/history/attach, composer
-  options, and effort; descriptions include the SDK version, 50-row cursor
+- Assert the path set includes provider discovery/capabilities and
+  provider-scoped conversation list/create/history/attach, composer options,
+  and effort; descriptions include the SDK version, 50-row cursor
   behavior, history/live separation, and subscribe-before-activation.
 - Assert control docs contain no SDK server message, raw SDK docs contain no
   PocketPilot wrapper, and all approval fields and stable close codes appear.

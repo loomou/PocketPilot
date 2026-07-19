@@ -5,6 +5,7 @@
 ```text
 src/
 ├── app.ts       # Unbound Fastify application composition
+├── agent-providers/            # Provider-neutral registry and native adapters
 ├── api-docs/                  # Mobile OpenAPI factory and build entry
 ├── auth/                     # Pairing, device proof, credentials, revocation
 ├── cli.ts       # Executable boundary and top-level exit handling
@@ -33,6 +34,9 @@ test/
   snapshot instead of reading dotenv independently.
 - Keep reusable OpenAPI composition and its side-effect-free build entry in
   `src/api-docs/`. Route modules continue to own executable Zod schemas.
+- Keep provider-neutral lifecycle and capability contracts in
+  `src/agent-providers/`; provider adapters own native SDK/process types and
+  common routes must not branch on provider IDs.
 - Add future domain layers below `src/` by ownership (`auth/`, `storage/`,
   `tasks/`, `remote-api/`, `local-admin/`) rather than by generic file type.
 - Keep listener binding, runtime-control state, signal handling, and foreground

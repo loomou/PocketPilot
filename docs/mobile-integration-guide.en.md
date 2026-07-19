@@ -13,8 +13,8 @@
 ## 1. Purpose, Audience, Versions, and Sources of Truth
 
 This guide is for any mobile client that connects to a user-operated
-PocketPilot Agent. It specifies pairing, authentication, workspace and Claude
-session discovery, history, live conversation transport, task controls,
+PocketPilot Agent. It specifies pairing, authentication, provider/workspace
+and conversation discovery, history, live conversation transport, task controls,
 approvals, reconnection, the fixed Command panel, and same-workspace New
 conversation behavior. It is intentionally platform-neutral.
 
@@ -36,15 +36,17 @@ types, and rerun the flows in section 16 before releasing the mobile client.
 
 ### 2.1 Protocol boundaries
 
-- PocketPilot is an authenticated transport and runtime controller around the
-  installed Claude Code/Agent SDK. It does not define a second conversation
-  protocol.
-- `/v1/tasks/{taskId}/sdk` is bidirectional raw SDK JSON. Client frames are
-  `SDKUserMessage`; server frames are `SDKMessage`.
+- PocketPilot is an authenticated transport and runtime controller around
+  locally installed Agent providers. It does not define a second conversation
+  protocol or normalize provider-native messages.
+- `/v1/tasks/{taskId}/agent` is the bidirectional provider-native stream. For
+  `provider: "claude"`, client frames are raw `SDKUserMessage` objects and
+  server frames are raw `SDKMessage` objects.
 - `/v1/events` carries PocketPilot control events only. It never carries an SDK
   message, even inside a `kind: "sdk"` envelope.
-- Historical rows are SDK `SessionMessage` objects. They are not live
-  `SDKMessage` objects and must not be converted back into prompts.
+- Historical rows remain provider-native. Claude rows are SDK
+  `SessionMessage` objects; they are not live `SDKMessage` objects and must not
+  be converted back into prompts.
 - Unknown SDK fields and message variants are forward-compatible data. Preserve
   or ignore them safely; do not reject an entire session because a new variant
   appears.
@@ -88,6 +90,8 @@ wrap SDK messages in a second protocol.
 
 | Identifier | Owner and purpose | Lifetime and client rule |
 | --- | --- | --- |
+| `providerId` | Stable provider path identity, such as `claude` | Discover it from `/v1/providers`; never infer support from installed files or hard-code availability. |
+| `conversationId` | Provider-native conversation identity used in provider-scoped REST paths | For Claude this is the SDK session ID selected from an unchanged `SDKSessionInfo` row. |
 | `taskId` | PocketPilot runtime/control handle for routing, state, approvals, replay, scheduling, and one live Query | Stable across turns and `conversation_reset`. Keep it out of user-facing conversation identity. |
 | `sdkSessionId` / raw `session_id` | Claude persistence and resume identity | Observe SDK-owned values. Never derive it from `taskId` or replay history as a substitute. |
 | SDK `uuid` | Identity for an SDK history/live message and SDK replay anchor | Use for history/live deduplication and `afterUuid` when present. A valid live message can omit it. |
@@ -103,7 +107,7 @@ wrap SDK messages in a second protocol.
 | Surface | Direction | Authentication | Content |
 | --- | --- | --- | --- |
 | `/v1/*` REST | Request/response | Public only where listed below; otherwise `Authorization: Bearer <accessToken>` | Pairing, discovery, task metadata, controls, approvals |
-| `/v1/tasks/{taskId}/sdk` | Bidirectional WebSocket | Bearer header during handshake | Raw `SDKUserMessage` to Agent; raw `SDKMessage` to mobile |
+| `/v1/tasks/{taskId}/agent` | Bidirectional WebSocket | Bearer header during handshake | Provider-native messages; raw `SDKUserMessage`/`SDKMessage` when `task.provider` is `claude` |
 | `/v1/events` | Bidirectional WebSocket | Bearer header during handshake | Subscribe requests and PocketPilot control events only |
 
 Convert the QR `baseUrl` scheme when opening WebSockets: `https` becomes
@@ -113,18 +117,22 @@ query string, logs, analytics, crash reports, or screenshots.
 ### 3.2 Canonical user flow
 
 1. Pair and retain the device key plus rotating credentials.
-2. Authenticate and call `GET /v1/workspaces`.
-3. Select an authorized workspace, then call `GET /v1/sessions`.
-4. Select a Claude session or choose New conversation.
-5. For an existing session, load its latest history page for display.
-6. Attach the selected session or create the conversation runtime. Retain the
+2. Authenticate, call `GET /v1/providers`, and select an `available` provider.
+3. Read `/v1/providers/{providerId}/capabilities`, then call
+   `GET /v1/workspaces`.
+4. Select an authorized workspace, then call
+   `GET /v1/providers/{providerId}/conversations`.
+5. Select a provider-native conversation or choose New conversation.
+6. For an existing conversation, load its latest history page for display.
+7. Attach the selected conversation or create its runtime. Retain the
    returned `task.id` internally as `taskId`; do not show a separate task step.
-7. Open `/v1/events` and subscribe to `taskId`.
-8. Open `/v1/tasks/{taskId}/sdk`. The server installs the raw subscriber before
+8. Open `/v1/events` and subscribe to `taskId`.
+9. Open `/v1/tasks/{taskId}/agent`. The server installs the native subscriber before
    activating the new or resumed Query.
-9. After the raw socket is open, request composer options and reconcile them
+10. After the Agent socket is open, request composer options and reconcile them
    with raw `system/init` and `system/status` messages.
-10. Send ordinary prompts and slash commands as raw `SDKUserMessage` frames.
+11. For Claude, send ordinary prompts and slash commands as raw
+    `SDKUserMessage` frames.
 
 Task creation, task selection, and task resume are internal transport details,
 not extra conversation screens. Selecting a Claude session is the user's
@@ -143,10 +151,12 @@ must be generated from OpenAPI rather than copied from this table.
 | Authentication | `POST /v1/auth/refresh-challenge/{deviceId}` | `createRefreshChallenge` | Public bootstrap; get refresh proof challenge |
 | Authentication | `POST /v1/auth/refresh` | `refreshCredentials` | Public bootstrap; rotate credentials |
 | Authentication | `GET /v1/auth/session` | `getAuthenticatedDeviceSession` | Protected; validate access and read device metadata |
-| Sessions | `GET /v1/sessions` | `listClaudeSessions` | Protected; list workspace sessions |
-| Sessions | `POST /v1/sessions` | `createClaudeConversation` | Protected; create empty-history runtime |
-| Sessions | `GET /v1/sessions/{sessionId}/messages` | `readClaudeSessionHistory` | Protected; read chronological history page |
-| Sessions | `POST /v1/sessions/{sessionId}/attach` | `attachClaudeSession` | Protected; attach/reuse session runtime |
+| Providers | `GET /v1/providers` | `listAgentProviders` | Protected; list available and unavailable local providers |
+| Providers | `GET /v1/providers/{providerId}/capabilities` | `getAgentProviderCapabilities` | Protected; read status, native protocol version, and capabilities |
+| Conversations | `GET /v1/providers/{providerId}/conversations` | `listAgentConversations` | Protected; list provider-native workspace conversations |
+| Conversations | `POST /v1/providers/{providerId}/conversations` | `createAgentConversation` | Protected; create an empty-history runtime |
+| Conversations | `GET /v1/providers/{providerId}/conversations/{conversationId}` | `readAgentConversation` | Protected; read a provider-native history page |
+| Conversations | `POST /v1/providers/{providerId}/conversations/{conversationId}/attach` | `attachAgentConversation` | Protected; attach/reuse a conversation runtime |
 | Tasks | `GET /v1/capabilities` | `getCapabilities` | Protected; protocol version and permission modes |
 | Tasks | `GET /v1/workspaces` | `listAuthorizedWorkspaces` | Protected; configured authorized roots |
 | Tasks | `GET /v1/tasks` | `listTasks` | Protected; internal runtime metadata list |
@@ -161,7 +171,7 @@ must be generated from OpenAPI rather than copied from this table.
 | Composer | `POST /v1/tasks/{taskId}/effort` | `setTaskEffort` | Protected mutation; next-turn effort |
 | Approval | `POST /v1/tasks/{taskId}/approvals/{requestId}` | `resolveTaskApproval` | Protected mutation; complete SDK `PermissionResult` |
 | Events | `GET /v1/events` | `subscribeTaskEvents` | Protected WebSocket upgrade |
-| SDK | `GET /v1/tasks/{taskId}/sdk` | `streamTaskSdkMessages` | Protected WebSocket upgrade |
+| Agent Stream | `GET /v1/tasks/{taskId}/agent` | `streamTaskAgentMessages` | Protected provider-native WebSocket upgrade |
 
 ## 4. Pairing, Device Proof, Credential Claim, Refresh, and Revocation
 
@@ -297,17 +307,19 @@ create or attach a runtime, `workspaceRiskAccepted: true` confirms that the
 user accepts the working-directory scope. Authorized roots constrain initial
 `cwd`; they are not a filesystem sandbox for Claude or its tools.
 
-List sessions with offset pagination:
+List provider-native conversations with the common cursor envelope:
 
 ```http
-GET /v1/sessions?workspace=D%3A%5CProjects%5Cdemo-app&limit=50&offset=0
+GET /v1/providers/claude/conversations?workspace=D%3A%5CProjects%5Cdemo-app&limit=50
 Authorization: Bearer <accessToken>
 ```
 
-The response is `{ sessions: SDKSessionInfo[], nextOffset: number | null }`.
-Rows are SDK-owned and may gain fields. Continue with `nextOffset` while it is
-non-null, even if a page's `sessions` array is empty after workspace-policy
-filtering. Worktrees are excluded; programmatic sessions are included.
+The response is `{ conversations: SDKSessionInfo[], page: { cursor, hasMore } }`.
+Rows are SDK-owned and may gain fields. For Claude, the opaque `page.cursor`
+contains the next offset used by the SDK catalog; pass it back as `cursor` while
+`page.hasMore` is true, even if a page's `conversations` array is empty after
+workspace-policy filtering. Worktrees are excluded; programmatic sessions are
+included.
 
 For an existing session, use its `sessionId` in history and attach requests.
 For a new conversation with no active Query, call:
@@ -320,7 +332,7 @@ For a new conversation with no active Query, call:
 }
 ```
 
-on `POST /v1/sessions`. Claude Code resolves its own model, permission, and
+on `POST /v1/providers/claude/conversations`. Claude Code resolves its own model, permission, and
 effort defaults. Do not use low-level `POST /v1/tasks` for this normal user
 flow.
 
@@ -328,10 +340,10 @@ flow.
 
 ### 6.1 Latest and older pages
 
-Request the latest page with no `beforeUuid`:
+Request the latest page with no `cursor`:
 
 ```http
-GET /v1/sessions/70000000-0000-4000-8000-000000000001/messages?workspace=D%3A%5CProjects%5Cdemo-app&limit=50&includeSystemMessages=false
+GET /v1/providers/claude/conversations/70000000-0000-4000-8000-000000000001?workspace=D%3A%5CProjects%5Cdemo-app&limit=50&includeSystemMessages=false
 Authorization: Bearer <accessToken>
 ```
 
@@ -354,17 +366,18 @@ newest within the page:
     }
   ],
   "page": {
-    "beforeUuid": "80000000-0000-4000-8000-000000000001",
-    "hasMoreBefore": true
+    "cursor": "80000000-0000-4000-8000-000000000001",
+    "hasMore": true
   }
 }
 ```
 
-Each page contains at most 50 messages. When `hasMoreBefore` is true, pass the
-returned `page.beforeUuid` to load the next older page and prepend those rows.
+Each page contains at most 50 messages. When `page.hasMore` is true, pass the
+returned `page.cursor` as the next request's `cursor` to load the next older
+page and prepend those rows. For Claude this cursor is the SDK message UUID.
 Keep `includeSystemMessages` unchanged for the entire cursor chain. On
-`HISTORY_CURSOR_STALE`, discard the pagination chain and reload the latest
-page without `beforeUuid`.
+`HISTORY_CURSOR_STALE`, discard the pagination chain and reload the latest page
+without `cursor`.
 
 The SDK currently reparses the local transcript for each page. Pagination
 limits network and render work, not computer-side parsing. Serialize repeated
@@ -392,7 +405,7 @@ canonical transcript.
 Attach a selected session after or alongside loading its history:
 
 ```http
-POST /v1/sessions/70000000-0000-4000-8000-000000000001/attach
+POST /v1/providers/claude/conversations/70000000-0000-4000-8000-000000000001/attach
 Authorization: Bearer <accessToken>
 Content-Type: application/json
 
@@ -408,8 +421,9 @@ reuses the one non-terminal task already attached to that `sdkSessionId`, so
 repeated selection may return the same `task.id`. Store that ID as an opaque
 runtime handle.
 
-For `POST /v1/sessions`, the response action is `created`, `sdkSessionId` is
-initially `null`, and raw SDK messages later establish it. Session-centric task
+For `POST /v1/providers/claude/conversations`, the response action is `created`,
+`sdkSessionId` is initially `null`, and raw SDK messages later establish it.
+Session-centric task
 snapshots have `origin: "claude-session"`, `model: null`, and
 `permissionMode: null` because Claude Code owns restored/default settings.
 
@@ -434,7 +448,7 @@ replay cannot establish a current baseline.
 Open:
 
 ```text
-wss://agent.example.test/v1/tasks/60000000-0000-4000-8000-000000000001/sdk
+wss://agent.example.test/v1/tasks/60000000-0000-4000-8000-000000000001/agent
 Authorization: Bearer <accessToken>
 ```
 
@@ -822,7 +836,7 @@ Treat the message as one raw `SDKMessage`. Do not wrap it, rotate task
 connections, or assume `new_conversation_id` and `session_id` are the same
 identity. The Agent observes SDK `session_id` for future persistence.
 
-If no active Query/runtime exists, use `POST /v1/sessions` for a new
+If no active Query/runtime exists, use `POST /v1/providers/claude/conversations` for a new
 conversation in the selected workspace instead of creating a temporary task
 just to send `/clear`.
 
@@ -960,7 +974,7 @@ sequenceDiagram
     M->>R: POST selected session attach
     R-->>M: task.id (opaque taskId)
     M->>C: Connect and subscribe(taskId, afterCursor)
-    M->>S: Connect /tasks/{taskId}/sdk?afterUuid
+    M->>S: Connect /tasks/{taskId}/agent?afterUuid
     S->>S: Install raw subscriber
     S->>Q: Activate with Options.resume
     Q-->>S: Raw system/init
@@ -980,7 +994,7 @@ sequenceDiagram
     participant R as REST
     participant C as Control WS
     participant S as Raw SDK WS
-    M->>R: POST /v1/sessions (workspace, risk accepted)
+    M->>R: POST /v1/providers/claude/conversations (workspace, risk accepted)
     R-->>M: created task.id
     M->>C: Connect and subscribe taskId
     M->>S: Connect raw SDK socket
@@ -999,10 +1013,10 @@ sequenceDiagram
     participant M as Mobile transcript
     participant R as History REST
     participant S as Raw SDK WS
-    M->>R: GET messages (no beforeUuid, limit 50)
-    R-->>M: Latest chronological page and beforeUuid
+    M->>R: GET conversation (no cursor, limit 50)
+    R-->>M: Latest chronological page and cursor
     M->>M: Index SessionMessage uuid values
-    M->>R: GET messages?beforeUuid=earliestUuid
+    M->>R: GET conversation?cursor=earliestUuid
     R-->>M: Older chronological page
     M->>M: Prepend and retain scroll anchor
     S-->>M: Live raw SDKMessage
