@@ -177,6 +177,11 @@ Listener changes apply only after manually stopping and starting the Agent.
 The administration page is always bound to `127.0.0.1` and is never mounted on
 the remote API listener.
 
+Local Admin integration guides:
+
+- [English Local Admin integration guide](docs/local-admin-integration-guide.en.md)
+- [Simplified Chinese Local Admin integration guide](docs/local-admin-integration-guide.zh-CN.md)
+
 ## Mobile API Documentation
 
 End-to-end integration guides:
