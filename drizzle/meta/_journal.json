@@ -29,6 +29,20 @@
       "when": 1784293730584,
       "tag": "0003_many_omega_flight",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1784481039350,
+      "tag": "0004_quick_maverick",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1784489492297,
+      "tag": "0005_loud_sinister_six",
+      "breakpoints": true
     }
   ]
 }

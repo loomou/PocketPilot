@@ -17,6 +17,8 @@ This directory records the conventions for the PocketPilot TypeScript Agent.
 | [Bootstrap Contracts](./bootstrap-contracts.md) | Current CLI and HTTP bootstrap boundaries | Established |
 | [Environment Configuration Contracts](./environment-configuration-contracts.md) | Allowlisted cwd dotenv loading and bootstrap validation | Established |
 | [Mobile API Documentation Contracts](./api-documentation-contracts.md) | OpenAPI generation, local Swagger delivery, and WebSocket documentation | Established |
+| [Agent Provider Contracts](./agent-provider-contracts.md) | Provider registry, common lifecycle, native protocols, and adapter boundaries | Established |
+| [Codex App Server Contracts](./codex-app-server-contracts.md) | Native Codex stdio bridge, JSON-RPC identity, lifecycle, and approvals | Established |
 | [Claude Agent SDK Contracts](./claude-sdk-contracts.md) | Raw message passthrough, long-lived input, controls, and approval boundaries | Established |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | Established |
 | [Database Guidelines](./database-guidelines.md) | SQLite, encryption, retention, and migration contracts | Established |
@@ -39,6 +41,9 @@ bootstrap listener settings, also read `environment-configuration-contracts.md`.
 When modifying a remote route/schema, the task-event WebSocket contract,
 Swagger delivery, or package documentation assets, also read
 `api-documentation-contracts.md`.
+When adding or changing an Agent provider, provider discovery, provider-scoped
+conversation routes, or the native Agent WebSocket, also read
+`agent-provider-contracts.md`.
 When modifying Claude Agent SDK integration, also read
 `claude-sdk-contracts.md`; when modifying storage or encrypted Agent data, also
 read `database-guidelines.md`. When modifying listener setup, start/stop, or

@@ -1,6 +1,9 @@
 export const logEvents = {
   accessAuthenticated: "auth.access.authenticated",
   authRequestRejected: "auth.request.rejected",
+  codexAppServerExited: "codex.app-server.exited",
+  codexAppServerStarted: "codex.app-server.started",
+  codexAppServerStderr: "codex.app-server.stderr",
   deviceRevoked: "device.revoked",
   httpRequestCompleted: "http.request.completed",
   httpRequestFailed: "http.request.failed",
@@ -41,6 +44,8 @@ export const logEvents = {
   taskStateChanged: "task.state.changed",
   websocketControlClosed: "websocket.control.closed",
   websocketControlConnected: "websocket.control.connected",
+  websocketAgentClosed: "websocket.agent.closed",
+  websocketAgentConnected: "websocket.agent.connected",
   websocketMessageRejected: "websocket.message.rejected",
   websocketSdkClosed: "websocket.sdk.closed",
   websocketSdkConnected: "websocket.sdk.connected",

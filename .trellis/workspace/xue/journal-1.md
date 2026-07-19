@@ -439,3 +439,37 @@ Replaced local-admin pending-pairing polling with an explicit mobile-code approv
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: Complete provider-extensible Agent API and Claude migration
+
+**Date**: 2026-07-20
+**Task**: Complete provider-extensible Agent API and Claude migration
+**Branch**: `feat/remote-cli-integration`
+
+### Summary
+
+Migrated Claude behind the provider-extensible Agent API, added provider-aware persistence and native agent routes, removed legacy public Claude routes, updated OpenAPI/mobile/backend specs, and verified lint, typecheck, full tests, build, deterministic OpenAPI generation, and the live Claude SDK test against CLAUDE_SDK_TEST_CWD.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5e3745c` | (see git log) |
+| `8b11a42` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

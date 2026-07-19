@@ -1,19 +1,20 @@
 # PocketPilot
 
 PocketPilot is a Windows-first, self-hosted Agent that lets one user control
-Claude Code sessions on their own computer from a mobile client.
+local coding-agent sessions on their own computer from a mobile client.
 
 PocketPilot provides a standard HTTP and WebSocket interface. It does not run
 a relay, configure a tunnel, provision TLS, discover a public address, or
-manage Claude credentials. The user owns the connection path and configures
-Claude Code on the computer before starting the Agent.
+manage provider credentials. The user owns the connection path and configures
+Claude Code, Codex CLI, or another installed provider before starting the Agent.
 
 ## Requirements
 
 - Windows 11
 - Node.js 24 LTS
 - pnpm 10.14.x
-- Claude Code installed and authenticated for the logged-in Windows user
+- Claude Code installed and authenticated when using the Claude provider
+- Codex CLI 0.144.x installed and authenticated when using the Codex provider
 
 PocketPilot is a foreground application. It does not install a Windows Service,
 create a login task, or start automatically.
@@ -71,6 +72,7 @@ Existing process-environment values override `.env`. The dotenv allowlist is:
 - `POCKETPILOT_DATA_DIR`
 - `POCKETPILOT_LOCAL_ADMIN_PORT`
 - `POCKETPILOT_LOG_LEVEL`
+- `POCKETPILOT_CODEX_COMMAND`
 
 Other `.env` keys are ignored. PocketPilot does not load `ANTHROPIC_*` or other
 Claude credentials from this file; Claude configuration remains owned by the
@@ -201,12 +203,14 @@ all documentation URLs. Protected operations use the opaque access credential
 as a Bearer token.
 
 The OpenAPI `x-websocket` extensions describe two isolated protocols:
-`/v1/tasks/{taskId}/sdk` exchanges raw `SDKUserMessage` and `SDKMessage`
-objects owned by `@anthropic-ai/claude-agent-sdk@0.3.210`, while `/v1/events`
-carries only PocketPilot task and approval controls. SDK reconnect uses the
-optional `afterUuid` query parameter; the control stream retains its
-subscription cursor. Swagger UI displays these protocols but does not execute
-WebSocket messages.
+`/v1/tasks/{taskId}/agent` exchanges provider-native frames; for Claude these
+are raw `SDKUserMessage` and `SDKMessage` objects owned by
+`@anthropic-ai/claude-agent-sdk@0.3.210`, while `/v1/events` carries only
+PocketPilot task and approval controls. Codex uses native App Server JSON-RPC
+frames. Agent reconnect uses the optional provider-interpreted `afterCursor`
+query parameter; the control stream retains its independent subscription
+cursor. Swagger UI displays these protocols but does not execute WebSocket
+messages.
 
 ## Connectivity
 
@@ -302,6 +306,27 @@ model turn must emit a raw `stream_event`, and the resumed TaskManager path must
 preserve at least one such event; a complete `assistant` response without
 partial events fails the live contract. Allow several minutes when the Claude
 service reports a retry.
+
+### Live Codex App Server integration test
+
+The normal test suite does not start Codex. To verify the installed official
+App Server against a developer-selected workspace, provide an absolute
+directory and run the explicit live test:
+
+```powershell
+$env:CODEX_APP_SERVER_TEST_CWD = "<absolute-workspace-path>"
+pnpm test:codex:live
+Remove-Item Env:CODEX_APP_SERVER_TEST_CWD
+```
+
+The live test initializes App Server, lists native models and threads, creates
+and streams one read-only turn, reads and resumes its history, archives the test
+thread, and verifies clean process-tree shutdown. The workspace is process input
+only and is never committed. Set `POCKETPILOT_CODEX_COMMAND` only when `codex`
+is not the command that should be resolved from `PATH`.
+
+See [Codex App Server integration](docs/codex-app-server-integration.en.md) for
+the provider-native mobile contract and identity model.
 
 Run the complete Windows tarball installation and lifecycle smoke test with:
 

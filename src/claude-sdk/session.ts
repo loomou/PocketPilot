@@ -14,6 +14,9 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 
 import { ClaudeSdkInputStream } from "./input.js";
 
+export const claudeAgentSdkProtocolVersion =
+  "@anthropic-ai/claude-agent-sdk@0.3.210";
+
 export const pinnedPermissionModes: readonly PermissionMode[] = [
   "default",
   "acceptEdits",

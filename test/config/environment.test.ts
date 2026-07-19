@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   loadPocketPilotEnvironment,
   readAgentDataDirectory,
+  readCodexCommand,
   readLocalAdminPort,
   readLogLevel,
 } from "../../src/config/environment.js";
@@ -36,6 +37,7 @@ describe("PocketPilot dotenv environment", () => {
         "POCKETPILOT_DATA_DIR=child-data",
         "POCKETPILOT_LOCAL_ADMIN_PORT=44001",
         "POCKETPILOT_LOG_LEVEL=debug",
+        "POCKETPILOT_CODEX_COMMAND=C:\\Tools\\codex.exe",
         "ANTHROPIC_API_KEY=must-not-load",
       ].join("\n"),
     );
@@ -49,6 +51,7 @@ describe("PocketPilot dotenv environment", () => {
       AGENT_MASTER_KEY: "child",
       EXISTING: "preserved",
       POCKETPILOT_DATA_DIR: "child-data",
+      POCKETPILOT_CODEX_COMMAND: "C:\\Tools\\codex.exe",
       POCKETPILOT_LOCAL_ADMIN_PORT: "44001",
       POCKETPILOT_LOG_LEVEL: "debug",
     });
@@ -121,6 +124,18 @@ describe("PocketPilot dotenv environment", () => {
         "POCKETPILOT_LOG_LEVEL must be one of: debug, info, warn, error.",
       );
     }
+  });
+
+  it("validates the optional Codex executable command", () => {
+    expect(readCodexCommand({})).toBeUndefined();
+    expect(readCodexCommand({ POCKETPILOT_CODEX_COMMAND: "codex" })).toBe(
+      "codex",
+    );
+    expect(() =>
+      readCodexCommand({ POCKETPILOT_CODEX_COMMAND: "   " }),
+    ).toThrow(
+      "POCKETPILOT_CODEX_COMMAND must be a non-empty executable command.",
+    );
   });
 
   it("never includes dotenv secrets or rejected values in validation errors", () => {

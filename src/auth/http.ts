@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { AgentProviderError } from "../agent-providers/errors.js";
 import { logEvents } from "../logging/events.js";
 import {
   noopLogger,
@@ -49,6 +50,21 @@ export function registerDeviceAuthErrorHandler(
         code: error.code,
         statusCode: error.statusCode,
       });
+      return reply.code(error.statusCode).send({
+        code: error.code,
+        message: error.message,
+      });
+    }
+    if (error instanceof AgentProviderError) {
+      logger.warn(
+        logEvents.httpRequestRejected,
+        "Agent provider request rejected",
+        {
+          ...safeRequestFields(request),
+          code: error.code,
+          statusCode: error.statusCode,
+        },
+      );
       return reply.code(error.statusCode).send({
         code: error.code,
         message: error.message,

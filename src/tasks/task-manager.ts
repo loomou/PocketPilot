@@ -12,6 +12,7 @@ import type {
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import type { AgentTaskController } from "../agent-providers/types.js";
 import {
   createToolApprovalHandler,
   type PendingToolApproval,
@@ -20,6 +21,7 @@ import {
 import {
   type ClaudeSdkInitialization,
   type ClaudeSdkSession,
+  claudeAgentSdkProtocolVersion,
   type OpenClaudeSdkSessionOptions,
   openClaudeSdkSession,
   pinnedEffortLevels,
@@ -171,7 +173,7 @@ export type TaskSdkSessionFactory = (
 
 export type TaskManagerOptions = {
   claudeSessionCatalog?: ClaudeSessionCatalog;
-  closeTaskSdkConnections?: { closeTaskConnections(taskId: string): void };
+  closeTaskAgentConnections?: { closeTaskConnections(taskId: string): void };
   createSession?: TaskSdkSessionFactory;
   directoryResolver?: WorkspaceDirectoryResolver;
   eventSink?: TaskEventSink;
@@ -223,7 +225,7 @@ export class TaskManager {
   readonly #attachmentLane = new SerialExecutor();
   readonly #capacityLane = new SerialExecutor();
   readonly #claudeSessionCatalog: ClaudeSessionCatalog;
-  readonly #closeTaskSdkConnections: {
+  readonly #closeTaskAgentConnections: {
     closeTaskConnections(taskId: string): void;
   };
   readonly #createSession: TaskSdkSessionFactory;
@@ -244,12 +246,13 @@ export class TaskManager {
   readonly #taskLanes = new Map<string, TaskOperationScheduler>();
   readonly #publishedTaskStates = new Map<string, TaskSnapshot["state"]>();
   #authorizationRevision = 0;
+  #providerTaskController: AgentTaskController | undefined;
   #shuttingDown = false;
 
   public constructor(options: TaskManagerOptions) {
     this.#claudeSessionCatalog =
       options.claudeSessionCatalog ?? installedClaudeSessionCatalog;
-    this.#closeTaskSdkConnections = options.closeTaskSdkConnections ?? {
+    this.#closeTaskAgentConnections = options.closeTaskAgentConnections ?? {
       closeTaskConnections: () => undefined,
     };
     this.#createSession = options.createSession ?? openClaudeSdkSession;
@@ -266,6 +269,10 @@ export class TaskManager {
     this.#settingsRepository = options.settingsRepository;
     this.#supportedPermissionModes =
       options.supportedPermissionModes ?? pinnedPermissionModes;
+  }
+
+  public setProviderTaskController(controller: AgentTaskController): void {
+    this.#providerTaskController = controller;
   }
 
   /** Converts unfinished active work from a prior unexpected exit to interrupted. */
@@ -295,6 +302,16 @@ export class TaskManager {
     return [
       ...readTaskRuntimeSettings(this.#settingsRepository).workspaceRoots,
     ];
+  }
+
+  /**
+   * Canonicalizes and verifies a workspace before provider-native work runs.
+   * Provider-neutral orchestration uses this boundary so every adapter gets
+   * the same directory policy, while Claude retains checks for direct callers.
+   */
+  public async authorizeWorkspace(workspace: string): Promise<string> {
+    const settings = readTaskRuntimeSettings(this.#settingsRepository);
+    return this.authorizeInitialWorkspace(workspace, settings.workspaceRoots);
   }
 
   public async authorizedDirectorySnapshot(): Promise<AuthorizedDirectorySnapshot> {
@@ -487,15 +504,23 @@ export class TaskManager {
           "Authorization for this task's workspace was removed.",
         );
         liveTask.pendingQueryCount = 0;
-        const interrupt = this.interruptSession(liveTask.session);
-        if (interrupt !== undefined) {
-          interruptions.push(interrupt);
+        const cleanup =
+          terminalTask.provider === "claude"
+            ? this.interruptSession(liveTask.session)
+            : this.#providerTaskController?.close(terminalTask.id);
+        if (cleanup !== undefined) {
+          interruptions.push(cleanup);
         }
         this.closeSession(liveTask.session);
+      } else if (terminalTask.provider !== "claude") {
+        const cleanup = this.#providerTaskController?.close(terminalTask.id);
+        if (cleanup !== undefined) {
+          interruptions.push(cleanup);
+        }
       }
       this.publishTaskState(terminalTask);
       this.#eventSink?.endTurn(terminalTask.id);
-      this.#closeTaskSdkConnections.closeTaskConnections(terminalTask.id);
+      this.#closeTaskAgentConnections.closeTaskConnections(terminalTask.id);
     }
     await Promise.allSettled(interruptions);
 
@@ -658,8 +683,10 @@ export class TaskManager {
             id: randomUUID(),
             initialCwd,
             model: null,
+            nativeProtocolVersion: claudeAgentSdkProtocolVersion,
             origin: "claude-session",
             permissionMode: null,
+            provider: "claude",
             sdkSessionId: null,
           });
           this.#logger.info(logEvents.taskCreated, "Task created", {
@@ -823,8 +850,10 @@ export class TaskManager {
             id: randomUUID(),
             initialCwd,
             model: parsed.data.model ?? null,
+            nativeProtocolVersion: claudeAgentSdkProtocolVersion,
             origin: "pocketpilot",
             permissionMode: parsed.data.permissionMode,
+            provider: "claude",
           });
           this.#logger.info(logEvents.taskCreated, "Task created", {
             origin: task.origin,
@@ -920,7 +949,10 @@ export class TaskManager {
       this.publishTaskState(interrupted);
       this.#eventSink?.endTurn(task.id);
 
-      const interrupt = this.interruptSession(liveTask.session);
+      const interrupt =
+        task.provider === "claude"
+          ? this.interruptSession(liveTask.session)
+          : this.#providerTaskController?.interrupt(task.id);
       await Promise.allSettled(interrupt === undefined ? [] : [interrupt]);
       liveTask.interrupting = false;
 
@@ -929,6 +961,7 @@ export class TaskManager {
         current.state === "terminal"
           ? current
           : this.#repository.update(task.id, {
+              activeTurnId: null,
               interruptedAt: null,
               state: "idle",
               updatedAt: this.#now(),
@@ -966,14 +999,18 @@ export class TaskManager {
       this.cancelPendingApproval(liveTask, "The user closed this task.");
       liveTask.pendingQueryCount = 0;
       const terminal = this.#repository.update(task.id, {
+        activeTurnId: null,
         state: "terminal",
         terminalAt: this.#now(),
         updatedAt: this.#now(),
       });
       this.publishTaskState(terminal);
       this.#eventSink?.endTurn(task.id);
-      this.#closeTaskSdkConnections.closeTaskConnections(task.id);
-      const interrupt = this.interruptSession(liveTask.session);
+      this.#closeTaskAgentConnections.closeTaskConnections(task.id);
+      const interrupt =
+        task.provider === "claude"
+          ? this.interruptSession(liveTask.session)
+          : this.#providerTaskController?.close(task.id);
       this.closeSession(liveTask.session);
       await Promise.allSettled(interrupt === undefined ? [] : [interrupt]);
       this.#logger.info(logEvents.taskControlCompleted, "Task closed", {
@@ -994,7 +1031,7 @@ export class TaskManager {
     this.assertTaskId(input.taskId);
 
     return this.executeIdempotent(identity, async () =>
-      this.runTaskLane(input.taskId, (lease) => {
+      this.runTaskLane(input.taskId, async (lease) => {
         this.assertAcceptingWork();
         const task = this.requireTask(input.taskId);
         if (task.state !== "interrupted") {
@@ -1003,6 +1040,20 @@ export class TaskManager {
             409,
             "Only an interrupted task can be resumed.",
           );
+        }
+        if (task.provider !== "claude") {
+          await this.#providerTaskController?.resume(task.id);
+          lease.assertCurrent();
+          const resumed = this.#repository.update(task.id, {
+            interruptedAt: null,
+            state: "idle",
+            updatedAt: this.#now(),
+          });
+          return {
+            action: "resumed" as const,
+            auditResult: "resumed",
+            task: resumed,
+          };
         }
         if (task.sdkSessionId === null) {
           throw new TaskError(
@@ -1272,18 +1323,28 @@ export class TaskManager {
         liveTask.interrupting = false;
         this.cancelPendingApproval(liveTask, "The Agent is shutting down.");
         liveTask.pendingQueryCount = 0;
-        if (liveTask.session !== undefined) {
+        if (task.provider === "claude" && liveTask.session !== undefined) {
           const interrupt = this.interruptSession(liveTask.session);
           if (interrupt !== undefined) {
             interruptions.push(interrupt);
           }
           this.closeSession(liveTask.session);
+        } else if (task.provider !== "claude") {
+          const cleanup = this.#providerTaskController?.close(task.id);
+          if (cleanup !== undefined) {
+            interruptions.push(cleanup);
+          }
+        }
+      } else if (task.provider !== "claude") {
+        const cleanup = this.#providerTaskController?.close(task.id);
+        if (cleanup !== undefined) {
+          interruptions.push(cleanup);
         }
       }
       const terminal = this.requireTask(task.id);
       this.publishTaskState(terminal);
       this.#eventSink?.endTurn(task.id);
-      this.#closeTaskSdkConnections.closeTaskConnections(task.id);
+      this.#closeTaskAgentConnections.closeTaskConnections(task.id);
     }
     await Promise.allSettled(interruptions);
     this.#liveTasks.clear();
@@ -1336,8 +1397,10 @@ export class TaskManager {
         id: randomUUID(),
         initialCwd,
         model: null,
+        nativeProtocolVersion: claudeAgentSdkProtocolVersion,
         origin: "claude-session",
         permissionMode: null,
+        provider: "claude",
         sdkSessionId,
       });
     } catch {

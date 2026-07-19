@@ -61,9 +61,10 @@ the device-registration/delivery columns on `pairings`.
   WebSocket code `4003`, and return `REFRESH_TOKEN_REUSED`. Access-token
   authentication also checks device and token revocation state on every use.
 - `InMemoryDeviceConnectionRegistry` owns the device-to-socket mapping. Both
-  `/v1/events` and `/v1/tasks/{taskId}/sdk` authenticate during the handshake,
+  `/v1/events` and `/v1/tasks/{taskId}/agent` authenticate during the handshake,
   register only after successful authentication, and unregister on close.
-  They share this registry so revocation closes control and raw SDK sockets for
+  They share this registry so revocation closes control and provider-native
+  Agent sockets for
   only the affected device with code `4003`.
 - Remote authentication route Zod schemas are also the generated mobile
   OpenAPI source. Pair registration, claim, and refresh-proof routes are public
@@ -111,7 +112,7 @@ the device-registration/delivery columns on `pairings`.
 - OpenAPI generation tests prove authentication operations have stable unique
   operation IDs and only access-protected operations declare Bearer security.
 - Connection-registry and WebSocket integration tests prove revoking device A
-  closes only A's control/SDK sockets with code `4003`, while device B stays
+  closes only A's control/Agent sockets with code `4003`, while device B stays
   connected.
 - Storage maintenance test inserts an access-token envelope and proves rekey
   migrates it with the other encrypted records; pruning removes expired access

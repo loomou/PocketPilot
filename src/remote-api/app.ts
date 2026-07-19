@@ -10,10 +10,14 @@ import { createHttpApp } from "../http/create-http-app.js";
 import { registerHealthRoute } from "../http/health.js";
 import type { PocketPilotLogger } from "../logging/logger.js";
 import {
-  registerSessionRoutes,
-  type SessionRouteDeviceAuthService,
-  type SessionRouteManager,
-} from "./session-routes.js";
+  type ProviderRouteDeviceAuthService,
+  type ProviderRouteOptions,
+  registerProviderRoutes,
+} from "./provider-routes.js";
+import {
+  registerTaskAgentRoutes,
+  type TaskAgentRouteOptions,
+} from "./task-agent-routes.js";
 import {
   registerTaskEventRoutes,
   type TaskEventRouteOptions,
@@ -23,28 +27,23 @@ import {
   type TaskRouteDeviceAuthService,
   type TaskRouteManager,
 } from "./task-routes.js";
-import {
-  registerTaskSdkRoutes,
-  type TaskSdkRouteOptions,
-} from "./task-sdk-routes.js";
 
 export type RemoteApiDeviceAuthService = RemoteDeviceAuthRouteService &
-  SessionRouteDeviceAuthService &
+  ProviderRouteDeviceAuthService &
   TaskRouteDeviceAuthService &
   TaskEventRouteOptions["deviceAuthService"] &
-  TaskSdkRouteOptions["deviceAuthService"];
+  TaskAgentRouteOptions["deviceAuthService"];
 
 export type RemoteApiAppOptions = {
+  agentRuntimeManager?: ProviderRouteOptions["agentRuntimeManager"] &
+    TaskAgentRouteOptions["agentRuntimeManager"];
   connectionRegistry?: TaskEventRouteOptions["connectionRegistry"] &
-    TaskSdkRouteOptions["connectionRegistry"];
+    TaskAgentRouteOptions["connectionRegistry"];
   deviceAuthService?: RemoteApiDeviceAuthService;
-  eventJournal?: TaskEventRouteOptions["eventJournal"] &
-    TaskSdkRouteOptions["eventJournal"];
+  eventJournal?: TaskEventRouteOptions["eventJournal"];
   logger?: PocketPilotLogger;
-  taskManager?: SessionRouteManager &
-    TaskRouteManager &
-    TaskSdkRouteOptions["taskManager"];
-  taskSdkConnectionRegistry?: TaskSdkRouteOptions["taskConnectionRegistry"];
+  taskAgentConnectionRegistry?: TaskAgentRouteOptions["taskConnectionRegistry"];
+  taskManager?: TaskRouteManager;
 };
 
 /**
@@ -84,10 +83,11 @@ export async function buildRemoteApiApp(
       servers: [],
       tags: [
         { name: "Authentication" },
-        { name: "Sessions" },
+        { name: "Providers" },
+        { name: "Conversations" },
         { name: "Tasks" },
         { name: "Events" },
-        { name: "SDK" },
+        { name: "Agent Stream" },
       ],
     },
     transform: jsonSchemaTransform,
@@ -99,11 +99,13 @@ export async function buildRemoteApiApp(
       options.deviceAuthService,
       options.logger,
     );
-    if (options.taskManager !== undefined) {
-      registerSessionRoutes(app, {
+    if (options.agentRuntimeManager !== undefined) {
+      registerProviderRoutes(app, {
+        agentRuntimeManager: options.agentRuntimeManager,
         deviceAuthService: options.deviceAuthService,
-        taskManager: options.taskManager,
       });
+    }
+    if (options.taskManager !== undefined) {
       registerTaskRoutes(app, {
         deviceAuthService: options.deviceAuthService,
         taskManager: options.taskManager,
@@ -124,18 +126,16 @@ export async function buildRemoteApiApp(
   }
   if (
     options.connectionRegistry !== undefined &&
+    options.agentRuntimeManager !== undefined &&
     options.deviceAuthService !== undefined &&
-    options.eventJournal !== undefined &&
-    options.taskManager !== undefined &&
-    options.taskSdkConnectionRegistry !== undefined
+    options.taskAgentConnectionRegistry !== undefined
   ) {
-    registerTaskSdkRoutes(app, {
+    registerTaskAgentRoutes(app, {
+      agentRuntimeManager: options.agentRuntimeManager,
       connectionRegistry: options.connectionRegistry,
       deviceAuthService: options.deviceAuthService,
-      eventJournal: options.eventJournal,
       ...(options.logger === undefined ? {} : { logger: options.logger }),
-      taskConnectionRegistry: options.taskSdkConnectionRegistry,
-      taskManager: options.taskManager,
+      taskConnectionRegistry: options.taskAgentConnectionRegistry,
     });
   }
   return app;

@@ -28,6 +28,7 @@
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit && pnpm --filter @pocketpilot/local-admin typecheck",
     "test": "vitest run && pnpm --filter @pocketpilot/local-admin test",
+    "test:codex:live": "node scripts/run-codex-app-server-live-tests.mjs",
     "test:sdk:live": "node scripts/run-claude-sdk-live-tests.mjs",
     "test:release:windows": "pnpm build && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-release-smoke.ps1",
     "test:watch": "vitest",

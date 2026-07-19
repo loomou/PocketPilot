@@ -2,7 +2,7 @@
 
 > 面向 PocketPilot 移动端接入。
 >
-> 本文描述的是 `/v1/tasks/{taskId}/sdk` WebSocket 中传输的原始
+> 本文描述的是 `/v1/tasks/{taskId}/agent` WebSocket 中传输的原始
 > `@anthropic-ai/claude-agent-sdk` 消息，不是 PocketPilot 自己定义的事件包装格式。
 > 当前项目验证版本为 `@anthropic-ai/claude-agent-sdk@0.3.210`，验证日期为
 > 2026-07-19。
@@ -91,7 +91,7 @@ function route(message: SDKMessage) {
 - 移动端不能从 `taskId` 推导 `session_id`，也不能把自己的 UI 会话 ID 写入 SDK 消息。
 
 除非本文特别说明，SDK 消息通常都带有 `uuid` 和 `session_id`。`uuid` 用于历史与
-实时消息去重以及 `afterUuid` 回放；没有 `uuid` 的消息仍然是合法消息，不能因为缺少
+实时消息去重以及 `afterCursor` 回放（Claude provider 的 cursor 值是 SDK UUID）；没有 `uuid` 的消息仍然是合法消息，不能因为缺少
 它而丢弃。
 
 ## 2. 一轮会话的典型顺序
@@ -550,7 +550,7 @@ PocketPilot 有两个不同的 WebSocket：
 
 | WebSocket | 内容 | 是否包含原始 SDK 消息 |
 | --- | --- | --- |
-| `/v1/tasks/{taskId}/sdk` | 移动端发送原始 `SDKUserMessage`；服务端返回原始 `SDKMessage` | 是 |
+| `/v1/tasks/{taskId}/agent` | 移动端发送原始 `SDKUserMessage`；服务端返回原始 `SDKMessage` | 是 |
 | `/v1/events` | `task.state`、`approval.requested` 等 PocketPilot 控制事件 | 否 |
 
 控制 WebSocket 的消息可以有 PocketPilot 自己的 `kind`，但不能把 SDK 消息塞进控制
