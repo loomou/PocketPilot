@@ -1,0 +1,29 @@
+{
+  "id": "remote-codex-cli",
+  "name": "remote-codex-cli",
+  "title": "Integrate remote Codex CLI control",
+  "description": "Plan and implement PocketPilot remote control integration for the local Codex CLI while preserving native CLI behavior.",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "xue",
+  "assignee": "xue",
+  "createdAt": "2026-07-19",
+  "completedAt": null,
+  "branch": "feat/remote-cli-integration",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-20-agent-api-claude-migration",
+    "07-20-codex-app-server-adapter"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
