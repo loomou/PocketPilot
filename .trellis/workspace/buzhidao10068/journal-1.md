@@ -136,3 +136,36 @@ Implemented canonical, revision-safe workspace authorization across local-admin 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: 完善扫码配对确认界面
+
+**Date**: 2026-07-19
+**Task**: 完善扫码配对确认界面
+**Branch**: `feat/pocketpilot-development`
+
+### Summary
+
+在本地管理配置页的二维码弹窗中加入移动端六位验证码输入与批准按钮，复用现有配对批准 API；成功后清理二维码和验证码并刷新设备列表。新增交互测试，lint、typecheck、test、build 全部通过。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a3cd22d` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
