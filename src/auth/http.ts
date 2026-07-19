@@ -28,20 +28,7 @@ export function registerDeviceAuthErrorHandler(
   logger: PocketPilotLogger = noopLogger,
 ): void {
   app.setErrorHandler((error, request, reply) => {
-    if (error instanceof DeviceAuthError) {
-      logger.warn(logEvents.authRequestRejected, "Authentication request rejected", {
-        ...safeRequestFields(request),
-        code: error.code,
-        statusCode: error.statusCode,
-      });
-    } else if (error instanceof TaskError) {
-      logger.warn(logEvents.httpRequestRejected, "Task request rejected", {
-        ...safeRequestFields(request),
-        code: error.code,
-        statusCode: error.statusCode,
-      });
-    }
-    if (sendDeviceAuthOrTaskError(error, reply)) {
+    if (sendDeviceAuthOrTaskError(error, reply, { logger, request })) {
       return;
     }
     logger.error(logEvents.httpRequestFailed, "HTTP request failed", {
@@ -57,9 +44,25 @@ export function registerDeviceAuthErrorHandler(
 export function sendDeviceAuthOrTaskError(
   error: unknown,
   reply: FastifyReply,
+  context?: { logger: PocketPilotLogger; request: FastifyRequest },
 ): boolean {
   if (!(error instanceof DeviceAuthError) && !(error instanceof TaskError)) {
     return false;
+  }
+  if (context !== undefined) {
+    context.logger.warn(
+      error instanceof DeviceAuthError
+        ? logEvents.authRequestRejected
+        : logEvents.httpRequestRejected,
+      error instanceof DeviceAuthError
+        ? "Authentication request rejected"
+        : "Task request rejected",
+      {
+        ...safeRequestFields(context.request),
+        code: error.code,
+        statusCode: error.statusCode,
+      },
+    );
   }
   void reply.code(error.statusCode).send({
     code: error.code,

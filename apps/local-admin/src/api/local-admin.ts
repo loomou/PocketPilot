@@ -12,6 +12,7 @@ const runtimeSettingsSchema = z.object({
 
 const taskSettingsSchema = z.object({
   concurrentTaskCapacity: z.number().int().min(1).max(1_024),
+  workspaceRoots: z.array(z.string().min(1).max(4_096)).max(1_024),
 });
 
 const authorizedDirectorySchema = z.object({
@@ -101,6 +102,13 @@ const createdPairingSchema = z.object({
   qrPayload: qrPayloadSchema,
 });
 
+const pendingPairingSchema = z.object({
+  deviceDisplayName: z.string().min(1),
+  expiresAt: z.number().int(),
+  pairingId: z.uuid(),
+  verificationCode: z.string().regex(/^\d{6}$/),
+});
+
 const deviceSchema = z.object({
   createdAt: z.number().int(),
   displayName: z.string().min(1),
@@ -142,10 +150,10 @@ export type WorkspaceInspection = z.infer<typeof workspaceInspectionSchema>;
 
 export type LocalAdminSnapshot = {
   audits: AuditRecord[];
-  authorizedDirectories: AuthorizedDirectorySnapshot;
   configuration: Configuration;
   csrfToken: string;
   devices: Device[];
+  pendingPairings: PendingPairing[];
   status: AgentStatus;
 };
 
@@ -160,25 +168,22 @@ export class LocalAdminApiError extends Error {
 }
 
 export async function loadLocalAdminSnapshot(): Promise<LocalAdminSnapshot> {
-  const [csrf, configuration, status, devices, audits, authorizedDirectories] =
+  const [csrf, configuration, status, pendingPairings, devices, audits] =
     await Promise.all([
       getJson("/admin/csrf", csrfSchema),
       getJson("/admin/configuration", configurationSchema),
       getJson("/admin/status", agentStatusSchema),
+      getJson("/admin/pairings/pending", z.array(pendingPairingSchema)),
       getJson("/admin/devices", z.array(deviceSchema)),
       getJson("/admin/audits", z.array(auditRecordSchema)),
-      getJson(
-        "/admin/authorized-directories",
-        authorizedDirectorySnapshotSchema,
-      ),
     ]);
 
   return {
     audits,
-    authorizedDirectories,
     configuration,
     csrfToken: csrf.token,
     devices,
+    pendingPairings,
     status,
   };
 }

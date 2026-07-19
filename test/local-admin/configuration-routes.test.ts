@@ -13,10 +13,7 @@ import {
   type StorageConnection,
 } from "../../src/storage/database.js";
 import { SettingsRepository } from "../../src/storage/settings-repository.js";
-import {
-  readTaskRuntimeSettings,
-  writeTaskRuntimeSettings,
-} from "../../src/tasks/settings.js";
+import { readTaskRuntimeSettings } from "../../src/tasks/settings.js";
 
 const csrfHeaders = {
   origin: "http://127.0.0.1:43183",
@@ -49,7 +46,7 @@ describe("local administration configuration routes", () => {
       runtime: {
         remoteListener: { host: "127.0.0.1", port: 43_182 },
       },
-      tasks: { concurrentTaskCapacity: 3 },
+      tasks: { concurrentTaskCapacity: 3, workspaceRoots: [] },
     });
   });
 

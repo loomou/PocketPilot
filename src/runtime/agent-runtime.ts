@@ -1,4 +1,4 @@
-﻿import { randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";

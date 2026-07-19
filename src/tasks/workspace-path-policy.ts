@@ -1,4 +1,4 @@
-﻿import { realpath, stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { isAbsolute, posix, resolve, win32 } from "node:path";
 
 export type WorkspaceDirectoryResolver = {

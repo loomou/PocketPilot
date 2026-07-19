@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { PocketPilotLogger } from "../logging/logger.js";
 
 import type { DeviceAuthService } from "./device-auth-service.js";
-import { authErrorResponses } from "./http.js";
+import { authErrorResponses, registerDeviceAuthErrorHandler } from "./http.js";
 
 const pairingIdParamsSchema = z.object({
   pairingId: z.uuid(),
@@ -51,8 +51,11 @@ export function registerLocalDeviceAuthRoutes(
   app: FastifyInstance,
   deviceAuthService: DeviceAuthService,
   logger?: PocketPilotLogger,
+  installErrorHandler = true,
 ): void {
-  registerDeviceAuthErrorHandler(app, logger);
+  if (installErrorHandler) {
+    registerDeviceAuthErrorHandler(app, logger);
+  }
   const typedApp = app.withTypeProvider<ZodTypeProvider>();
 
   typedApp.post(

@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { resolve } from "node:path";
 
 import type {
   EffortLevel,
@@ -1520,8 +1518,7 @@ export class TaskManager {
   ): Promise<T> {
     for (;;) {
       const revision = this.#authorizationRevision;
-      const settings = readTaskRuntimeSettings(this.#settingsRepository);
-      await this.authorizeInitialWorkspace(workspace, settings.workspaceRoots);
+      await this.authorizeInitialWorkspace(workspace);
       if (revision === this.#authorizationRevision) {
         return operation();
       }

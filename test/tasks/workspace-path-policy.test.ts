@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   addCanonicalRoot,
@@ -47,7 +47,10 @@ describe("workspace path policy", () => {
       roots: ["C:\\work"],
     });
     expect(
-      addCanonicalRoot(["C:\\work\\a", "D:\\independent", "C:\\work\\b"], "C:\\work"),
+      addCanonicalRoot(
+        ["C:\\work\\a", "D:\\independent", "C:\\work\\b"],
+        "C:\\work",
+      ),
     ).toEqual({
       kind: "added",
       removedRedundantRoots: ["C:\\work\\a", "C:\\work\\b"],

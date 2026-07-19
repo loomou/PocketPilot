@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1034,7 +1034,9 @@ function createFixture(
   settingsRepository: SettingsRepository;
   workspace: string;
 } {
-  const directory = mkdtempSync(join(tmpdir(), "pocketpilot-task-"));
+  const directory = realpathSync.native(
+    mkdtempSync(join(tmpdir(), "pocketpilot-task-")),
+  );
   const workspace = join(directory, "workspace");
   mkdirSync(workspace);
   const connection = openStorage({

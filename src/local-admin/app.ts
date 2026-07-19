@@ -29,11 +29,11 @@ import {
   isUnsafeHttpMethod,
   type LocalAdminCsrfProtection,
 } from "./csrf.js";
-import type { DirectorySelectionService } from "./directory-selection-service.js";
 import {
   DirectoryBrowserError,
   DirectoryBrowserService,
 } from "./directory-browser-service.js";
+import type { DirectorySelectionService } from "./directory-selection-service.js";
 
 const localAdminListenerSchema = z.object({
   host: z.string().min(1),
@@ -208,6 +208,7 @@ export async function buildLocalAdminApp(
       app,
       options.deviceAuthService,
       options.logger,
+      false,
     );
   }
   if (
@@ -237,8 +238,8 @@ export async function buildLocalAdminApp(
     });
   }
 
-  app.setErrorHandler((error, _request, reply) => {
-    if (sendDeviceAuthOrTaskError(error, reply)) {
+  app.setErrorHandler((error, request, reply) => {
+    if (sendDeviceAuthOrTaskError(error, reply, { logger, request })) {
       return;
     }
     if (
