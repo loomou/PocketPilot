@@ -45,6 +45,8 @@ type SerializableCanUseToolRequest = {
   input: Parameters<CanUseTool>[1];
   options: Omit<Parameters<CanUseTool>[2], "signal">;
 };
+
+new ClaudeProviderAdapter(taskManager, eventJournal): AgentProviderAdapter;
 ```
 
 `ClaudeSdkInputStream` is the one task-scoped
@@ -61,9 +63,14 @@ consumer and remains open until task close or coordinated shutdown.
   including `user`, `assistant`, `stream_event`, `result`, system, tool, and
   future/open variants. It may observe `session_id` before yielding, but it
   must not wrap, clone, filter, project, or normalize the message.
-- The raw task SDK WebSocket is JSON serialization around those two SDK-owned
-  types. PocketPilot task state, approval notifications, cursors, task IDs, and
-  timestamps are not SDK messages and never appear as wrappers on that socket.
+- Every new and resumed Query sets `Options.includePartialMessages` to `true`
+  so the SDK emits raw `stream_event` deltas before the final authoritative
+  `assistant` message. PocketPilot never fabricates token-by-token output.
+- `ClaudeProviderAdapter` owns the Claude-native side of
+  `/v1/tasks/{taskId}/agent`. The WebSocket is JSON serialization around those
+  two SDK-owned types. PocketPilot task state, approval notifications, cursors,
+  task IDs, and timestamps are not SDK messages and never appear as wrappers on
+  that socket.
 - The route's exported `sdkUserMessageTransportSchema` validates only the
   stable base contract and known optional primitive fields, is passthrough for
   SDK extensions, and returns the original parsed object. The package's
@@ -86,6 +93,9 @@ consumer and remains open until task close or coordinated shutdown.
   `getSessionInfo`, and `getSessionMessages`. Never locate or parse
   `~/.claude` files. Preserve every returned `SDKSessionInfo` and
   `SessionMessage` object; pagination cursors remain outside SDK rows.
+- The provider-neutral conversation API converts Claude list offsets and
+  history UUIDs into the common string cursor envelope without cloning,
+  filtering, or normalizing any `SDKSessionInfo` or `SessionMessage` row.
 - Session-centric Queries omit PocketPilot model, permission-mode, and effort
   startup overrides. A selected session supplies only `Options.resume` and no
   PocketPilot entrypoint override. A new conversation supplies cwd plus a
@@ -199,6 +209,8 @@ consumer and remains open until task close or coordinated shutdown.
 - Unit-test catalog option forwarding and object identity, effort including
   `max`/null, Query defaults versus resume, and subscribe-before-activation
   delivery of unwrapped `system/init`.
+- Unit-test that both new and resumed Query factories receive
+  `includePartialMessages: true`.
 - Unit-test that only new Queries receive a copied environment with the
   `pocketpilot` entrypoint; resume Queries receive the original session ID and
   no PocketPilot environment override.

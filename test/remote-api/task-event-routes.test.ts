@@ -86,6 +86,43 @@ describe("task control WebSocket", () => {
       },
       type: "event",
     });
+
+    const codexApproval = nextMessage(client);
+    subscriber?.send({
+      cursor: 1,
+      event: {
+        kind: "approval.requested",
+        payload: {
+          method: "item/fileChange/requestApproval",
+          params: { itemId: "item-1", threadId: "thread-1", turnId: "turn-1" },
+          provider: "codex",
+          requestId: "approval-1",
+        },
+      },
+      occurredAt: 2,
+      taskId,
+    });
+    await expect(codexApproval).resolves.toEqual({
+      event: {
+        cursor: 1,
+        event: {
+          kind: "approval.requested",
+          payload: {
+            method: "item/fileChange/requestApproval",
+            params: {
+              itemId: "item-1",
+              threadId: "thread-1",
+              turnId: "turn-1",
+            },
+            provider: "codex",
+            requestId: "approval-1",
+          },
+        },
+        occurredAt: 2,
+        taskId,
+      },
+      type: "event",
+    });
     client.terminate();
     expect(logs.value()).toContain("Control WebSocket connected");
     expect(logs.value()).toContain("Control WebSocket subscribed");

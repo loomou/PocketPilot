@@ -16,6 +16,8 @@ Claude configuration, and API keys do not belong in these tables.
 ```ts
 openStorage({ databasePath, migrationsFolder? }): StorageConnection;
 tasks.origin: "pocketpilot" | "claude-session";
+tasks.provider: string; // legacy/default: "claude"
+tasks.native_protocol_version: string;
 tasks.permission_mode: string | null;
 tasks.sdk_session_id: string | null;
 UNIQUE tasks(sdk_session_id)
@@ -82,10 +84,12 @@ live in `drizzle/`. Runtime migration uses
 - Store non-secret settings only through `SettingsRepository` with a feature
   Zod schema on both write and read. Do not deserialize SQLite JSON with an
   unchecked cast.
-- Task rows store runtime metadata only. `claude-session` rows keep nullable
-  SDK-owned startup controls and may persist the SDK session ID, but never a
-  summary, prompt, message, tool payload, history page, or Claude settings
-  object. Existing `pocketpilot` rows migrate with that explicit origin.
+- Task rows store runtime metadata only. Every task has an immutable provider
+  ID and native protocol version. `claude-session` rows keep nullable SDK-owned
+  startup controls and may persist the SDK session ID, but never a summary,
+  prompt, message, tool payload, history page, or Claude settings object.
+  Existing rows migrate to `provider = "claude"` and the pinned Claude Agent
+  SDK protocol version without repurposing `sdkSessionId`.
 - A partial unique index permits historical terminal rows but prevents two
   live runtime owners for one non-null SDK session ID. Before index creation,
   migration ranks duplicate non-terminal rows by `updated_at`, `created_at`,
@@ -108,6 +112,7 @@ live in `drizzle/`. Runtime migration uses
 | Stored setting JSON is invalid or fails its Zod schema | `StorageDataError`; do not return the value. |
 | Packaged migration journal is absent | Startup fails before binding listeners; release validation must reject the package. |
 | Legacy tasks have no origin column | Migration writes `pocketpilot`; operation-result parsing also defaults missing legacy origin safely. |
+| Legacy tasks have no provider metadata | Additive defaults expose them as Claude tasks with `@anthropic-ai/claude-agent-sdk@0.3.210`. |
 | Duplicate non-terminal SDK session IDs exist | Keep the newest owner, terminalize older rows, then create the partial unique index. |
 | Runtime attempts a second live owner | SQLite rejects the insert/update; return `CLAUDE_SESSION_CONFLICT` without starting another Query. |
 
@@ -128,8 +133,8 @@ live in `drizzle/`. Runtime migration uses
 - Native SQLite smoke test opens a migrated file under Node 24 and confirms
   `foreign_keys` is enabled.
 - Migration-test a legacy database with duplicate live SDK session owners;
-  assert origins backfill, only the newest remains non-terminal, and a later
-  duplicate insert violates the partial unique index.
+  assert provider/protocol/origin backfill, only the newest remains
+  non-terminal, and a later duplicate insert violates the partial unique index.
 - Package inspection proves `dist/drizzle/meta/_journal.json` and every
   generated SQL migration ship with the built CLI. A fresh-storage built-CLI
   smoke test must complete migrations before listener startup.

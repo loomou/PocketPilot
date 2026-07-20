@@ -1,17 +1,17 @@
-export type TaskSdkWebSocket = {
+export type TaskAgentWebSocket = {
   close(code?: number, data?: string): void;
 };
 
-export const taskSdkSessionUnavailableClose = {
+export const taskAgentSessionUnavailableClose = {
   code: 4_009,
   reason: "TASK_SESSION_UNAVAILABLE",
 } as const;
 
-/** Tracks raw SDK sockets separately so task P0 does not close control sockets. */
-export class InMemoryTaskSdkConnectionRegistry {
-  readonly #connections = new Map<string, Set<TaskSdkWebSocket>>();
+/** Tracks provider-native task sockets separately from the control socket. */
+export class InMemoryTaskAgentConnectionRegistry {
+  readonly #connections = new Map<string, Set<TaskAgentWebSocket>>();
 
-  public add(taskId: string, socket: TaskSdkWebSocket): () => void {
+  public add(taskId: string, socket: TaskAgentWebSocket): () => void {
     const taskConnections = this.#connections.get(taskId) ?? new Set();
     taskConnections.add(socket);
     this.#connections.set(taskId, taskConnections);
@@ -26,13 +26,13 @@ export class InMemoryTaskSdkConnectionRegistry {
     this.#connections.delete(taskId);
     for (const socket of taskConnections) {
       socket.close(
-        taskSdkSessionUnavailableClose.code,
-        taskSdkSessionUnavailableClose.reason,
+        taskAgentSessionUnavailableClose.code,
+        taskAgentSessionUnavailableClose.reason,
       );
     }
   }
 
-  private remove(taskId: string, socket: TaskSdkWebSocket): void {
+  private remove(taskId: string, socket: TaskAgentWebSocket): void {
     const taskConnections = this.#connections.get(taskId);
     if (taskConnections === undefined) {
       return;

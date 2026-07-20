@@ -22,8 +22,8 @@ runResetCommand(confirmation, environment?, writeOutput?): Promise<void>;
 ```
 
 The supported dotenv keys are `AGENT_MASTER_KEY`, `AGENT_NEW_MASTER_KEY`,
-`POCKETPILOT_DATA_DIR`, `POCKETPILOT_LOCAL_ADMIN_PORT`, and
-`POCKETPILOT_LOG_LEVEL`.
+`POCKETPILOT_DATA_DIR`, `POCKETPILOT_LOCAL_ADMIN_PORT`,
+`POCKETPILOT_LOG_LEVEL`, and `POCKETPILOT_CODEX_COMMAND`.
 
 ## 3. Contracts
 
@@ -44,6 +44,10 @@ The supported dotenv keys are `AGENT_MASTER_KEY`, `AGENT_NEW_MASTER_KEY`,
 - `POCKETPILOT_LOG_LEVEL` defaults to `info` and accepts only lowercase
   `debug`, `info`, `warn`, or `error`. It configures foreground diagnostics and
   never changes API behavior.
+- `POCKETPILOT_CODEX_COMMAND` optionally selects the Codex CLI command or
+  absolute executable/shim path. It must be non-empty. PocketPilot probes only
+  command existence for provider discovery and does not start Codex while
+  loading configuration.
 - PocketPilot deliberately ignores `ANTHROPIC_*`, Claude configuration, and
   arbitrary dotenv keys. Claude continues to inherit only the actual process
   environment owned by the user.

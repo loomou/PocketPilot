@@ -1,12 +1,12 @@
 # Task Runtime Contracts
 
-## Scenario: Persistent Tasks with Separate SDK and Control Transports
+## Scenario: Persistent Tasks with Separate Agent and Control Transports
 
 ### 1. Scope / Trigger
 
 Apply this contract when code creates, controls, restores, terminates, or
-persists a task; accepts SDK user messages; publishes SDK/control traffic;
-handles approvals; or changes active-turn replay.
+persists a task; accepts provider-native user messages; publishes Agent/control
+traffic; handles approvals; or changes active-turn replay.
 
 The Agent stores task metadata and the SDK session reference only. SDK input,
 assistant output, tool input/output, and Claude transcript history never enter
@@ -15,6 +15,16 @@ task rows, operation results, audit content, or logs.
 ### 2. Signatures
 
 ```ts
+runtime.listProviders(): AgentProviderDescriptor[];
+runtime.providerCapabilities(providerId): AgentProviderDescriptor;
+runtime.listConversations(providerId, { workspace, limit?, cursor? });
+runtime.readConversation(providerId, {
+  workspace, nativeConversationId, limit?, cursor?, includeSystemMessages?,
+});
+runtime.createConversation(providerId, input);
+runtime.attachConversation(providerId, input);
+runtime.taskProvider(taskId): AgentProviderAdapter;
+
 manager.createTask({
   deviceId, operationId, initialCwd, model, permissionMode,
   workspaceRiskAccepted,
@@ -29,6 +39,7 @@ manager.listClaudeSessions({ workspace, limit?, offset? });
 manager.readClaudeSessionHistory({
   workspace, sessionId, limit?, beforeUuid?, includeSystemMessages?,
 });
+manager.authorizeWorkspace(workspace): Promise<string>;
 manager.activateSdkSession(taskId);
 manager.getComposerOptions(taskId);
 manager.authorizedWorkspaceRoots(): readonly string[];
@@ -51,15 +62,31 @@ manager.setPermissionMode({ deviceId, operationId, taskId, permissionMode });
 manager.setEffortLevel({ deviceId, operationId, taskId, effortLevel });
 manager.shutdown();
 
+manager.providerTaskRuntime(): ProviderTaskRuntime;
+
+interface ProviderTaskRuntime {
+  run(taskId, operationWithLease): Promise<unknown>;
+  assertReadable(taskId): Promise<TaskSnapshot>;
+  reserveTurn(taskId, lease): Promise<TaskSnapshot>;
+  rollbackTurn(taskId): TaskSnapshot | undefined;
+  turnStarted(taskId, nativeTurnId): TaskSnapshot | undefined;
+  turnCompleted(taskId): TaskSnapshot | undefined;
+  beginInterrupt(taskId): TaskSnapshot;
+  completeInterrupt(taskId): TaskSnapshot | undefined;
+  approvalRequested(taskId, request): TaskSnapshot | undefined;
+  approvalResolved(taskId, pendingRequestCount): TaskSnapshot | undefined;
+}
+
 journal.publishSdkMessage(taskId, message: SDKMessage): void;
 journal.subscribeSdk(taskId, afterUuid, subscriber): Unsubscribe;
 journal.publishControlEvent(taskId, event): TaskControlEventEnvelope;
 journal.subscribeControl(taskId, afterCursor, subscriber): Unsubscribe;
 ```
 
-Remote conversation transport is the bidirectional
-`GET /v1/tasks/{taskId}/sdk` WebSocket. `GET /v1/events` is the independent
-PocketPilot control WebSocket. `GET /v1/workspaces` returns configured
+Remote conversation transport is the bidirectional provider-native
+`GET /v1/tasks/{taskId}/agent` WebSocket. `GET /v1/events` is the independent
+PocketPilot control WebSocket. Provider discovery and conversation resources
+are under `/v1/providers/{providerId}`. `GET /v1/workspaces` returns configured
 authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
 
 ### 3. Contracts
@@ -67,7 +94,8 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
 - Persist only `idle`, `executing`, `awaiting_approval`, `interrupted`, and
   `terminal`. The common path is `idle -> executing -> awaiting_approval ->
   executing -> idle`.
-- Persist task origin as `pocketpilot` or `claude-session`. Explicit task rows
+- Persist immutable `provider` and `nativeProtocolVersion` alongside task
+  origin `pocketpilot` or `claude-session`. Explicit task rows
   keep their initial model and permission mode. Session-centric rows keep
   `model` and `permissionMode` null so Claude Code resolves/restores its own
   settings; `sdkSessionId` is null only until a new Query emits its unchanged
@@ -76,10 +104,10 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   partial unique index `tasks_live_sdk_session_id_unique`. The migration keeps
   the newest legacy owner and terminalizes older duplicates before creating
   the index. Attachment also runs on one manager lane and reuses the winner.
-- A task owns one long-lived SDK input stream and Query while its live session
-  exists. Lazily open idle/recovered sessions with persisted `model`,
-  `permissionMode`, and `sdkSessionId`; never recreate a transcript.
-- A raw SDK frame has no PocketPilot `operationId` and is outside the 24-hour
+- A task owns one long-lived provider-native input stream and runtime while its
+  live session exists. Lazily open idle/recovered sessions with provider-owned
+  metadata and native IDs; never recreate a transcript.
+- A raw Agent frame has no PocketPilot `operationId` and is outside the 24-hour
   HTTP operation-result cache. After accepting it, write one metadata-only
   audit record with device ID, task ID, operation name, and result only.
 - An idle message with `shouldQuery !== false` reserves capacity, begins
@@ -100,17 +128,20 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   `workspaceRiskAccepted: true`, and remember that roots authorize initial cwd
   but are not a filesystem sandbox.
 - Session catalog, history, new-conversation, and attachment requests
-  canonicalize the selected workspace through that same policy owner. Catalog
+  canonicalize the selected workspace through `authorizeWorkspace` in the
+  provider-neutral runtime before calling an adapter. Claude methods retain
+  their own policy checks as a defense in depth. Catalog
   calls explicitly set `includeWorktrees: false` and
   `includeProgrammatic: true`; present SDK session cwd values must canonicalize
   inside the selected workspace before metadata, history, or attachment is
   allowed.
-- List pagination preserves each `SDKSessionInfo` object and advances
-  `nextOffset` by SDK rows consumed, including rows filtered by cwd policy.
-  History first validates with `getSessionInfo`, then returns unchanged
-  chronological `SessionMessage` rows: the latest 50 initially and up to 50
-  before the earliest loaded UUID. Same-session history reads use a dedicated
-  serial lane and retain no transcript cache.
+- List pagination returns provider-native rows under the common
+  `{ page: { cursor, hasMore } }` envelope. Claude advances its offset by SDK
+  rows consumed, including rows filtered by cwd policy. History first validates
+  with `getSessionInfo`, then returns unchanged chronological `SessionMessage`
+  rows: the latest 50 initially and up to 50 before the earliest loaded UUID.
+  Same-session history reads use a dedicated serial lane and retain no
+  transcript cache.
 - New conversation and selected-session attachment create idle internal
   runtimes without reserving active-turn capacity. Selecting a session is the
   continuation action; no public task-resume step or prompt replay is added.
@@ -139,7 +170,8 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
 - Removing a root is P0. One SQLite transaction writes the remaining roots and
   terminalizes every uncovered non-terminal task before asynchronous SDK
   cleanup. It then invalidates queued P2 work, cancels approval, ends replay,
-  closes affected raw SDK sockets with `4009`, and interrupts/closes live
+  closes affected provider-native Agent sockets with `4009`, and
+  interrupts/closes live
   Queries. Reauthorizing a path never resurrects an old terminal handle.
 - Runtime priority is explicit: P0 is shutdown/close/root revocation, P1 is
   interrupt, P2 is raw Send/approval/model/mode/effort/activation/composer/
@@ -149,6 +181,17 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   Query to `idle`; P0 leaves `terminal`. New P2 is rejected during P1 cleanup
   and may run on the new generation after cleanup even if an already-handed
   stale SDK call has not settled.
+- Non-Claude adapters must enter P2 work through `ProviderTaskRuntime.run()` and
+  call `lease.assertCurrent()` before and after every awaited native boundary.
+  Query-triggering native starts call `reserveTurn()` before forwarding so the
+  same capacity counter covers every provider. Forward/native-start failure
+  calls `rollbackTurn()`; authoritative native notifications call
+  `turnStarted()` and `turnCompleted()`.
+- Provider P3 reads use `assertReadable()` outside the P2 lane. It rejects
+  interrupted, terminal, closed, interrupting, and shutting-down runtimes and
+  rechecks the task's current workspace authorization before data is exposed.
+  Adapters recheck around activation and native forwarding because P0 may revoke
+  the workspace between awaits.
 - Idempotent HTTP controls use the 24-hour `(deviceId, operationId)` cache.
   Superseded operations persist an error tombstone, so a retry after P1/P0
   returns `TASK_OPERATION_SUPERSEDED` instead of running on a newer generation.
@@ -160,6 +203,13 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   `{ operationId, result: PermissionResult }`, and its response is the shared
   `TaskOperationResult` metadata shape `{ action, task }`. Return the submitted
   result unchanged to the deferred callback without echoing it in the response.
+- A non-Claude provider approval moves only an active task to
+  `awaiting_approval` and emits
+  `{ provider, requestId, method, params }` on the control stream. Resolving the
+  last known request returns the task to `executing`; an unknown resolution on
+  an idle/interrupted/terminal task never resurrects it. Provider adapters own
+  native request IDs, device/generation binding, and unchanged native response
+  frames.
 - SDK and control journal APIs are disjoint. Raw subscribers receive only
   `SDKMessage`; control subscribers receive only PocketPilot envelopes. Never
   publish `{ kind: "sdk", payload }` on `/v1/events`.
@@ -202,6 +252,10 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
 | Picker-selected volume root lacks explicit acceptance | `VOLUME_ROOT_RISK_NOT_ACCEPTED`; write no setting. |
 | Root removal revision or affected-runtime count changed | `AUTHORIZED_DIRECTORY_SNAPSHOT_STALE`; stop no task and require a fresh confirmation. |
 | Older P2 reaches a lease checkpoint after P0/P1 | `TASK_OPERATION_SUPERSEDED`; persist a rejecting tombstone and perform no later state write. |
+| Provider P3 read targets an interrupted/closed/interrupting runtime | `TASK_SESSION_UNAVAILABLE`; perform no native read. |
+| Provider turn start exceeds shared active capacity | `CONCURRENT_TASK_LIMIT_REACHED`; forward no native start frame. |
+| Native turn start fails after reservation | Roll back to `idle`, end retained replay, and release capacity. |
+| Unknown provider approval resolution arrives while idle | Keep `idle`; never change the task to `executing`. |
 | Replay reaches 256 MiB | Notify control subscribers, retain no later records, and continue live SDK/control delivery. |
 
 ### 5. Good / Base / Bad Cases
@@ -214,6 +268,11 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   best-effort Query interruption.
 - Base: P1 invalidates a blocked model change; a new-generation permission
   change runs after cleanup without waiting for the stale SDK promise.
+- Good: a Codex turn and a Claude query share one configured capacity limit;
+  interrupting the Codex turn invalidates queued P2 frames before native cleanup
+  begins.
+- Base: a provider catalog read proceeds outside a blocked P2 lane, but fails if
+  root revocation wins before its final authorization check.
 - Good: selecting a validated SDK session returns its existing opaque task
   handle, the raw subscriber receives original `system/init`, and a later raw
   user message continues through `Options.resume`.
@@ -252,7 +311,10 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   normalization, and volume-root confirmation.
 - Test P1/P0 generation invalidation, new-generation progress while a stale SDK
   call remains pending, persisted superseded retries, and close-vs-interrupt.
-- Route-test that P0 closes only the selected raw SDK task socket with `4009`
+- Test provider P2 lease checkpoints, shared cross-provider capacity, failed
+  native-start rollback, P3 progress outside a blocked lane, P3 workspace
+  reauthorization, and idle-state protection from unknown approval resolution.
+- Route-test that P0 closes only the selected provider-native task socket with `4009`
   while a device control socket remains connected.
 - Test SDK catalog option forwarding and cwd filtering; unchanged latest/older
   history pages, stale cursors, system-message mode, serial reads, and history

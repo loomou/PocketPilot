@@ -57,10 +57,10 @@ and use the Zod `runtimeSettingsSchema`.
   The picker launches fixed `powershell.exe -NoProfile -NonInteractive -STA`
   arguments with `shell: false`, bounded output, abort/timeout termination, and
   one active dialog. No filesystem picker/browse route is mounted remotely.
-- Raw task SDK sockets register in both the device registry and a separate
-  task-scoped registry. Device revocation may close every device transport;
-  task P0 closes only that task's raw SDK sockets and leaves the control socket
-  available for the terminal state event.
+- Provider-native task Agent sockets register in both the device registry and a
+  separate task-scoped registry. Device revocation may close every device
+  transport; task P0 closes only that task's Agent sockets and leaves the
+  control socket available for the terminal state event.
 - Startup generates the mobile OpenAPI document without listeners or storage,
   then passes it to the local app. The remote app never registers Swagger UI or
   raw-document routes.
@@ -78,7 +78,8 @@ and use the Zod `runtimeSettingsSchema`.
   matches. A failed second startup must therefore never remove another running
   Agent's stop credential.
 - Coordinated shutdown first closes task admission, persists every non-terminal
-  task as terminal, invalidates P2 generations, closes raw task sockets, and
+  task as terminal, invalidates P2 generations, closes native Agent sockets,
+  and
   starts Query interruption before storage closes. No awaited SDK cleanup may
   precede the rejecting task state.
 

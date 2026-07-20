@@ -439,3 +439,103 @@ Replaced local-admin pending-pairing polling with an explicit mobile-code approv
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: Complete provider-extensible Agent API and Claude migration
+
+**Date**: 2026-07-20
+**Task**: Complete provider-extensible Agent API and Claude migration
+**Branch**: `feat/remote-cli-integration`
+
+### Summary
+
+Migrated Claude behind the provider-extensible Agent API, added provider-aware persistence and native agent routes, removed legacy public Claude routes, updated OpenAPI/mobile/backend specs, and verified lint, typecheck, full tests, build, deterministic OpenAPI generation, and the live Claude SDK test against CLAUDE_SDK_TEST_CWD.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5e3745c` | (see git log) |
+| `8b11a42` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 15: Codex provider runtime parity
+
+**Date**: 2026-07-20
+**Task**: Codex provider runtime parity
+**Branch**: `main`
+
+### Summary
+
+Aligned Codex App Server with the shared provider task runtime: P2 capacity and generation ordering, P3 reads, native approval ownership and control projection, active-turn replay, reconnect cleanup, API documentation, tests, and live Codex verification.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1ec6f87` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 16: Record merge-only main policy
+
+**Date**: 2026-07-20
+**Task**: Record merge-only main policy
+**Branch**: `docs/main-merge-policy`
+
+### Summary
+
+Documented the hard project rule that commits must be created on non-main branches and main accepts changes only through branch merges; no automated enforcement was added.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c068c21` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

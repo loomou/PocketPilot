@@ -106,11 +106,7 @@ async function runDirectSdkPhase(cwd: string): Promise<string> {
       }),
     );
     expectSuccessfulResult(
-      await waitForSdkMessage(
-        events,
-        (message) => message.type === "result",
-        "first result",
-      ),
+      await waitForStreamingResult(events, "first result"),
     );
 
     await withDeadline(
@@ -135,11 +131,7 @@ async function runDirectSdkPhase(cwd: string): Promise<string> {
       ),
     );
     expectSuccessfulResult(
-      await waitForSdkMessage(
-        events,
-        (message) => message.type === "result",
-        "second result",
-      ),
+      await waitForStreamingResult(events, "second result"),
     );
     return sessionId;
   } finally {
@@ -297,6 +289,11 @@ async function runTaskManagerPhase(
     );
 
     expectSuccessfulResult(result);
+    expect(
+      eventSink.sdkMessages
+        .slice(sdkMessageStart)
+        .some((message) => message.type === "stream_event"),
+    ).toBe(true);
     expect(manager.getTask(taskId)).toMatchObject({
       sdkSessionId: sessionId,
       state: "idle",
@@ -434,6 +431,27 @@ async function waitForSdkMessage(
       return event.value;
     }
   }
+}
+
+async function waitForStreamingResult(
+  events: AsyncIterator<SDKMessage>,
+  label: string,
+): Promise<SDKMessage> {
+  let observedStreamEvent = false;
+  const result = await waitForSdkMessage(
+    events,
+    (message) => {
+      if (message.type === "stream_event") {
+        observedStreamEvent = true;
+      }
+      return message.type === "result";
+    },
+    label,
+  );
+  if (!observedStreamEvent) {
+    throw new Error(`${label} completed without a stream_event.`);
+  }
+  return result;
 }
 
 async function waitForTaskManagerResult(

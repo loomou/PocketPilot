@@ -107,11 +107,18 @@ export const tasks = sqliteTable(
   "tasks",
   {
     createdAt: integer("created_at").notNull(),
+    activeTurnId: text("active_turn_id"),
     initialCwd: text("initial_cwd").notNull(),
     interruptedAt: integer("interrupted_at"),
     model: text("model"),
+    nativeConversationId: text("native_conversation_id"),
+    nativeProtocolVersion: text("native_protocol_version")
+      .notNull()
+      .default("@anthropic-ai/claude-agent-sdk@0.3.210"),
+    nativeSessionId: text("native_session_id"),
     origin: text("origin").notNull().default("pocketpilot"),
     permissionMode: text("permission_mode"),
+    provider: text("provider").notNull().default("claude"),
     sdkSessionId: text("sdk_session_id"),
     state: text("state").notNull(),
     terminalAt: integer("terminal_at"),
@@ -124,6 +131,11 @@ export const tasks = sqliteTable(
       .on(table.sdkSessionId)
       .where(
         sql`${table.sdkSessionId} is not null and ${table.state} <> 'terminal'`,
+      ),
+    uniqueIndex("tasks_live_provider_conversation_unique")
+      .on(table.provider, table.nativeConversationId)
+      .where(
+        sql`${table.nativeConversationId} is not null and ${table.state} <> 'terminal'`,
       ),
   ],
 );

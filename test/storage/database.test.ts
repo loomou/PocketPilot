@@ -129,17 +129,26 @@ describe("storage database", () => {
     const migrated = openStorage({ databasePath });
     const rows = migrated.sqlite
       .prepare(
-        "SELECT id, origin, state, terminal_at AS terminalAt FROM tasks ORDER BY id",
+        "SELECT id, native_protocol_version AS nativeProtocolVersion, origin, provider, state, terminal_at AS terminalAt FROM tasks ORDER BY id",
       )
       .all();
     expect(rows).toEqual([
       {
         id: "newer",
+        nativeProtocolVersion: "@anthropic-ai/claude-agent-sdk@0.3.210",
         origin: "pocketpilot",
+        provider: "claude",
         state: "executing",
         terminalAt: null,
       },
-      { id: "older", origin: "pocketpilot", state: "terminal", terminalAt: 1 },
+      {
+        id: "older",
+        nativeProtocolVersion: "@anthropic-ai/claude-agent-sdk@0.3.210",
+        origin: "pocketpilot",
+        provider: "claude",
+        state: "terminal",
+        terminalAt: 1,
+      },
     ]);
     expect(() =>
       migrated.sqlite
