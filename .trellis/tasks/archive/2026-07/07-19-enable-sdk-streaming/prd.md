@@ -51,3 +51,9 @@ render text as the Agent SDK produces it instead of waiting for the complete
 - Mobile rendering or client-side delta-merging implementation.
 - Replacing the SDK's final `assistant` message with a fabricated stream.
 - Changes to session IDs, task lifecycle, controls, or transcript persistence.
+
+## Completion Note (2026-07-21)
+
+Implementation landed via `fix/enable-sdk-streaming` (`includePartialMessages:
+true`, unit + live contract coverage) and was merged to main. Acceptance
+criteria remain satisfied. Archiving this leftover planning entry.
