@@ -646,3 +646,41 @@ Implemented bounded provider readiness probes (30s TTL, single-flight, stable re
 
 - Parent audit `07-20-claude-code-parity-audit` is 4/4 children done; update findings/archive when ready.
 - Remaining planning tasks: `07-19-claude-session-id-timing`, `07-19-enable-sdk-streaming`.
+
+
+## Session 20: Parity audit closeout
+
+**Date**: 2026-07-21
+**Task**: Close parent parity audit and leftover 07-19 planning tasks
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Updated the parent Claude/Codex parity audit findings to mark children 1–4 done, residual open items (history options, P3 replay checkpoint, deferred attachments), then archived the parent audit plus leftover completed 07-19 research/streaming planning tasks.
+
+### Main Changes
+
+- Marked P1/P2 child tasks done in `07-20-claude-code-parity-audit/prd.md` with residual open map.
+- Added completion notes to `07-19-claude-session-id-timing` and `07-19-enable-sdk-streaming`.
+- Archived all three planning tasks; task queue is empty.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `74cd7c5` | chore(task): archive 07-19-claude-session-id-timing |
+| `12eb51e` | chore(task): archive 07-19-enable-sdk-streaming |
+| `9cd4293` | chore(task): archive 07-20-claude-code-parity-audit |
+
+### Testing
+
+- No runtime code changes; archive-only closeout.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Optional next implementation: P2 history options contracts, or P3 Codex replay checkpoint.
+- Attachments remain deferred.
