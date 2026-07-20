@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
+- **Total Sessions**: 18
 - **Last Active**: 2026-07-21
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~574 | Active |
+| `journal-1.md` | ~607 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-07-21 | Codex REST thread management | `80a8bda` | `audit/claude-code-parity` |
 | 17 | 2026-07-21 | Codex read-only status catalogs | `af11bb6` | `audit/claude-code-parity` |
 | 16 | 2026-07-21 | Codex native action capabilities | `effa056` | `audit/claude-code-parity` |
 | 15 | 2026-07-20 | Codex provider runtime parity | `1ec6f87` | `main` |

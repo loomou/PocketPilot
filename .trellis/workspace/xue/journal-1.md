@@ -572,3 +572,36 @@ Implemented Codex P3 status catalogs (account/quota/skills/hooks/MCP), closed st
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: Codex REST thread management
+
+**Date**: 2026-07-21
+**Task**: Codex REST thread management
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Implemented Codex conversation list filters plus REST fork/archive/unarchive/delete with confirm gates, closed threadManagement, fork task creation, delete-bound-task close, docs/tests/contracts, and committed the feature.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `80a8bda` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
