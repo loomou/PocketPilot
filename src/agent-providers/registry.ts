@@ -93,6 +93,30 @@ function sanitizeCapabilities(
     resumeConversation: capabilities.resumeConversation,
     statusCatalogs: sanitizeStatusCatalogs(capabilities.statusCatalogs),
     streamProtocol: capabilities.streamProtocol,
+    threadManagement: sanitizeThreadManagement(capabilities.threadManagement),
+  };
+}
+
+function sanitizeThreadManagement(
+  threadManagement: AgentCapabilitySnapshot["threadManagement"] | undefined,
+): AgentCapabilitySnapshot["threadManagement"] {
+  if (threadManagement === undefined || typeof threadManagement !== "object") {
+    return {
+      archive: false,
+      delete: false,
+      fork: false,
+      includeArchived: false,
+      search: false,
+      unarchive: false,
+    };
+  }
+  return {
+    archive: threadManagement.archive === true,
+    delete: threadManagement.delete === true,
+    fork: threadManagement.fork === true,
+    includeArchived: threadManagement.includeArchived === true,
+    search: threadManagement.search === true,
+    unarchive: threadManagement.unarchive === true,
   };
 }
 

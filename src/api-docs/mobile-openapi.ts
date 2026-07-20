@@ -266,14 +266,18 @@ const documentationTaskManager: NonNullable<
 const documentationAgentRuntimeManager: NonNullable<
   RemoteApiAppOptions["agentRuntimeManager"]
 > = {
+  archiveConversation: unavailableDocumentationHandler,
   attachConversation: unavailableDocumentationHandler,
   createConversation: unavailableDocumentationHandler,
+  deleteConversation: unavailableDocumentationHandler,
+  forkConversation: unavailableDocumentationHandler,
   listConversations: unavailableDocumentationHandler,
   listProviders: unavailableDocumentationHandler,
   providerCapabilities: unavailableDocumentationHandler,
   readConversation: unavailableDocumentationHandler,
   task: unavailableDocumentationHandler,
   taskProvider: unavailableDocumentationHandler,
+  unarchiveConversation: unavailableDocumentationHandler,
 };
 
 const documentationDependencies = {

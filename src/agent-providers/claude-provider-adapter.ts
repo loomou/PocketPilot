@@ -7,7 +7,10 @@ import {
 } from "../claude-sdk/transport.js";
 import type { TaskEventJournal } from "../tasks/task-event-journal.js";
 import type { TaskManager } from "../tasks/task-manager.js";
-import type { TaskOperationResult, TaskSnapshot } from "../tasks/task-types.js";
+import type {
+  TaskBoundOperationResult,
+  TaskSnapshot,
+} from "../tasks/task-types.js";
 import type {
   AgentConversationAttachInput,
   AgentConversationHistoryInput,
@@ -48,6 +51,14 @@ export class ClaudeProviderAdapter implements AgentProviderAdapter {
       resumeConversation: true,
       statusCatalogs: {},
       streamProtocol: "claude-agent-sdk" as const,
+      threadManagement: {
+        archive: false,
+        delete: false,
+        fork: false,
+        includeArchived: false,
+        search: false,
+        unarchive: false,
+      },
     },
     displayName: "Claude Code",
     id: "claude",
@@ -117,13 +128,13 @@ export class ClaudeProviderAdapter implements AgentProviderAdapter {
 
   public createConversation(
     input: AgentConversationOperationInput,
-  ): Promise<TaskOperationResult> {
+  ): Promise<TaskBoundOperationResult> {
     return this.taskManager.createClaudeConversation(input);
   }
 
   public attachConversation(
     input: AgentConversationAttachInput,
-  ): Promise<TaskOperationResult> {
+  ): Promise<TaskBoundOperationResult> {
     return this.taskManager.attachClaudeSession({
       ...input,
       sessionId: input.nativeConversationId,

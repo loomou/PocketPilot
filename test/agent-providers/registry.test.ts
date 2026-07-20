@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { AgentProviderError } from "../../src/agent-providers/errors.js";
 import { AgentProviderRegistry } from "../../src/agent-providers/registry.js";
-import type { AgentProviderAdapter } from "../../src/agent-providers/types.js";
+import type {
+  AgentCapabilitySnapshot,
+  AgentProviderAdapter,
+} from "../../src/agent-providers/types.js";
 
 function fakeProvider(
   id: string,
@@ -125,7 +128,7 @@ describe("AgentProviderRegistry", () => {
       streamProtocol: "claude-agent-sdk",
       executablePath: "C:\\secret\\claude.exe",
       secretNativeFlag: true,
-    } as NonNullable<AgentProviderAdapter["descriptor"]["capabilities"]>;
+    } as unknown as AgentCapabilitySnapshot;
     Object.assign(adapter.descriptor, {
       configPath: "C:\\secret\\config.json",
       rawProcessError: "credential-bearing error",
@@ -163,6 +166,56 @@ describe("AgentProviderRegistry", () => {
         skills: true,
       },
       streamProtocol: "claude-agent-sdk",
+      threadManagement: {
+        archive: false,
+        delete: false,
+        fork: false,
+        includeArchived: false,
+        search: false,
+        unarchive: false,
+      },
+    });
+  });
+
+  it("sanitizes threadManagement into a closed boolean capability object", () => {
+    const adapter = fakeProvider("codex");
+    adapter.descriptor.capabilities = {
+      activeTurnSteering: true,
+      approvals: true,
+      attachments: false,
+      effort: true,
+      historyPagination: "cursor",
+      interrupt: true,
+      modes: true,
+      models: true,
+      nativeActions: {},
+      newConversation: true,
+      resumeConversation: true,
+      statusCatalogs: {},
+      streamProtocol: "codex-app-server-json-rpc",
+      threadManagement: {
+        archive: true,
+        delete: "yes",
+        fork: true,
+        includeArchived: 1,
+        search: true,
+        unarchive: false,
+        experimental: true,
+      },
+    } as unknown as NonNullable<
+      AgentProviderAdapter["descriptor"]["capabilities"]
+    >;
+
+    expect(
+      new AgentProviderRegistry([adapter]).descriptor("codex").capabilities
+        ?.threadManagement,
+    ).toEqual({
+      archive: true,
+      delete: false,
+      fork: true,
+      includeArchived: false,
+      search: true,
+      unarchive: false,
     });
   });
 });

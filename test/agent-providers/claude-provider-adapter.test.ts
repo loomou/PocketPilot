@@ -8,10 +8,7 @@ import { describe, expect, it } from "vitest";
 import { ClaudeProviderAdapter } from "../../src/agent-providers/claude-provider-adapter.js";
 import type { TaskEventJournal } from "../../src/tasks/task-event-journal.js";
 import type { TaskManager } from "../../src/tasks/task-manager.js";
-import type {
-  TaskOperationResult,
-  TaskSnapshot,
-} from "../../src/tasks/task-types.js";
+import type { TaskSnapshot } from "../../src/tasks/task-types.js";
 
 type ClaudeManager = Pick<
   TaskManager,
@@ -193,11 +190,19 @@ function createFixture() {
     async activateSdkSession(taskId): Promise<void> {
       activationInputs.push(taskId);
     },
-    async attachClaudeSession(input): Promise<TaskOperationResult> {
+    async attachClaudeSession(
+      input,
+    ): Promise<
+      import("../../src/tasks/task-types.js").TaskBoundOperationResult
+    > {
       attachInputs.push(input);
       return { action: "attached", task };
     },
-    async createClaudeConversation(input): Promise<TaskOperationResult> {
+    async createClaudeConversation(
+      input,
+    ): Promise<
+      import("../../src/tasks/task-types.js").TaskBoundOperationResult
+    > {
       createInputs.push(input);
       return { action: "created", task };
     },

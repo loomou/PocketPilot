@@ -22,7 +22,11 @@ const expectedPaths = [
   "/v1/providers/{providerId}/capabilities",
   "/v1/providers/{providerId}/conversations",
   "/v1/providers/{providerId}/conversations/{conversationId}",
+  "/v1/providers/{providerId}/conversations/{conversationId}/archive",
   "/v1/providers/{providerId}/conversations/{conversationId}/attach",
+  "/v1/providers/{providerId}/conversations/{conversationId}/delete",
+  "/v1/providers/{providerId}/conversations/{conversationId}/fork",
+  "/v1/providers/{providerId}/conversations/{conversationId}/unarchive",
   "/v1/tasks",
   "/v1/tasks/{taskId}",
   "/v1/tasks/{taskId}/agent",
@@ -121,6 +125,7 @@ describe("mobile OpenAPI generation", () => {
       "attachments",
       "nativeActions",
       "statusCatalogs",
+      "threadManagement",
       "review",
       "rename",
       "compact",
@@ -133,6 +138,12 @@ describe("mobile OpenAPI generation", () => {
       "hooks",
       "mcpServers",
       "rateLimits",
+      "archive",
+      "delete",
+      "fork",
+      "includeArchived",
+      "search",
+      "unarchive",
     ]) {
       expect(capabilitySerialized).toContain(field);
     }

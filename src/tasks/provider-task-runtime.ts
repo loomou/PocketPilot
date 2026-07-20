@@ -21,6 +21,7 @@ export type ProviderTaskRuntime = {
   assertReadable(taskId: string): Promise<TaskSnapshot>;
   beginInterrupt(taskId: string): TaskSnapshot;
   completeInterrupt(taskId: string): TaskSnapshot | undefined;
+  markTerminal(taskId: string): TaskSnapshot | undefined;
   reserveTurn(taskId: string, lease: TaskOperationLease): Promise<TaskSnapshot>;
   rollbackTurn(taskId: string): TaskSnapshot | undefined;
   run<T>(

@@ -103,7 +103,15 @@ GET /v1/providers/codex/capabilities
       "rateLimits": true,
       "skills": true
     },
-    "streamProtocol": "codex-app-server-json-rpc"
+    "streamProtocol": "codex-app-server-json-rpc",
+    "threadManagement": {
+      "archive": true,
+      "delete": true,
+      "fork": true,
+      "includeArchived": true,
+      "search": true,
+      "unarchive": true
+    }
   }
 }
 ```
@@ -134,7 +142,7 @@ GET /v1/workspaces
 ### 3.1 列出工作区中的 Codex threads
 
 ```http
-GET /v1/providers/codex/conversations?workspace=<urlEncodedWorkspace>&limit=50
+GET /v1/providers/codex/conversations?workspace=<urlEncodedWorkspace>&limit=50&includeArchived=true&searchTerm=review
 ```
 
 可选分页参数是 `cursor` 和 `limit`，`cursor` 必须原样回传。PocketPilot 会向 App Server 请求 CLI、VS Code 和 App Server 三类来源的 thread，然后只返回工作区授权范围内的原生 thread。
@@ -254,6 +262,56 @@ Content-Type: application/json
 ```
 
 PocketPilot 会在本机调用原生 `thread/start`，再返回新的 `taskId`、`nativeConversationId` 和 `nativeSessionId`。创建请求不会发送用户 prompt；用户第一条消息要在 Agent WebSocket 建立后通过 `turn/start` 发送。
+
+### 3.5 Fork 会话
+
+```http
+POST /v1/providers/codex/conversations/{threadId}/fork
+Content-Type: application/json
+
+{
+  "operationId": "00000000-0000-4000-8000-000000000040",
+  "workspace": "D:\Projects\demo",
+  "workspaceRiskAccepted": true
+}
+```
+
+Fork 会从选中的源 thread 创建新的原生 Codex thread，并绑定一个新的 PocketPilot task，返回 `{ action: "forked", task }`。后续在 `/v1/tasks/{taskId}/agent` 上继续该 fork。
+
+### 3.6 归档与取消归档
+
+```http
+POST /v1/providers/codex/conversations/{threadId}/archive
+POST /v1/providers/codex/conversations/{threadId}/unarchive
+```
+
+archive 需要共享 operation 请求体，并额外携带 `confirm: true`；缺少或为 false
+时返回 `CONFIRMATION_REQUIRED`。unarchive 与 create/attach/fork 使用相同请求体，
+不需要 confirm。两者都返回 `{ action, task: null }`。archive 可逆，**不会**自动
+关闭绑定的 PocketPilot task；如需结束 task，请另行 close。unarchive 不会创建本地
+task；重新连接 Agent WebSocket 前需再次 attach。
+
+### 3.7 删除会话
+
+```http
+POST /v1/providers/codex/conversations/{threadId}/delete
+Content-Type: application/json
+
+{
+  "confirm": true,
+  "operationId": "00000000-0000-4000-8000-000000000041",
+  "workspace": "D:\Projects\demo",
+  "workspaceRiskAccepted": true
+}
+```
+
+删除必须携带 `confirm: true`，否则返回 `CONFIRMATION_REQUIRED`。成功时返回
+`{ action: "deleted", task: null }`，并终止绑定该会话的本地非终态 task。客户端
+应把删除视为不可逆操作。
+
+### 3.8 按能力开关渲染
+
+仅在 `capabilities.threadManagement` 对应布尔值为 `true` 时渲染 fork/archive/unarchive/delete 控件。Claude 当前会把这些标志全部标为 `false`。不要发明额外 REST 变更路由，也不要在 Agent WebSocket 上发送 archive/delete。
 
 ## 4. 连接 Agent WebSocket
 

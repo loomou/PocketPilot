@@ -43,8 +43,17 @@ GET  /v1/providers/{providerId}/conversations
 POST /v1/providers/{providerId}/conversations
 GET  /v1/providers/{providerId}/conversations/{conversationId}
 POST /v1/providers/{providerId}/conversations/{conversationId}/attach
+POST /v1/providers/{providerId}/conversations/{conversationId}/fork
+POST /v1/providers/{providerId}/conversations/{conversationId}/archive
+POST /v1/providers/{providerId}/conversations/{conversationId}/unarchive
+POST /v1/providers/{providerId}/conversations/{conversationId}/delete
 GET  /v1/tasks/{taskId}/agent
 ```
+
+Conversation list may accept optional provider-supported filters such as
+`includeArchived=true` and `searchTerm`. Conversation lifecycle mutations stay
+on these REST routes; do not invent Agent WebSocket wrappers for fork, archive,
+unarchive, or delete.
 
 ### 3. Contracts
 
@@ -56,9 +65,10 @@ GET  /v1/tasks/{taskId}/agent
   capability fields. Never return executable/config paths, credentials, raw
   process errors, environment values, or unrecognized adapter fields.
 - Capability snapshots always include boolean `attachments`, a closed
-  `nativeActions` object, and a closed `statusCatalogs` object. The sanitizer
-  admits only the reviewed native-action keys `review`, `rename`, and `compact`
-  and rewrites each descriptor to a closed shape before publication:
+  `nativeActions` object, a closed `statusCatalogs` object, and a closed
+  `threadManagement` object. The sanitizer admits only the reviewed
+  native-action keys `review`, `rename`, and `compact` and rewrites each
+  descriptor to a closed shape before publication:
   - `review`: `{ availability: "idle", deliveries: ["inline"], method,
     startsTurn: true, targetTypes: ["uncommittedChanges", "baseBranch",
     "commit", "custom"] }`
@@ -66,10 +76,13 @@ GET  /v1/tasks/{taskId}/agent
   - `compact`: `{ availability: "idle", method, startsTurn: true }`
   The sanitizer also admits only the reviewed status-catalog keys `account`,
   `rateLimits`, `skills`, `hooks`, and `mcpServers`, each rewritten as
-  `true` when present. Unknown action keys, unknown status-catalog keys, extra
-  descriptor fields, and open-ended catalogs are dropped. Capability metadata
-  is descriptive only; execution remains on the provider-native Agent WebSocket
-  and never invents REST mutation routes.
+  `true` when present. The sanitizer admits only the reviewed
+  thread-management keys `archive`, `delete`, `fork`, `includeArchived`,
+  `search`, and `unarchive`, each rewritten as a boolean. Unknown action keys,
+  unknown status-catalog keys, unknown thread-management keys, extra descriptor
+  fields, and open-ended catalogs are dropped. Capability metadata is
+  descriptive only; execution remains on the reviewed REST or native Agent
+  WebSocket surface and never invents unreviewed mutation routes.
 - Provider installation, enablement, and configuration are local-admin-only.
   The remote provider API is read-only for status and capabilities.
 - `AgentRuntimeManager` resolves provider availability and canonicalizes the
@@ -129,11 +142,21 @@ GET  /v1/tasks/{taskId}/agent
 - Good: a provider turn reserves shared capacity through `ProviderTaskRuntime`,
   while a native history read proceeds as P3 without waiting behind that turn's
   P2 lane.
-- Good: Codex publishes `attachments: false`, closed `nativeActions` for
-  review/rename/compact, and closed `statusCatalogs` for
-  account/rateLimits/skills/hooks/mcpServers; Claude publishes
-  `attachments: false` plus empty `nativeActions` and `statusCatalogs` objects
-  until a reviewed attachment, action, or status-catalog surface lands.
+- Conversation create/attach/fork return bound task operation results with a
+  non-null `task`. Archive/unarchive/delete return null-task results
+  (`{ action: "archived" | "unarchived" | "deleted", task: null }`).
+- Archive and delete require explicit `confirm: true`. Missing or false confirm
+  returns `409 CONFIRMATION_REQUIRED` from the adapter/runtime, not a request
+  schema failure.
+- Fork creates/reuses a PocketPilot task for the **new** native conversation.
+  Archive is reversible and must not auto-close bound tasks. Delete of a
+  currently bound non-terminal task conversation closes that task only after
+  native delete succeeds.
+- Codex publishes `attachments: false`, closed `nativeActions` for
+  review/rename/compact, closed `statusCatalogs` for
+  account/rateLimits/skills/hooks/mcpServers, and closed `threadManagement`
+  for archive/delete/fork/includeArchived/search/unarchive. Claude publishes
+  empty/false equivalents until a reviewed surface lands.
 - Base: Claude list/history rows retain object identity while their native
   offset/UUID cursors appear only in the common page envelope.
 - Bad: a route switches on `providerId === "claude"`, wraps native frames, lets

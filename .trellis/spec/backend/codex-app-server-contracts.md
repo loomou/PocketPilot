@@ -154,11 +154,21 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
     journals after projection. Thread-bound hook notifications remain
     thread-scoped only.
 - Conversation REST methods own `thread/list`, `thread/read`, `thread/start`,
-  `thread/resume`, and detach. Do not invent REST mutation routes for review,
-  rename, compact, or status catalogs. Account/configuration writes,
-  filesystem/process RPCs, plugin installation, arbitrary MCP calls,
-  archive/delete, detached review, and unknown privileged methods are denied
-  from the remote stream.
+  `thread/resume`/attach, fork, archive, unarchive, and delete. Agent WebSocket
+  clients do not send those lifecycle mutations. Do not invent REST mutation
+  routes for review, rename, compact, or status catalogs. Account/configuration
+  writes, filesystem/process RPCs, plugin installation, arbitrary MCP calls,
+  detached review, deprecated `thread/rollback`, path-based fork, and unknown
+  privileged methods are denied from the remote stream.
+- List supports optional `includeArchived` / `searchTerm` filters by forwarding
+  native `thread/list` params `archived` and `searchTerm` after workspace
+  authorization.
+- Fork uses native `thread/fork` with `{ threadId }` only. After fork, authorize
+  the new thread and create/reuse a PocketPilot task for it.
+- Archive/unarchive/delete use native `thread/archive`, `thread/unarchive`, and
+  `thread/delete`. Archive and delete require `confirm: true`. Archive does not
+  auto-close bound tasks. Delete closes a currently bound non-terminal task only
+  after native delete succeeds.
 - List CLI, VS Code, and App Server thread sources. Prefer negotiated
   `thread/turns/list` pagination and preserve native rows; use only an explicitly
   bounded `thread/read(includeTurns=true)` fallback.

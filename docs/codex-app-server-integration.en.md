@@ -53,7 +53,15 @@ Read `GET /v1/providers` before showing Codex as available. Then read
     },
     "newConversation": true,
     "resumeConversation": true,
-    "streamProtocol": "codex-app-server-json-rpc"
+    "streamProtocol": "codex-app-server-json-rpc",
+    "threadManagement": {
+      "archive": true,
+      "delete": true,
+      "fork": true,
+      "includeArchived": true,
+      "search": true,
+      "unarchive": true
+    }
   }
 }
 ```
@@ -87,10 +95,15 @@ GET  /v1/providers/codex/conversations
 POST /v1/providers/codex/conversations
 GET  /v1/providers/codex/conversations/{threadId}
 POST /v1/providers/codex/conversations/{threadId}/attach
+POST /v1/providers/codex/conversations/{threadId}/fork
+POST /v1/providers/codex/conversations/{threadId}/archive
+POST /v1/providers/codex/conversations/{threadId}/unarchive
+POST /v1/providers/codex/conversations/{threadId}/delete
 ```
 
-List requests include Codex CLI, VS Code, and App Server thread sources. Rows
-are native Codex thread objects inside the REST response envelope:
+List requests include Codex CLI, VS Code, and App Server thread sources and
+accept optional `includeArchived=true` and `searchTerm` filters. Rows are
+native Codex thread objects inside the REST response envelope:
 
 ```json
 {
@@ -111,6 +124,13 @@ Creating a conversation calls native `thread/start`, so the returned task has
 `thread/read` for authorization and reuses an existing non-terminal task for
 the same Codex thread when one exists. Selecting a conversation is the attach
 action; clients must not replay historical messages as a new prompt.
+
+Fork returns a new task bound to the forked native thread. Archive, unarchive,
+and delete return `{ action, task: null }`. Archive and delete require
+`confirm: true`; missing/false confirm returns `CONFIRMATION_REQUIRED`.
+Archive does **not** auto-close bound PocketPilot tasks. Delete terminals any
+local non-terminal PocketPilot task for that native conversation after native
+delete succeeds and publishes a `task.state` control event.
 
 History uses native Codex turns and items inside the `messages` response field.
 Pages are chronological for display, while `page.cursor` remains opaque.

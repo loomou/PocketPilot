@@ -105,7 +105,15 @@ Show Codex only when `status` is `available`. A capability snapshot has this sha
       "rateLimits": true,
       "skills": true
     },
-    "streamProtocol": "codex-app-server-json-rpc"
+    "streamProtocol": "codex-app-server-json-rpc",
+    "threadManagement": {
+      "archive": true,
+      "delete": true,
+      "fork": true,
+      "includeArchived": true,
+      "search": true,
+      "unarchive": true
+    }
   }
 }
 ```
@@ -136,10 +144,10 @@ Conversation listing, creation, attachment, and Agent requests all require an au
 ### 3.1 List Codex threads in a workspace
 
 ```http
-GET /v1/providers/codex/conversations?workspace=<urlEncodedWorkspace>&limit=50
+GET /v1/providers/codex/conversations?workspace=<urlEncodedWorkspace>&limit=50&includeArchived=true&searchTerm=review
 ```
 
-The optional pagination parameters are `cursor` and `limit`. Treat `cursor` as opaque and return it unchanged. PocketPilot asks App Server for CLI, VS Code, and App Server thread sources, then returns only threads authorized for the selected workspace.
+The optional query parameters are `cursor`, `limit`, `includeArchived=true`, and `searchTerm`. Treat `cursor` as opaque and return it unchanged. When `includeArchived=true`, PocketPilot forwards `archived: true` to App Server. When `searchTerm` is present, PocketPilot forwards it unchanged. PocketPilot asks App Server for CLI, VS Code, and App Server thread sources, then returns only threads authorized for the selected workspace.
 
 The REST response field is `conversations`, not `items`:
 
@@ -256,6 +264,58 @@ Content-Type: application/json
 ```
 
 PocketPilot calls native `thread/start` on the computer and returns a new `taskId`, `nativeConversationId`, and `nativeSessionId`. This request does not submit a user prompt. Send the first user message with `turn/start` after opening the Agent WebSocket.
+
+### 3.5 Fork a conversation
+
+```http
+POST /v1/providers/codex/conversations/{threadId}/fork
+Content-Type: application/json
+
+{
+  "operationId": "00000000-0000-4000-8000-000000000040",
+  "workspace": "D:\Projects\demo",
+  "workspaceRiskAccepted": true
+}
+```
+
+Fork creates a new native Codex thread from the selected source, creates a new PocketPilot task bound to that fork, and returns `{ action: "forked", task }`. Continue the forked conversation on `/v1/tasks/{taskId}/agent`.
+
+### 3.6 Archive or unarchive a conversation
+
+```http
+POST /v1/providers/codex/conversations/{threadId}/archive
+POST /v1/providers/codex/conversations/{threadId}/unarchive
+```
+
+Archive requires the shared operation body plus `confirm: true`. Without
+confirm, archive rejects with `CONFIRMATION_REQUIRED`. Unarchive uses the same
+operation body as create/attach/fork and does not require confirm. Both return
+`{ action, task: null }`. Archive is reversible and does **not** auto-close a
+bound PocketPilot task; close the task separately if needed. Unarchive does not
+create a local task; call attach again before reconnecting the Agent WebSocket.
+
+### 3.7 Delete a conversation
+
+```http
+POST /v1/providers/codex/conversations/{threadId}/delete
+Content-Type: application/json
+
+{
+  "confirm": true,
+  "operationId": "00000000-0000-4000-8000-000000000041",
+  "workspace": "D:\Projects\demo",
+  "workspaceRiskAccepted": true
+}
+```
+
+Delete requires `confirm: true`. Without it the route rejects the request with
+`CONFIRMATION_REQUIRED`. A successful delete returns
+`{ action: "deleted", task: null }` and terminals any local non-terminal task
+bound to that conversation. Treat delete as irreversible from the mobile client.
+
+### 3.8 Keep thread management capability-gated
+
+Only render fork/archive/unarchive/delete controls when `capabilities.threadManagement` advertises the corresponding boolean as `true`. Claude currently advertises all thread-management flags as `false`. Do not invent alternative REST mutation routes or send archive/delete over the Agent WebSocket.
 
 ## 4. Connect the Agent WebSocket
 

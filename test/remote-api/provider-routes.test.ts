@@ -156,6 +156,150 @@ describe("provider routes", () => {
     });
     expect(calls).toEqual([]);
   });
+
+  it("forwards list filters and thread-management operations", async () => {
+    const calls: Array<{ name: string; value: unknown }> = [];
+    const adapter = fakeProvider(calls);
+    const runtime = new AgentRuntimeManager(
+      new AgentProviderRegistry([adapter]),
+      {
+        authorizeWorkspace: async (workspace) => workspace,
+        getTask: () => taskSnapshot("fake"),
+      },
+    );
+    const app = await buildRemoteApiApp({
+      agentRuntimeManager: runtime,
+      deviceAuthService: deviceAuthService(),
+    });
+    apps.push(app);
+
+    const list = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "GET",
+      url: "/v1/providers/fake/conversations?workspace=C%3A%5Cworkspace&includeArchived=true&searchTerm=review",
+    });
+    expect(list.statusCode).toBe(200);
+    expect(calls[0]).toEqual({
+      name: "list",
+      value: {
+        includeArchived: true,
+        searchTerm: "review",
+        workspace: "C:\\workspace",
+      },
+    });
+
+    const operationId = randomUUID();
+    const fork = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "POST",
+      payload: {
+        operationId,
+        workspace: "C:\\workspace",
+        workspaceRiskAccepted: true,
+      },
+      url: "/v1/providers/fake/conversations/native-1/fork",
+    });
+    expect(fork.statusCode).toBe(200);
+    expect(fork.json().action).toBe("forked");
+
+    const archiveUnconfirmed = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "POST",
+      payload: {
+        operationId: randomUUID(),
+        workspace: "C:\\workspace",
+        workspaceRiskAccepted: true,
+      },
+      url: "/v1/providers/fake/conversations/native-1/archive",
+    });
+    expect(archiveUnconfirmed.statusCode).toBe(409);
+    expect(archiveUnconfirmed.json()).toMatchObject({
+      code: "CONFIRMATION_REQUIRED",
+    });
+
+    const archive = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "POST",
+      payload: {
+        confirm: true,
+        operationId: randomUUID(),
+        workspace: "C:\\workspace",
+        workspaceRiskAccepted: true,
+      },
+      url: "/v1/providers/fake/conversations/native-1/archive",
+    });
+    expect(archive.statusCode).toBe(200);
+    expect(archive.json()).toEqual({ action: "archived", task: null });
+
+    const unarchive = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "POST",
+      payload: {
+        operationId: randomUUID(),
+        workspace: "C:\\workspace",
+        workspaceRiskAccepted: true,
+      },
+      url: "/v1/providers/fake/conversations/native-1/unarchive",
+    });
+    expect(unarchive.statusCode).toBe(200);
+    expect(unarchive.json().action).toBe("unarchived");
+
+    const deleteUnconfirmed = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "POST",
+      payload: {
+        operationId: randomUUID(),
+        workspace: "C:\\workspace",
+        workspaceRiskAccepted: true,
+      },
+      url: "/v1/providers/fake/conversations/native-1/delete",
+    });
+    expect(deleteUnconfirmed.statusCode).toBe(409);
+    expect(deleteUnconfirmed.json()).toMatchObject({
+      code: "CONFIRMATION_REQUIRED",
+    });
+
+    const deleteRejected = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "POST",
+      payload: {
+        confirm: false,
+        operationId: randomUUID(),
+        workspace: "C:\\workspace",
+        workspaceRiskAccepted: true,
+      },
+      url: "/v1/providers/fake/conversations/native-1/delete",
+    });
+    expect(deleteRejected.statusCode).toBe(409);
+    expect(deleteRejected.json()).toMatchObject({
+      code: "CONFIRMATION_REQUIRED",
+    });
+
+    const deleted = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "POST",
+      payload: {
+        confirm: true,
+        operationId: randomUUID(),
+        workspace: "C:\\workspace",
+        workspaceRiskAccepted: true,
+      },
+      url: "/v1/providers/fake/conversations/native-1/delete",
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toEqual({ action: "deleted", task: null });
+
+    expect(calls.map((call) => call.name)).toEqual([
+      "list",
+      "fork",
+      "archive",
+      "archive",
+      "unarchive",
+      "delete",
+      "delete",
+      "delete",
+    ]);
+  });
 });
 
 function fakeProvider(
@@ -178,6 +322,14 @@ function fakeProvider(
         resumeConversation: true,
         statusCatalogs: {},
         streamProtocol: "fake-native",
+        threadManagement: {
+          archive: true,
+          delete: true,
+          fork: true,
+          includeArchived: true,
+          search: true,
+          unarchive: true,
+        },
       },
       displayName: "Fake Agent",
       id: "fake",
@@ -211,6 +363,36 @@ function fakeProvider(
         items: [{ nativeHistory: true }],
         page: { cursor: null, hasMore: false },
       };
+    },
+    async forkConversation(input) {
+      calls.push({ name: "fork", value: input });
+      return { action: "forked", task: taskSnapshot("fake") };
+    },
+    async archiveConversation(input) {
+      calls.push({ name: "archive", value: input });
+      if (input.confirm !== true) {
+        throw new TaskError(
+          "CONFIRMATION_REQUIRED",
+          409,
+          "Archive requires confirm=true.",
+        );
+      }
+      return { action: "archived", task: null };
+    },
+    async unarchiveConversation(input) {
+      calls.push({ name: "unarchive", value: input });
+      return { action: "unarchived", task: null };
+    },
+    async deleteConversation(input) {
+      calls.push({ name: "delete", value: input });
+      if (input.confirm !== true) {
+        throw new TaskError(
+          "CONFIRMATION_REQUIRED",
+          409,
+          "Delete requires confirm=true.",
+        );
+      }
+      return { action: "deleted", task: null };
     },
   };
 }

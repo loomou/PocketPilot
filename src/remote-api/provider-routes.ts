@@ -32,7 +32,9 @@ const conversationParamsSchema = providerParamsSchema.extend({
 const workspaceSchema = z.string().trim().min(1).max(4_096);
 const conversationListQuerySchema = z.object({
   cursor: z.string().trim().min(1).max(512).optional(),
+  includeArchived: z.enum(["true", "false"]).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
+  searchTerm: z.string().trim().min(1).max(512).optional(),
   workspace: workspaceSchema,
 });
 const conversationHistoryQuerySchema = z.object({
@@ -46,6 +48,21 @@ const conversationOperationSchema = z.object({
   workspace: workspaceSchema,
   workspaceRiskAccepted: z.boolean(),
 });
+const conversationConfirmSchema = conversationOperationSchema.extend({
+  // Accept missing/false so the adapter can return CONFIRMATION_REQUIRED.
+  // Successful archive/delete still require confirm === true.
+  confirm: z.boolean().optional(),
+});
+const agentThreadManagementSchema = z
+  .object({
+    archive: z.boolean(),
+    delete: z.boolean(),
+    fork: z.boolean(),
+    includeArchived: z.boolean(),
+    search: z.boolean(),
+    unarchive: z.boolean(),
+  })
+  .strict();
 
 const agentNativeReviewActionSchema = z
   .object({
@@ -112,6 +129,7 @@ const capabilitySchema = z.object({
   resumeConversation: z.boolean(),
   statusCatalogs: agentStatusCatalogsSchema,
   streamProtocol: z.string(),
+  threadManagement: agentThreadManagementSchema,
 });
 
 export const agentProviderDescriptorSchema = z.object({
@@ -153,12 +171,16 @@ export type ProviderRouteDeviceAuthService = Pick<
 export type ProviderRouteOptions = {
   agentRuntimeManager: Pick<
     AgentRuntimeManager,
+    | "archiveConversation"
     | "attachConversation"
     | "createConversation"
+    | "deleteConversation"
+    | "forkConversation"
     | "listConversations"
     | "listProviders"
     | "providerCapabilities"
     | "readConversation"
+    | "unarchiveConversation"
   >;
   deviceAuthService: ProviderRouteDeviceAuthService;
 };
@@ -247,9 +269,15 @@ export function registerProviderRoutes(
           ...(request.query.cursor === undefined
             ? {}
             : { cursor: request.query.cursor }),
+          ...(request.query.includeArchived === "true"
+            ? { includeArchived: true }
+            : {}),
           ...(request.query.limit === undefined
             ? {}
             : { limit: request.query.limit }),
+          ...(request.query.searchTerm === undefined
+            ? {}
+            : { searchTerm: request.query.searchTerm }),
           workspace: request.query.workspace,
         },
       );
@@ -341,5 +369,116 @@ export function registerProviderRoutes(
           nativeConversationId: request.params.conversationId,
         },
       ),
+  );
+
+  typed.post(
+    "/v1/providers/:providerId/conversations/:conversationId/fork",
+    {
+      schema: {
+        body: conversationOperationSchema,
+        description:
+          "Forks a provider-native conversation into a new native conversation and returns PocketPilot task transport metadata.",
+        operationId: "forkAgentConversation",
+        params: conversationParamsSchema,
+        response: { 200: taskOperationResultSchema, ...providerErrorResponses },
+        security: bearerSecurity,
+        summary: "Fork an Agent conversation",
+        tags: conversationTag,
+      },
+    },
+    (request) =>
+      options.agentRuntimeManager.forkConversation(request.params.providerId, {
+        ...request.body,
+        deviceId: authenticate(request),
+        nativeConversationId: request.params.conversationId,
+      }),
+  );
+
+  typed.post(
+    "/v1/providers/:providerId/conversations/:conversationId/archive",
+    {
+      schema: {
+        body: conversationConfirmSchema,
+        description:
+          "Archives a provider-native conversation after explicit confirm=true. Bound PocketPilot tasks remain non-terminal until the client closes them.",
+        operationId: "archiveAgentConversation",
+        params: conversationParamsSchema,
+        response: { 200: taskOperationResultSchema, ...providerErrorResponses },
+        security: bearerSecurity,
+        summary: "Archive an Agent conversation",
+        tags: conversationTag,
+      },
+    },
+    (request) => {
+      const body = request.body;
+      return options.agentRuntimeManager.archiveConversation(
+        request.params.providerId,
+        {
+          deviceId: authenticate(request),
+          nativeConversationId: request.params.conversationId,
+          operationId: body.operationId,
+          workspace: body.workspace,
+          workspaceRiskAccepted: body.workspaceRiskAccepted,
+          ...(body.confirm === undefined ? {} : { confirm: body.confirm }),
+        },
+      );
+    },
+  );
+
+  typed.post(
+    "/v1/providers/:providerId/conversations/:conversationId/unarchive",
+    {
+      schema: {
+        body: conversationOperationSchema,
+        description:
+          "Unarchives a provider-native conversation without creating a local task.",
+        operationId: "unarchiveAgentConversation",
+        params: conversationParamsSchema,
+        response: { 200: taskOperationResultSchema, ...providerErrorResponses },
+        security: bearerSecurity,
+        summary: "Unarchive an Agent conversation",
+        tags: conversationTag,
+      },
+    },
+    (request) =>
+      options.agentRuntimeManager.unarchiveConversation(
+        request.params.providerId,
+        {
+          ...request.body,
+          deviceId: authenticate(request),
+          nativeConversationId: request.params.conversationId,
+        },
+      ),
+  );
+
+  typed.post(
+    "/v1/providers/:providerId/conversations/:conversationId/delete",
+    {
+      schema: {
+        body: conversationConfirmSchema,
+        description:
+          "Deletes a provider-native conversation after explicit confirm=true. Local non-terminal tasks for that conversation become terminal.",
+        operationId: "deleteAgentConversation",
+        params: conversationParamsSchema,
+        response: { 200: taskOperationResultSchema, ...providerErrorResponses },
+        security: bearerSecurity,
+        summary: "Delete an Agent conversation",
+        tags: conversationTag,
+      },
+    },
+    (request) => {
+      const body = request.body;
+      return options.agentRuntimeManager.deleteConversation(
+        request.params.providerId,
+        {
+          deviceId: authenticate(request),
+          nativeConversationId: request.params.conversationId,
+          operationId: body.operationId,
+          workspace: body.workspace,
+          workspaceRiskAccepted: body.workspaceRiskAccepted,
+          ...(body.confirm === undefined ? {} : { confirm: body.confirm }),
+        },
+      );
+    },
   );
 }

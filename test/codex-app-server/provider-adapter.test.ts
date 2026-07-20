@@ -65,6 +65,28 @@ class FakeCodexProcess extends EventEmitter {
           result: { backwardsCursor: null, data: [thread()], nextCursor: null },
         });
       }
+      if (frame.method === "thread/fork") {
+        const params = frame.params as { threadId?: unknown } | undefined;
+        const sourceId =
+          typeof params?.threadId === "string" ? params.threadId : "thread-1";
+        this.emitFrame({
+          id: frame.id,
+          result: {
+            thread: thread(`thread-${this.nextThread++}`, {
+              forkedFrom: sourceId,
+            }),
+          },
+        });
+      }
+      if (frame.method === "thread/archive") {
+        this.emitFrame({ id: frame.id, result: {} });
+      }
+      if (frame.method === "thread/unarchive") {
+        this.emitFrame({ id: frame.id, result: {} });
+      }
+      if (frame.method === "thread/delete") {
+        this.emitFrame({ id: frame.id, result: {} });
+      }
       if (frame.method === "account/read") {
         this.emitFrame({
           id: frame.id,
@@ -254,6 +276,25 @@ class FakeCodexProcess extends EventEmitter {
 const deviceId = "00000000-0000-4000-8000-000000000010";
 const workspace = "C:\\workspace";
 
+function requireNativeConversationId(
+  task: import("../../src/tasks/task-types.js").TaskSnapshot,
+): string {
+  if (task.nativeConversationId === null) {
+    throw new Error("expected nativeConversationId");
+  }
+  return task.nativeConversationId;
+}
+
+function requireTaskResult(result: {
+  action: string;
+  task: import("../../src/tasks/task-types.js").TaskSnapshot | null;
+}): import("../../src/tasks/task-types.js").TaskSnapshot {
+  if (result.task === null) {
+    throw new Error(`expected task for action ${result.action}`);
+  }
+  return result.task;
+}
+
 describe("CodexProviderAdapter", () => {
   const connections: StorageConnection[] = [];
 
@@ -291,9 +332,9 @@ describe("CodexProviderAdapter", () => {
       workspaceRiskAccepted: true,
     });
     expect(created.action).toBe("created");
-    expect(created.task.provider).toBe("codex");
-    expect(created.task.nativeConversationId).toBe("thread-1");
-    expect(created.task.nativeSessionId).toBe("session-1");
+    expect(requireTaskResult(created).provider).toBe("codex");
+    expect(requireTaskResult(created).nativeConversationId).toBe("thread-1");
+    expect(requireTaskResult(created).nativeSessionId).toBe("session-1");
 
     await expect(
       adapter.listConversations({ workspace, limit: 50 }),
@@ -319,7 +360,138 @@ describe("CodexProviderAdapter", () => {
       workspaceRiskAccepted: true,
     });
     expect(attached.action).toBe("attached");
-    expect(attached.task.id).toBe(created.task.id);
+    expect(requireTaskResult(attached).id).toBe(requireTaskResult(created).id);
+    await adapter.shutdown();
+  });
+
+  it("forwards list filters and forks, archives, unarchives, and deletes threads", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    const repository = new TaskRepository(connection.database);
+    const taskManager = createTaskManager(connection);
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository,
+      taskRuntime: taskManager.providerTaskRuntime(),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+
+    await adapter.listConversations({
+      includeArchived: true,
+      searchTerm: "review",
+      workspace,
+    });
+    const listWrite = process.writes.find(
+      (frame) => frame.method === "thread/list",
+    );
+    expect(listWrite?.params).toMatchObject({
+      archived: true,
+      searchTerm: "review",
+      sourceKinds: ["cli", "vscode", "appServer"],
+    });
+
+    const forked = await adapter.forkConversation({
+      deviceId,
+      nativeConversationId: "thread-1",
+      operationId: "00000000-0000-4000-8000-000000000031",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    expect(forked.action).toBe("forked");
+    expect(requireTaskResult(forked).nativeConversationId).toMatch(/^thread-/);
+    expect(process.writes.some((frame) => frame.method === "thread/fork")).toBe(
+      true,
+    );
+
+    const created = await adapter.createConversation({
+      deviceId,
+      operationId: "00000000-0000-4000-8000-000000000032",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    const createdTask = requireTaskResult(created);
+    await expect(
+      adapter.archiveConversation({
+        confirm: false,
+        deviceId,
+        nativeConversationId: requireNativeConversationId(createdTask),
+        operationId: "00000000-0000-4000-8000-000000000033",
+        workspace,
+        workspaceRiskAccepted: true,
+      }),
+    ).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED", statusCode: 409 });
+    await expect(
+      adapter.archiveConversation({
+        deviceId,
+        nativeConversationId: requireNativeConversationId(createdTask),
+        operationId: "00000000-0000-4000-8000-000000000039",
+        workspace,
+        workspaceRiskAccepted: true,
+      }),
+    ).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED", statusCode: 409 });
+
+    const archived = await adapter.archiveConversation({
+      confirm: true,
+      deviceId,
+      nativeConversationId: requireNativeConversationId(createdTask),
+      operationId: "00000000-0000-4000-8000-000000000040",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    expect(archived).toEqual({ action: "archived", task: null });
+    expect(repository.find(createdTask.id)?.state).not.toBe("terminal");
+
+    const unarchived = await adapter.unarchiveConversation({
+      deviceId,
+      nativeConversationId: requireNativeConversationId(createdTask),
+      operationId: "00000000-0000-4000-8000-000000000034",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    expect(unarchived).toEqual({ action: "unarchived", task: null });
+
+    const deleted = await adapter.deleteConversation({
+      confirm: true,
+      deviceId,
+      nativeConversationId: requireNativeConversationId(createdTask),
+      operationId: "00000000-0000-4000-8000-000000000035",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    expect(deleted).toEqual({ action: "deleted", task: null });
+    expect(
+      process.writes.some((frame) => frame.method === "thread/delete"),
+    ).toBe(true);
+    expect(repository.find(createdTask.id)?.state).toBe("terminal");
+
+    await expect(
+      adapter.deleteConversation({
+        confirm: false,
+        deviceId,
+        nativeConversationId: "thread-1",
+        operationId: "00000000-0000-4000-8000-000000000037",
+        workspace,
+        workspaceRiskAccepted: true,
+      }),
+    ).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED", statusCode: 409 });
+
+    await expect(
+      adapter.deleteConversation({
+        deviceId,
+        nativeConversationId: "thread-1",
+        operationId: "00000000-0000-4000-8000-000000000038",
+        workspace,
+        workspaceRiskAccepted: true,
+      }),
+    ).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED", statusCode: 409 });
+
     await adapter.shutdown();
   });
 
@@ -356,13 +528,13 @@ describe("CodexProviderAdapter", () => {
     });
     const received: unknown[] = [];
     const controlEvents: unknown[] = [];
-    eventJournal.subscribeControl(created.task.id, -1, {
+    eventJournal.subscribeControl(requireTaskResult(created).id, -1, {
       send(event) {
         controlEvents.push(event);
       },
     });
     const unsubscribe = adapter.taskStream.subscribe(
-      created.task.id,
+      requireTaskResult(created).id,
       undefined,
       {
         send(frame) {
@@ -370,7 +542,7 @@ describe("CodexProviderAdapter", () => {
         },
       },
     );
-    await adapter.taskStream.activate(created.task.id);
+    await adapter.taskStream.activate(requireTaskResult(created).id);
     const turnStart = adapter.taskStream.parseClientFrame(
       JSON.stringify({
         id: "turn-start",
@@ -382,7 +554,7 @@ describe("CodexProviderAdapter", () => {
     await adapter.taskStream.submit({
       deviceId,
       message: turnStart,
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     process.emitFrame({
       id: "approval-1",
@@ -400,7 +572,7 @@ describe("CodexProviderAdapter", () => {
       method: "item/commandExecution/requestApproval",
       params: { command: "git status", threadId: "thread-1", turnId: "turn-1" },
     });
-    expect(taskManager.getTask(created.task.id).state).toBe(
+    expect(taskManager.getTask(requireTaskResult(created).id).state).toBe(
       "awaiting_approval",
     );
     expect(controlEvents).toContainEqual(
@@ -418,7 +590,7 @@ describe("CodexProviderAdapter", () => {
             requestId: "approval-1",
           },
         },
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     );
 
@@ -431,19 +603,19 @@ describe("CodexProviderAdapter", () => {
       adapter.taskStream.submit({
         deviceId: "00000000-0000-4000-8000-000000000099",
         message: response,
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "STALE_APPROVAL" });
     await adapter.taskStream.submit({
       deviceId,
       message: response,
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     expect(process.writes).toContainEqual({
       id: "approval-1",
       result: { decision: "accept" },
     });
-    expect(taskManager.getTask(created.task.id).state).toBe(
+    expect(taskManager.getTask(requireTaskResult(created).id).state).toBe(
       "awaiting_approval",
     );
     expect(received).toContainEqual({
@@ -459,13 +631,15 @@ describe("CodexProviderAdapter", () => {
     await adapter.taskStream.submit({
       deviceId,
       message: secondResponse,
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     expect(process.writes).toContainEqual({
       id: "approval-2",
       result: { decision: "decline" },
     });
-    expect(taskManager.getTask(created.task.id).state).toBe("executing");
+    expect(taskManager.getTask(requireTaskResult(created).id).state).toBe(
+      "executing",
+    );
     process.emitFrame({
       id: "approval-outside",
       method: "item/commandExecution/requestApproval",
@@ -527,7 +701,7 @@ describe("CodexProviderAdapter", () => {
     });
 
     first.emit("close", 1, null);
-    await adapter.taskStream.activate(created.task.id);
+    await adapter.taskStream.activate(requireTaskResult(created).id);
 
     expect(second.writes.map((frame) => frame.method)).toContain(
       "thread/resume",
@@ -568,7 +742,7 @@ describe("CodexProviderAdapter", () => {
         method: "turn/start",
         params: { input: [] },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     first.emit("close", 1, null);
 
@@ -580,7 +754,7 @@ describe("CodexProviderAdapter", () => {
           method: "turn/interrupt",
           params: { turnId: "turn-1" },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "TASK_BUSY" });
     expect(second.writes.map((frame) => frame.method)).toContain(
@@ -589,7 +763,7 @@ describe("CodexProviderAdapter", () => {
     expect(second.writes.map((frame) => frame.method)).not.toContain(
       "turn/interrupt",
     );
-    expect(manager.getTask(created.task.id).state).toBe("idle");
+    expect(manager.getTask(requireTaskResult(created).id).state).toBe("idle");
 
     await manager.shutdown();
     await adapter.shutdown();
@@ -623,7 +797,7 @@ describe("CodexProviderAdapter", () => {
       workspace,
       workspaceRiskAccepted: true,
     });
-    await adapter.taskStream.activate(created.task.id);
+    await adapter.taskStream.activate(requireTaskResult(created).id);
     await adapter.taskStream.submit({
       deviceId,
       message: parseClientFrame(adapter, {
@@ -631,7 +805,7 @@ describe("CodexProviderAdapter", () => {
         method: "turn/start",
         params: { input: [] },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     first.emitFrame({
       id: "approval-old",
@@ -641,7 +815,7 @@ describe("CodexProviderAdapter", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     first.emit("close", 1, null);
-    await adapter.taskStream.activate(created.task.id);
+    await adapter.taskStream.activate(requireTaskResult(created).id);
 
     const staleResponse = adapter.taskStream.parseClientFrame(
       JSON.stringify({ id: "approval-old", result: { decision: "accept" } }),
@@ -651,7 +825,7 @@ describe("CodexProviderAdapter", () => {
       adapter.taskStream.submit({
         deviceId,
         message: staleResponse,
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "STALE_APPROVAL" });
     await adapter.shutdown();
@@ -703,9 +877,9 @@ describe("CodexProviderAdapter", () => {
       adapter.taskStream.submit({
         deviceId,
         message: promptFrame,
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
-    ).resolves.toMatchObject({ id: created.task.id });
+    ).resolves.toMatchObject({ id: requireTaskResult(created).id });
 
     const outsideWorkspaceFrame = adapter.taskStream.parseClientFrame(
       JSON.stringify({
@@ -719,7 +893,7 @@ describe("CodexProviderAdapter", () => {
       adapter.taskStream.submit({
         deviceId,
         message: outsideWorkspaceFrame,
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "WORKSPACE_NOT_AUTHORIZED" });
     await adapter.shutdown();
@@ -848,7 +1022,7 @@ describe("CodexProviderAdapter", () => {
         method: "turn/start",
         params: { input: [] },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     await runEntered;
 
@@ -860,9 +1034,9 @@ describe("CodexProviderAdapter", () => {
           method: "model/list",
           params: {},
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
-    ).resolves.toMatchObject({ id: created.task.id });
+    ).resolves.toMatchObject({ id: requireTaskResult(created).id });
     expect(process.writes).toContainEqual(
       expect.objectContaining({ method: "model/list" }),
     );
@@ -919,7 +1093,7 @@ describe("CodexProviderAdapter", () => {
         method: "turn/start",
         params: { input: [] },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
 
     blockPaths = true;
@@ -935,7 +1109,7 @@ describe("CodexProviderAdapter", () => {
             input: [],
           },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       });
     const activeSteer = steer("active-steer");
     await pathEntered;
@@ -955,7 +1129,7 @@ describe("CodexProviderAdapter", () => {
           method: "turn/interrupt",
           params: { turnId: "turn-1" },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).resolves.toMatchObject({ state: "idle" });
     releasePath();
@@ -1002,10 +1176,10 @@ describe("CodexProviderAdapter", () => {
           method: "turn/start",
           params: { input: [] },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).resolves.toMatchObject({ state: "idle" });
-    expect(manager.getTask(created.task.id)).toMatchObject({
+    expect(manager.getTask(requireTaskResult(created).id)).toMatchObject({
       activeTurnId: null,
       state: "idle",
     });
@@ -1014,7 +1188,7 @@ describe("CodexProviderAdapter", () => {
       params: { requestId: "unknown", threadId: "thread-1" },
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(manager.getTask(created.task.id).state).toBe("idle");
+    expect(manager.getTask(requireTaskResult(created).id).state).toBe("idle");
 
     await manager.shutdown();
     await adapter.shutdown();
@@ -1051,7 +1225,7 @@ describe("CodexProviderAdapter", () => {
         method: "turn/start",
         params: { input: [] },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     process.failInterrupts = true;
 
@@ -1063,10 +1237,10 @@ describe("CodexProviderAdapter", () => {
           method: "turn/interrupt",
           params: { turnId: "turn-1" },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).resolves.toMatchObject({ state: "idle" });
-    expect(manager.getTask(created.task.id)).toMatchObject({
+    expect(manager.getTask(requireTaskResult(created).id)).toMatchObject({
       activeTurnId: null,
       state: "idle",
     });
@@ -1122,7 +1296,7 @@ describe("CodexProviderAdapter", () => {
         method: "turn/start",
         params: { cwd: `${workspace}\\pending`, input: [] },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     const staleResult = expect(staleTurn).rejects.toMatchObject({
       code: "TASK_OPERATION_SUPERSEDED",
@@ -1132,7 +1306,7 @@ describe("CodexProviderAdapter", () => {
     await manager.closeTask({
       deviceId,
       operationId: "00000000-0000-4000-8000-000000000028",
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     releasePath();
     await staleResult;
@@ -1199,6 +1373,14 @@ describe("CodexProviderAdapter", () => {
         skills: true,
       },
       streamProtocol: "codex-app-server-json-rpc",
+      threadManagement: {
+        archive: true,
+        delete: true,
+        fork: true,
+        includeArchived: true,
+        search: true,
+        unarchive: true,
+      },
     });
     await adapter.shutdown();
   });
@@ -1228,12 +1410,12 @@ describe("CodexProviderAdapter", () => {
       workspaceRiskAccepted: true,
     });
     const received: unknown[] = [];
-    adapter.taskStream.subscribe(created.task.id, undefined, {
+    adapter.taskStream.subscribe(requireTaskResult(created).id, undefined, {
       send(frame) {
         received.push(frame);
       },
     });
-    await adapter.taskStream.activate(created.task.id);
+    await adapter.taskStream.activate(requireTaskResult(created).id);
 
     await adapter.taskStream.submit({
       deviceId,
@@ -1242,7 +1424,7 @@ describe("CodexProviderAdapter", () => {
         method: "account/read",
         params: {},
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     await adapter.taskStream.submit({
       deviceId,
@@ -1251,7 +1433,7 @@ describe("CodexProviderAdapter", () => {
         method: "skills/list",
         params: { cwd: workspace },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     await adapter.taskStream.submit({
       deviceId,
@@ -1260,7 +1442,7 @@ describe("CodexProviderAdapter", () => {
         method: "hooks/list",
         params: {},
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     await adapter.taskStream.submit({
       deviceId,
@@ -1269,7 +1451,7 @@ describe("CodexProviderAdapter", () => {
         method: "mcpServerStatus/list",
         params: {},
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     await adapter.taskStream.submit({
       deviceId,
@@ -1278,7 +1460,7 @@ describe("CodexProviderAdapter", () => {
         method: "account/rateLimits/read",
         params: {},
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
 
     expect(process.writes).toContainEqual(
@@ -1483,7 +1665,7 @@ describe("CodexProviderAdapter", () => {
           method: "account/read",
           params: { refreshToken: true },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "CODEX_REQUEST_NOT_ALLOWED" });
     await expect(
@@ -1494,7 +1676,7 @@ describe("CodexProviderAdapter", () => {
           method: "skills/list",
           params: { cwds: ["C:\\outside"] },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "WORKSPACE_NOT_AUTHORIZED" });
     await expect(
@@ -1505,7 +1687,7 @@ describe("CodexProviderAdapter", () => {
           method: "skills/list",
           params: { cwd: "C:\\outside" },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "WORKSPACE_NOT_AUTHORIZED" });
 
@@ -1537,12 +1719,12 @@ describe("CodexProviderAdapter", () => {
       workspaceRiskAccepted: true,
     });
     const received: unknown[] = [];
-    adapter.taskStream.subscribe(created.task.id, undefined, {
+    adapter.taskStream.subscribe(requireTaskResult(created).id, undefined, {
       send(frame) {
         received.push(frame);
       },
     });
-    await adapter.taskStream.activate(created.task.id);
+    await adapter.taskStream.activate(requireTaskResult(created).id);
 
     await adapter.taskStream.submit({
       deviceId,
@@ -1551,7 +1733,7 @@ describe("CodexProviderAdapter", () => {
         method: "thread/name/set",
         params: { name: "Provider parity audit" },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     expect(process.writes).toContainEqual(
       expect.objectContaining({
@@ -1567,7 +1749,7 @@ describe("CodexProviderAdapter", () => {
       method: "thread/name/updated",
       params: { name: "Provider parity audit", threadId: "thread-1" },
     });
-    expect(manager.getTask(created.task.id).state).toBe("idle");
+    expect(manager.getTask(requireTaskResult(created).id).state).toBe("idle");
 
     await adapter.taskStream.submit({
       deviceId,
@@ -1579,7 +1761,7 @@ describe("CodexProviderAdapter", () => {
           target: { type: "uncommittedChanges" },
         },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     expect(process.writes).toContainEqual(
       expect.objectContaining({
@@ -1592,7 +1774,7 @@ describe("CodexProviderAdapter", () => {
       }),
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(manager.getTask(created.task.id)).toMatchObject({
+    expect(manager.getTask(requireTaskResult(created).id)).toMatchObject({
       activeTurnId: "review-turn-1",
       state: "executing",
     });
@@ -1607,7 +1789,7 @@ describe("CodexProviderAdapter", () => {
             input: [{ text: "nudge", text_elements: [], type: "text" }],
           },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "TASK_BUSY" });
     process.emitFrame({
@@ -1618,7 +1800,7 @@ describe("CodexProviderAdapter", () => {
       },
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(manager.getTask(created.task.id)).toMatchObject({
+    expect(manager.getTask(requireTaskResult(created).id)).toMatchObject({
       activeTurnId: null,
       state: "idle",
     });
@@ -1630,7 +1812,7 @@ describe("CodexProviderAdapter", () => {
         method: "thread/compact/start",
         params: {},
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     expect(process.writes).toContainEqual(
       expect.objectContaining({
@@ -1639,7 +1821,7 @@ describe("CodexProviderAdapter", () => {
       }),
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(manager.getTask(created.task.id)).toMatchObject({
+    expect(manager.getTask(requireTaskResult(created).id)).toMatchObject({
       activeTurnId: "compact-turn-1",
       state: "executing",
     });
@@ -1680,7 +1862,7 @@ describe("CodexProviderAdapter", () => {
       workspace,
       workspaceRiskAccepted: true,
     });
-    await adapter.taskStream.activate(created.task.id);
+    await adapter.taskStream.activate(requireTaskResult(created).id);
 
     await expect(
       adapter.taskStream.submit({
@@ -1693,7 +1875,7 @@ describe("CodexProviderAdapter", () => {
             target: { type: "uncommittedChanges" },
           },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "CODEX_REQUEST_NOT_ALLOWED" });
     await expect(
@@ -1707,7 +1889,7 @@ describe("CodexProviderAdapter", () => {
             target: { type: "unsupported" },
           },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "CODEX_REQUEST_NOT_ALLOWED" });
     await expect(
@@ -1718,7 +1900,7 @@ describe("CodexProviderAdapter", () => {
           method: "thread/name/set",
           params: { name: "   " },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "CODEX_REQUEST_NOT_ALLOWED" });
     expect(
@@ -1830,7 +2012,7 @@ describe("CodexProviderAdapter", () => {
       workspace,
       workspaceRiskAccepted: true,
     });
-    await adapter.taskStream.activate(created.task.id);
+    await adapter.taskStream.activate(requireTaskResult(created).id);
 
     await adapter.taskStream.submit({
       deviceId,
@@ -1842,11 +2024,15 @@ describe("CodexProviderAdapter", () => {
           target: { type: "uncommittedChanges" },
         },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(manager.getTask(created.task.id).state).toBe("executing");
-    expect(manager.getTask(created.task.id).activeTurnId).toBe("review-turn-1");
+    expect(manager.getTask(requireTaskResult(created).id).state).toBe(
+      "executing",
+    );
+    expect(manager.getTask(requireTaskResult(created).id).activeTurnId).toBe(
+      "review-turn-1",
+    );
 
     await expect(
       adapter.taskStream.submit({
@@ -1859,7 +2045,7 @@ describe("CodexProviderAdapter", () => {
             turnId: "review-turn-1",
           },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "TASK_BUSY" });
     expect(process.writes.some((frame) => frame.method === "turn/steer")).toBe(
@@ -1871,12 +2057,16 @@ describe("CodexProviderAdapter", () => {
   });
 });
 
-function thread(id = "thread-1"): Record<string, unknown> {
+function thread(
+  id = "thread-1",
+  extras: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     cwd: workspace,
     id,
     sessionId: `session-${id.slice("thread-".length)}`,
     turns: [],
+    ...extras,
   };
 }
 

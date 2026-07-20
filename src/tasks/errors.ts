@@ -23,7 +23,8 @@ export type TaskErrorCode =
   | "UNSUPPORTED_PERMISSION_MODE"
   | "VOLUME_ROOT_RISK_NOT_ACCEPTED"
   | "WORKSPACE_NOT_AUTHORIZED"
-  | "WORKSPACE_SCOPE_RISK_NOT_ACCEPTED";
+  | "WORKSPACE_SCOPE_RISK_NOT_ACCEPTED"
+  | "CONFIRMATION_REQUIRED";
 
 export class TaskError extends Error {
   public constructor(

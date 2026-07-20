@@ -1,11 +1,20 @@
-import type { TaskSnapshot } from "../tasks/task-types.js";
+import { TaskError } from "../tasks/errors.js";
+import type {
+  TaskBoundOperationResult,
+  TaskNullOperationResult,
+  TaskSnapshot,
+} from "../tasks/task-types.js";
 import type { AgentProviderRegistry } from "./registry.js";
 import type {
+  AgentConversationArchiveInput,
   AgentConversationAttachInput,
+  AgentConversationDeleteInput,
+  AgentConversationForkInput,
   AgentConversationHistoryInput,
   AgentConversationListInput,
   AgentConversationOperationInput,
   AgentConversationPage,
+  AgentConversationUnarchiveInput,
   AgentProviderAdapter,
   AgentProviderDescriptor,
 } from "./types.js";
@@ -75,7 +84,7 @@ export class AgentRuntimeManager {
   public async createConversation(
     providerId: string,
     input: AgentConversationOperationInput,
-  ) {
+  ): Promise<TaskBoundOperationResult> {
     const provider = this.provider(providerId);
     const workspace = await this.taskServices.authorizeWorkspace(
       input.workspace,
@@ -86,11 +95,75 @@ export class AgentRuntimeManager {
   public async attachConversation(
     providerId: string,
     input: AgentConversationAttachInput,
-  ) {
+  ): Promise<TaskBoundOperationResult> {
     const provider = this.provider(providerId);
     const workspace = await this.taskServices.authorizeWorkspace(
       input.workspace,
     );
     return provider.attachConversation({ ...input, workspace });
   }
+
+  public async forkConversation(
+    providerId: string,
+    input: AgentConversationForkInput,
+  ): Promise<TaskBoundOperationResult> {
+    const provider = this.provider(providerId);
+    if (provider.forkConversation === undefined) {
+      throw unsupportedThreadManagement("fork");
+    }
+    const workspace = await this.taskServices.authorizeWorkspace(
+      input.workspace,
+    );
+    return provider.forkConversation({ ...input, workspace });
+  }
+
+  public async archiveConversation(
+    providerId: string,
+    input: AgentConversationArchiveInput,
+  ): Promise<TaskNullOperationResult> {
+    const provider = this.provider(providerId);
+    if (provider.archiveConversation === undefined) {
+      throw unsupportedThreadManagement("archive");
+    }
+    const workspace = await this.taskServices.authorizeWorkspace(
+      input.workspace,
+    );
+    return provider.archiveConversation({ ...input, workspace });
+  }
+
+  public async unarchiveConversation(
+    providerId: string,
+    input: AgentConversationUnarchiveInput,
+  ): Promise<TaskNullOperationResult> {
+    const provider = this.provider(providerId);
+    if (provider.unarchiveConversation === undefined) {
+      throw unsupportedThreadManagement("unarchive");
+    }
+    const workspace = await this.taskServices.authorizeWorkspace(
+      input.workspace,
+    );
+    return provider.unarchiveConversation({ ...input, workspace });
+  }
+
+  public async deleteConversation(
+    providerId: string,
+    input: AgentConversationDeleteInput,
+  ): Promise<TaskNullOperationResult> {
+    const provider = this.provider(providerId);
+    if (provider.deleteConversation === undefined) {
+      throw unsupportedThreadManagement("delete");
+    }
+    const workspace = await this.taskServices.authorizeWorkspace(
+      input.workspace,
+    );
+    return provider.deleteConversation({ ...input, workspace });
+  }
+}
+
+function unsupportedThreadManagement(operation: string): TaskError {
+  return new TaskError(
+    "TASK_CONTROL_NOT_SUPPORTED",
+    409,
+    `This provider does not support conversation ${operation}.`,
+  );
 }

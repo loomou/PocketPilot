@@ -190,10 +190,17 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   `turnStarted()` has made a turn authoritative, late request errors must not
   roll the turn back. Authoritative native notifications call `turnStarted()`
   and `turnCompleted()`.
-- Provider-native non-turn P2 actions (for example Codex `thread/name/set`) may
-  run through the shared P2 lane without calling `reserveTurn()`. They still
-  require a current lease and task availability, but they do not consume active
-  capacity or invent a turn.
+- Conversation lifecycle operations that create or attach work return bound task
+  operation results (`created` / `attached` / `forked`) with a non-null `task`.
+  Thread-management operations that leave no local task return null-task results
+  (`archived` / `unarchived` / `deleted` with `task: null`).
+- Fork creates/reuses a non-terminal task for the new native conversation id.
+- Archive does not auto-close bound tasks.
+- Delete closes a non-terminal task bound to the deleted native conversation
+  only after the provider reports native delete success.
+- Archive and delete require explicit client confirmation
+  (`confirm: true`); missing/false confirmation yields
+  `409 CONFIRMATION_REQUIRED`.
 - When a provider marks a turn kind non-steerable (Codex review/compact), the
   adapter rejects mid-turn steering while preserving interrupt against the
   current active turn ID. Runtime-only turn-kind state is never persisted into

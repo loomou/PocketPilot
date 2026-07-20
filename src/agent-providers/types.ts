@@ -1,4 +1,8 @@
-import type { TaskOperationResult, TaskSnapshot } from "../tasks/task-types.js";
+import type {
+  TaskBoundOperationResult,
+  TaskNullOperationResult,
+  TaskSnapshot,
+} from "../tasks/task-types.js";
 
 export const agentProviderStatuses = [
   "available",
@@ -49,6 +53,15 @@ export type AgentStatusCatalogs = {
   skills?: true;
 };
 
+export type AgentThreadManagementCapabilities = {
+  archive: boolean;
+  delete: boolean;
+  fork: boolean;
+  includeArchived: boolean;
+  search: boolean;
+  unarchive: boolean;
+};
+
 export type AgentCapabilitySnapshot = {
   activeTurnSteering: boolean;
   approvals: boolean;
@@ -63,6 +76,7 @@ export type AgentCapabilitySnapshot = {
   resumeConversation: boolean;
   statusCatalogs: AgentStatusCatalogs;
   streamProtocol: string;
+  threadManagement: AgentThreadManagementCapabilities;
 };
 
 export type AgentProviderDescriptor = {
@@ -76,7 +90,9 @@ export type AgentProviderDescriptor = {
 
 export type AgentConversationListInput = {
   cursor?: string;
+  includeArchived?: boolean;
   limit?: number;
+  searchTerm?: string;
   workspace: string;
 };
 
@@ -96,6 +112,33 @@ export type AgentConversationOperationInput = {
 };
 
 export type AgentConversationAttachInput = AgentConversationOperationInput & {
+  nativeConversationId: string;
+};
+
+export type AgentConversationForkInput = AgentConversationOperationInput & {
+  nativeConversationId: string;
+};
+
+export type AgentConversationArchiveInput = AgentConversationOperationInput & {
+  /**
+   * Successful archives require `true`. Missing/false values must surface
+   * `CONFIRMATION_REQUIRED` instead of a schema validation failure.
+   */
+  confirm?: boolean;
+  nativeConversationId: string;
+};
+
+export type AgentConversationUnarchiveInput =
+  AgentConversationOperationInput & {
+    nativeConversationId: string;
+  };
+
+export type AgentConversationDeleteInput = AgentConversationOperationInput & {
+  /**
+   * Successful deletes require `true`. Missing/false values must surface
+   * `CONFIRMATION_REQUIRED` instead of a schema validation failure.
+   */
+  confirm?: boolean;
   nativeConversationId: string;
 };
 
@@ -143,16 +186,28 @@ export interface AgentProviderAdapter {
   readonly taskLifecycle?: AgentTaskLifecycleAdapter;
   readonly taskStream: AgentTaskStreamAdapter;
 
+  archiveConversation?(
+    input: AgentConversationArchiveInput,
+  ): Promise<TaskNullOperationResult>;
   attachConversation(
     input: AgentConversationAttachInput,
-  ): Promise<TaskOperationResult>;
+  ): Promise<TaskBoundOperationResult>;
   createConversation(
     input: AgentConversationOperationInput,
-  ): Promise<TaskOperationResult>;
+  ): Promise<TaskBoundOperationResult>;
+  deleteConversation?(
+    input: AgentConversationDeleteInput,
+  ): Promise<TaskNullOperationResult>;
+  forkConversation?(
+    input: AgentConversationForkInput,
+  ): Promise<TaskBoundOperationResult>;
   listConversations(
     input: AgentConversationListInput,
   ): Promise<AgentConversationPage<unknown>>;
   readConversation(
     input: AgentConversationHistoryInput,
   ): Promise<AgentConversationPage<unknown>>;
+  unarchiveConversation?(
+    input: AgentConversationUnarchiveInput,
+  ): Promise<TaskNullOperationResult>;
 }

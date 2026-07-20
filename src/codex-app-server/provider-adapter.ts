@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { posix, win32 } from "node:path";
 import type {
+  AgentConversationArchiveInput,
   AgentConversationAttachInput,
+  AgentConversationDeleteInput,
+  AgentConversationForkInput,
   AgentConversationHistoryInput,
   AgentConversationListInput,
   AgentConversationOperationInput,
   AgentConversationPage,
+  AgentConversationUnarchiveInput,
   AgentProviderAdapter,
   AgentProviderStatus,
   AgentTaskLifecycleAdapter,
@@ -16,7 +20,11 @@ import { noopLogger } from "../logging/logger.js";
 import { TaskError } from "../tasks/errors.js";
 import type { ProviderTaskRuntime } from "../tasks/provider-task-runtime.js";
 import type { TaskRepository } from "../tasks/task-repository.js";
-import type { TaskOperationResult, TaskSnapshot } from "../tasks/task-types.js";
+import type {
+  TaskBoundOperationResult,
+  TaskNullOperationResult,
+  TaskSnapshot,
+} from "../tasks/task-types.js";
 import {
   isPathWithinRoot,
   nodeWorkspaceDirectoryResolver,
@@ -176,6 +184,14 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
                 skills: true as const,
               },
               streamProtocol: "codex-app-server-json-rpc" as const,
+              threadManagement: {
+                archive: true,
+                delete: true,
+                fork: true,
+                includeArchived: true,
+                search: true,
+                unarchive: true,
+              },
             },
             protocolVersion: codexAppServerProtocolVersion,
           }
@@ -210,7 +226,11 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     const result = requireObject(
       await this.#bridge.request("thread/list", {
         ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(input.includeArchived === true ? { archived: true } : {}),
         ...(input.limit === undefined ? {} : { limit: input.limit }),
+        ...(input.searchTerm === undefined || input.searchTerm.length === 0
+          ? {}
+          : { searchTerm: input.searchTerm }),
         sourceKinds: ["cli", "vscode", "appServer"],
       }),
       "The Codex thread list response is invalid.",
@@ -267,8 +287,8 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
 
   public createConversation(
     input: AgentConversationOperationInput,
-  ): Promise<TaskOperationResult> {
-    return this.executeOperation(
+  ): Promise<TaskBoundOperationResult> {
+    return this.executeBoundOperation(
       input,
       "codex.conversation-created",
       async () => {
@@ -304,8 +324,8 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
 
   public attachConversation(
     input: AgentConversationAttachInput,
-  ): Promise<TaskOperationResult> {
-    return this.executeOperation(
+  ): Promise<TaskBoundOperationResult> {
+    return this.executeBoundOperation(
       input,
       "codex.conversation-attached",
       async () => {
@@ -324,6 +344,123 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
           action: "attached",
           auditResult: existing === undefined ? "attached" : "reused",
           task,
+        };
+      },
+    );
+  }
+
+  public forkConversation(
+    input: AgentConversationForkInput,
+  ): Promise<TaskBoundOperationResult> {
+    return this.executeBoundOperation(
+      input,
+      "codex.conversation-forked",
+      async () => {
+        const source = await this.requireAuthorizedThread(
+          input.workspace,
+          input.nativeConversationId,
+        );
+        const result = requireObject(
+          await this.#bridge.request("thread/fork", { threadId: source.id }),
+          "The Codex thread fork response is invalid.",
+        );
+        const thread = parseThread(result.thread);
+        if (
+          thread === undefined ||
+          !(await this.isAuthorizedThread(input.workspace, thread))
+        ) {
+          throw codexThreadNotFound();
+        }
+        const task = this.createTask(input.workspace, thread);
+        this.runtime(task);
+        return { action: "forked", auditResult: "forked", task };
+      },
+    );
+  }
+
+  public archiveConversation(
+    input: AgentConversationArchiveInput,
+  ): Promise<TaskNullOperationResult> {
+    return this.executeNullOperation(
+      input,
+      "codex.conversation-archived",
+      async () => {
+        if (input.confirm !== true) {
+          throw new TaskError(
+            "CONFIRMATION_REQUIRED",
+            409,
+            "Archive requires confirm=true.",
+          );
+        }
+        const thread = await this.requireAuthorizedThread(
+          input.workspace,
+          input.nativeConversationId,
+        );
+        await this.#bridge.request("thread/archive", { threadId: thread.id });
+        // Archive is reversible and must not auto-close bound tasks.
+        return {
+          action: "archived",
+          auditResult: "archived",
+          task: null,
+        };
+      },
+    );
+  }
+
+  public unarchiveConversation(
+    input: AgentConversationUnarchiveInput,
+  ): Promise<TaskNullOperationResult> {
+    return this.executeNullOperation(
+      input,
+      "codex.conversation-unarchived",
+      async () => {
+        const thread = await this.requireAuthorizedThread(
+          input.workspace,
+          input.nativeConversationId,
+        );
+        await this.#bridge.request("thread/unarchive", {
+          threadId: thread.id,
+        });
+        return {
+          action: "unarchived",
+          auditResult: "unarchived",
+          task: null,
+        };
+      },
+    );
+  }
+
+  public deleteConversation(
+    input: AgentConversationDeleteInput,
+  ): Promise<TaskNullOperationResult> {
+    return this.executeNullOperation(
+      input,
+      "codex.conversation-deleted",
+      async () => {
+        if (input.confirm !== true) {
+          throw new TaskError(
+            "CONFIRMATION_REQUIRED",
+            409,
+            "Delete requires confirm=true.",
+          );
+        }
+        const thread = await this.requireAuthorizedThread(
+          input.workspace,
+          input.nativeConversationId,
+        );
+        await this.#bridge.request("thread/delete", { threadId: thread.id });
+        const localTask =
+          this.#repository.findNonTerminalByProviderConversationId(
+            CODEX_PROVIDER_ID,
+            thread.id,
+          );
+        if (localTask !== undefined) {
+          await this.terminateLocalTask(localTask.id, "deleted");
+        }
+        return {
+          action: "deleted",
+          auditResult: "deleted",
+          task: null,
         };
       },
     );
@@ -1003,6 +1140,19 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     });
   }
 
+  private async terminateLocalTask(
+    taskId: string,
+    reason: "archived" | "deleted",
+  ): Promise<void> {
+    const task = this.#repository.find(taskId);
+    if (task === undefined || task.state === "terminal") {
+      return;
+    }
+    await this.closeTaskRuntime(taskId);
+    this.#taskRuntime.markTerminal(taskId);
+    void reason;
+  }
+
   private runtime(task: TaskSnapshot): CodexRuntime {
     let runtime = this.#runtimes.get(task.id);
     if (runtime !== undefined) {
@@ -1160,20 +1310,27 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     }
   }
 
-  private async executeOperation(
+  private async executeBoundOperation(
     input: AgentConversationOperationInput,
     operation: string,
     run: () => Promise<{
-      action: "attached" | "created";
+      action: "attached" | "created" | "forked";
       auditResult: string;
       task: TaskSnapshot;
     }>,
-  ): Promise<TaskOperationResult> {
+  ): Promise<TaskBoundOperationResult> {
     const existing = this.#repository.readOperation(
       input.deviceId,
       input.operationId,
     );
     if (existing?.kind === "result") {
+      if (existing.result.task === null) {
+        throw new TaskError(
+          "INVALID_TASK_OPERATION",
+          409,
+          "Stored operation result is not a bound task operation.",
+        );
+      }
       return existing.result;
     }
     if (existing?.kind === "error") {
@@ -1188,7 +1345,45 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
       result: { action: completed.action, task: completed.task },
       resultLabel: completed.auditResult,
       taskId: completed.task.id,
-    });
+    }) as TaskBoundOperationResult;
+  }
+
+  private async executeNullOperation(
+    input: AgentConversationOperationInput,
+    operation: string,
+    run: () => Promise<{
+      action: "archived" | "unarchived" | "deleted";
+      auditResult: string;
+      task: null;
+    }>,
+  ): Promise<TaskNullOperationResult> {
+    const existing = this.#repository.readOperation(
+      input.deviceId,
+      input.operationId,
+    );
+    if (existing?.kind === "result") {
+      if (existing.result.task !== null) {
+        throw new TaskError(
+          "INVALID_TASK_OPERATION",
+          409,
+          "Stored operation result is not a null task operation.",
+        );
+      }
+      return existing.result;
+    }
+    if (existing?.kind === "error") {
+      throw new TaskError(existing.code, existing.statusCode, existing.message);
+    }
+    const completed = await run();
+    return this.#repository.persistOperation({
+      deviceId: input.deviceId,
+      expiresAt: this.#now() + OPERATION_RESULT_TTL_MS,
+      operation,
+      operationId: input.operationId,
+      result: { action: completed.action, task: null },
+      resultLabel: completed.auditResult,
+      taskId: null,
+    }) as TaskNullOperationResult;
   }
 }
 
