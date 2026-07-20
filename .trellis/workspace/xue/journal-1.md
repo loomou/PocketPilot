@@ -506,3 +506,36 @@ Aligned Codex App Server with the shared provider task runtime: P2 capacity and 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: Record merge-only main policy
+
+**Date**: 2026-07-20
+**Task**: Record merge-only main policy
+**Branch**: `docs/main-merge-policy`
+
+### Summary
+
+Documented the hard project rule that commits must be created on non-main branches and main accepts changes only through branch merges; no automated enforcement was added.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c068c21` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
