@@ -148,6 +148,7 @@ const providerCapabilitiesResponseSchema = agentProviderDescriptorSchema.pick({
   capabilities: true,
   id: true,
   protocolVersion: true,
+  reasonCode: true,
   status: true,
 });
 const pageSchema = z.object({
@@ -212,9 +213,11 @@ export function registerProviderRoutes(
         tags: providerTag,
       },
     },
-    (request) => {
+    async (request) => {
       authenticate(request);
-      return { providers: options.agentRuntimeManager.listProviders() };
+      return {
+        providers: await options.agentRuntimeManager.listProviders(),
+      };
     },
   );
 
@@ -235,7 +238,7 @@ export function registerProviderRoutes(
         tags: providerTag,
       },
     },
-    (request) => {
+    async (request) => {
       authenticate(request);
       return options.agentRuntimeManager.providerCapabilities(
         request.params.providerId,

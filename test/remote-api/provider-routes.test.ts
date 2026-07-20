@@ -300,6 +300,130 @@ describe("provider routes", () => {
       "delete",
     ]);
   });
+
+  it("refreshes provider readiness on discovery and capabilities", async () => {
+    let probes = 0;
+    const calls: Array<{ name: string; value: unknown }> = [];
+    const adapter = fakeProvider(calls, "not_installed") as ReturnType<
+      typeof fakeProvider
+    > & {
+      descriptor: {
+        capabilities?: unknown;
+        displayName: string;
+        id: string;
+        protocolVersion?: string;
+        reasonCode?: string;
+        status: string;
+      };
+      refreshReadiness?: () => Promise<void>;
+    };
+    // Keep id consistent with route paths while still starting unavailable.
+    adapter.descriptor = {
+      displayName: "Fake",
+      id: "fake",
+      reasonCode: "STALE",
+      status: "not_installed",
+    };
+    adapter.refreshReadiness = async () => {
+      probes += 1;
+      adapter.descriptor = {
+        capabilities: {
+          activeTurnSteering: true,
+          approvals: false,
+          attachments: false,
+          effort: false,
+          historyPagination: "cursor",
+          interrupt: true,
+          modes: false,
+          models: false,
+          nativeActions: {},
+          newConversation: true,
+          resumeConversation: true,
+          statusCatalogs: {},
+          streamProtocol: "test",
+          threadManagement: {
+            archive: false,
+            delete: false,
+            fork: false,
+            includeArchived: false,
+            search: false,
+            unarchive: false,
+          },
+        },
+        displayName: "Fake",
+        id: "fake",
+        protocolVersion: "fake-1",
+        status: "available",
+      };
+    };
+    const runtime = new AgentRuntimeManager(
+      new AgentProviderRegistry([adapter]),
+      {
+        authorizeWorkspace: async (workspace) => workspace,
+        getTask: () => taskSnapshot("fake"),
+      },
+    );
+    const app = await buildRemoteApiApp({
+      agentRuntimeManager: runtime,
+      deviceAuthService: deviceAuthService(),
+    });
+    apps.push(app);
+
+    const providers = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "GET",
+      url: "/v1/providers",
+    });
+    expect(providers.statusCode).toBe(200);
+    expect(probes).toBe(1);
+    expect(providers.json()).toEqual({
+      providers: [
+        {
+          capabilities: {
+            activeTurnSteering: true,
+            approvals: false,
+            attachments: false,
+            effort: false,
+            historyPagination: "cursor",
+            interrupt: true,
+            modes: false,
+            models: false,
+            nativeActions: {},
+            newConversation: true,
+            resumeConversation: true,
+            statusCatalogs: {},
+            streamProtocol: "test",
+            threadManagement: {
+              archive: false,
+              delete: false,
+              fork: false,
+              includeArchived: false,
+              search: false,
+              unarchive: false,
+            },
+          },
+          displayName: "Fake",
+          id: "fake",
+          protocolVersion: "fake-1",
+          status: "available",
+        },
+      ],
+    });
+
+    const capabilities = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "GET",
+      url: "/v1/providers/fake/capabilities",
+    });
+    expect(capabilities.statusCode).toBe(200);
+    expect(probes).toBe(2);
+    expect(capabilities.json()).toMatchObject({
+      id: "fake",
+      protocolVersion: "fake-1",
+      status: "available",
+    });
+    expect(capabilities.json().reasonCode).toBeUndefined();
+  });
 });
 
 function fakeProvider(

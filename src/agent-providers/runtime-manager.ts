@@ -17,6 +17,7 @@ import type {
   AgentConversationUnarchiveInput,
   AgentProviderAdapter,
   AgentProviderDescriptor,
+  AgentProviderReadinessRefreshOptions,
 } from "./types.js";
 
 /** Provider-neutral orchestration for discovery and conversation resources. */
@@ -29,12 +30,21 @@ export class AgentRuntimeManager {
     },
   ) {}
 
-  public listProviders(): AgentProviderDescriptor[] {
+  public async listProviders(
+    options: AgentProviderReadinessRefreshOptions = {},
+  ): Promise<AgentProviderDescriptor[]> {
+    await this.registry.refreshDescriptors(options);
     return this.registry.descriptors();
   }
 
-  public providerCapabilities(providerId: string) {
-    const descriptor = this.registry.descriptor(providerId);
+  public async providerCapabilities(
+    providerId: string,
+    options: AgentProviderReadinessRefreshOptions = {},
+  ) {
+    const descriptor = await this.registry.refreshDescriptor(
+      providerId,
+      options,
+    );
     return {
       ...(descriptor.capabilities === undefined
         ? {}
@@ -43,6 +53,9 @@ export class AgentRuntimeManager {
       ...(descriptor.protocolVersion === undefined
         ? {}
         : { protocolVersion: descriptor.protocolVersion }),
+      ...(descriptor.reasonCode === undefined
+        ? {}
+        : { reasonCode: descriptor.reasonCode }),
       status: descriptor.status,
     };
   }

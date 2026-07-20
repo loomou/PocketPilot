@@ -3,6 +3,7 @@ import type {
   AgentCapabilitySnapshot,
   AgentProviderAdapter,
   AgentProviderDescriptor,
+  AgentProviderReadinessRefreshOptions,
 } from "./types.js";
 
 /** Owns provider registration and diagnostics-safe discovery. */
@@ -30,6 +31,33 @@ export class AgentProviderRegistry {
 
   public descriptor(providerId: string): AgentProviderDescriptor {
     return sanitizeDescriptor(this.get(providerId).descriptor);
+  }
+
+  /**
+   * Refreshes every registered adapter's readiness cache when supported.
+   * Adapters without `refreshReadiness` keep their current descriptor.
+   */
+  public async refreshDescriptors(
+    options: AgentProviderReadinessRefreshOptions = {},
+  ): Promise<void> {
+    await Promise.all(
+      [...this.#providers.values()].map(async (adapter) => {
+        await adapter.refreshReadiness?.(options);
+      }),
+    );
+  }
+
+  /**
+   * Refreshes one provider's readiness cache when supported, then returns the
+   * sanitized descriptor snapshot.
+   */
+  public async refreshDescriptor(
+    providerId: string,
+    options: AgentProviderReadinessRefreshOptions = {},
+  ): Promise<AgentProviderDescriptor> {
+    const adapter = this.get(providerId);
+    await adapter.refreshReadiness?.(options);
+    return sanitizeDescriptor(adapter.descriptor);
   }
 
   public get(providerId: string): AgentProviderAdapter {

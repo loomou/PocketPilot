@@ -177,6 +177,14 @@ export type AgentTaskLifecycleAdapter = {
 
 export type AgentTaskController = AgentTaskLifecycleAdapter;
 
+/** Options for adapter readiness refresh. */
+export type AgentProviderReadinessRefreshOptions = {
+  force?: boolean;
+};
+
+/** Default discovery readiness cache TTL for adapter probes. */
+export const PROVIDER_READINESS_TTL_MS = 30_000;
+
 /**
  * Provider-specific behavior behind the common Agent lifecycle.
  * Native rows and messages intentionally remain opaque to this layer.
@@ -207,6 +215,14 @@ export interface AgentProviderAdapter {
   readConversation(
     input: AgentConversationHistoryInput,
   ): Promise<AgentConversationPage<unknown>>;
+  /**
+   * Refreshes bounded readiness status/reasonCode/protocolVersion when the
+   * local cache is stale. Discovery and capabilities routes trigger this; it
+   * must never leak install paths, credentials, or raw process diagnostics.
+   */
+  refreshReadiness?(
+    options?: AgentProviderReadinessRefreshOptions,
+  ): Promise<void>;
   unarchiveConversation?(
     input: AgentConversationUnarchiveInput,
   ): Promise<TaskNullOperationResult>;

@@ -118,6 +118,10 @@ query string, logs, analytics, crash reports, or screenshots.
 
 1. Pair and retain the device key plus rotating credentials.
 2. Authenticate, call `GET /v1/providers`, and select an `available` provider.
+   Unavailable providers remain listed with a stable `reasonCode` (for example
+   `CODEX_COMMAND_NOT_FOUND` or `CLAUDE_SDK_NOT_AVAILABLE`). Discovery and
+   capabilities refresh host readiness with a short server-side TTL and never
+   expose install paths, credentials, or raw process diagnostics.
 3. Read `/v1/providers/{providerId}/capabilities`, then call
    `GET /v1/workspaces`.
 4. Select an authorized workspace, then call
@@ -151,7 +155,7 @@ must be generated from OpenAPI rather than copied from this table.
 | Authentication | `POST /v1/auth/refresh-challenge/{deviceId}` | `createRefreshChallenge` | Public bootstrap; get refresh proof challenge |
 | Authentication | `POST /v1/auth/refresh` | `refreshCredentials` | Public bootstrap; rotate credentials |
 | Authentication | `GET /v1/auth/session` | `getAuthenticatedDeviceSession` | Protected; validate access and read device metadata |
-| Providers | `GET /v1/providers` | `listAgentProviders` | Protected; list available and unavailable local providers |
+| Providers | `GET /v1/providers` | `listAgentProviders` | Protected; list available and unavailable local providers with refreshed readiness |
 | Providers | `GET /v1/providers/{providerId}/capabilities` | `getAgentProviderCapabilities` | Protected; read status, native protocol version, and capabilities |
 | Conversations | `GET /v1/providers/{providerId}/conversations` | `listAgentConversations` | Protected; list provider-native workspace conversations |
 | Conversations | `POST /v1/providers/{providerId}/conversations` | `createAgentConversation` | Protected; create an empty-history runtime |

@@ -55,6 +55,7 @@ GET /v1/providers/codex/capabilities
 ```
 
 只有 `status` 为 `available` 时才显示 Codex。能力快照的结构如下，具体协议版本以服务返回值为准：
+服务端会在 `GET /v1/providers` 与 capabilities 路由上按短 TTL 刷新 readiness。不可用时仍会返回稳定 `reasonCode`（例如 `CODEX_COMMAND_NOT_FOUND`、`CODEX_APP_SERVER_VERSION_UNSUPPORTED`、`CODEX_APP_SERVER_PROBE_FAILED`），且从不暴露安装路径、凭证或原始进程诊断。
 
 ```json
 {
@@ -861,4 +862,9 @@ pnpm test:codex:live
 Remove-Item Env:CODEX_APP_SERVER_TEST_CWD
 ```
 
-普通 `pnpm test` 不会启动 Codex App Server。移动端联调时应使用正在运行的 PocketPilot `/v1` 服务和对应访问凭据，不能绕过 PocketPilot 直接连接本机 App Server。
+Live 测试保持 opt-in，覆盖 readiness 探测、只读 status catalogs
+（account/rateLimits/skills/hooks/mcpServers）、list 过滤、rename，以及仅针对
+测试创建的 disposable thread 的 fork/archive/unarchive/delete 清理路径。
+普通 `pnpm test` 不会启动 Codex App Server。移动端联调时应使用正在运行的
+PocketPilot `/v1` 服务和对应访问凭据，不能绕过 PocketPilot 直接连接本机
+App Server。

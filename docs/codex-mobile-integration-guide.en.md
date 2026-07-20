@@ -56,7 +56,13 @@ GET /v1/providers
 GET /v1/providers/codex/capabilities
 ```
 
-Show Codex only when `status` is `available`. A capability snapshot has this shape; always use the protocol version returned by the server:
+Show Codex only when `status` is `available`. Discovery and capabilities
+refresh server-side readiness with a short TTL; unavailable providers stay
+listed with a stable `reasonCode` such as `CODEX_COMMAND_NOT_FOUND`,
+`CODEX_APP_SERVER_VERSION_UNSUPPORTED`, or `CODEX_APP_SERVER_PROBE_FAILED`.
+Those responses never include install paths, credentials, or raw process
+diagnostics. A capability snapshot has this shape; always use the protocol
+version returned by the server:
 
 ```json
 {
@@ -118,7 +124,7 @@ Show Codex only when `status` is `available`. A capability snapshot has this sha
 }
 ```
 
-Do not infer availability from a local executable path, the outcome of a previous launch, or a client-owned provider list. If Codex is unavailable, retain the returned `reasonCode` and direct the user to resolve installation or authentication on the computer.
+Do not infer availability from a local executable path, the outcome of a previous launch, or a client-owned provider list. Re-read `GET /v1/providers` (or capabilities) when the host may have installed, upgraded, or removed Codex; PocketPilot re-probes only after its readiness TTL expires.
 
 ### 2.3 Select an authorized workspace
 
@@ -867,4 +873,9 @@ pnpm test:codex:live
 Remove-Item Env:CODEX_APP_SERVER_TEST_CWD
 ```
 
-Normal `pnpm test` does not start Codex App Server. Mobile integration testing must use a running PocketPilot `/v1` service and its paired-device credentials; it must not bypass PocketPilot by connecting directly to the local App Server.
+Live coverage includes readiness discovery, readonly status catalogs
+(`account` / `rateLimits` / `skills` / `hooks` / `mcpServers`), rename, list
+filters, and fork+cleanup of disposable threads only. Normal `pnpm test` does
+not start Codex App Server. Mobile integration testing must use a running
+PocketPilot `/v1` service and its paired-device credentials; it must not bypass
+PocketPilot by connecting directly to the local App Server.

@@ -2131,3 +2131,190 @@ function createTaskManager(
 function createTaskRuntime(connection: StorageConnection) {
   return createTaskManager(connection).providerTaskRuntime();
 }
+
+describe("CodexProviderAdapter readiness", () => {
+  it("caches readiness probes and projects stable reason codes only", async () => {
+    let now = 5_000;
+    let probes = 0;
+    const bridge = {
+      initializeInfo: undefined,
+      subscribe() {
+        return () => undefined;
+      },
+      async start() {
+        return { userAgent: "codex_cli_rs/0.0.0" };
+      },
+      async close() {
+        return undefined;
+      },
+    } as never;
+    const repository = {
+      async getTask() {
+        return undefined;
+      },
+    } as never;
+    const taskRuntime = {
+      async runExclusive() {
+        throw new Error("unused");
+      },
+    } as never;
+
+    const adapter = new CodexProviderAdapter({
+      bridge,
+      command: "codex",
+      now: () => now,
+      readinessTtlMs: 30_000,
+      repository,
+      taskRuntime,
+      async probeReadiness() {
+        probes += 1;
+        if (probes === 1) {
+          return {
+            reasonCode: "CODEX_COMMAND_NOT_FOUND",
+            status: "not_installed",
+          };
+        }
+        if (probes === 2) {
+          return {
+            reasonCode: "CODEX_APP_SERVER_VERSION_UNSUPPORTED",
+            status: "unsupported_version",
+          };
+        }
+        if (probes === 3) {
+          throw new Error("spawn ENOENT /usr/local/bin/codex secret=token");
+        }
+        return {
+          protocolVersion: "codex-app-server@1",
+          status: "available",
+        };
+      },
+    });
+
+    await adapter.refreshReadiness();
+    expect(probes).toBe(1);
+    expect(adapter.descriptor).toEqual({
+      displayName: "Codex CLI",
+      id: "codex",
+      reasonCode: "CODEX_COMMAND_NOT_FOUND",
+      status: "not_installed",
+    });
+    expect(JSON.stringify(adapter.descriptor)).not.toContain("/usr/local/bin");
+    expect(JSON.stringify(adapter.descriptor)).not.toContain("secret=token");
+
+    await adapter.refreshReadiness();
+    expect(probes).toBe(1);
+
+    now += 30_001;
+    await adapter.refreshReadiness();
+    expect(probes).toBe(2);
+    expect(adapter.descriptor.status).toBe("unsupported_version");
+    expect(adapter.descriptor.reasonCode).toBe(
+      "CODEX_APP_SERVER_VERSION_UNSUPPORTED",
+    );
+
+    await adapter.refreshReadiness({ force: true });
+    expect(probes).toBe(3);
+    expect(adapter.descriptor).toEqual({
+      displayName: "Codex CLI",
+      id: "codex",
+      reasonCode: "CODEX_APP_SERVER_PROBE_FAILED",
+      status: "unhealthy",
+    });
+
+    await adapter.refreshReadiness({ force: true });
+    expect(probes).toBe(4);
+    expect(adapter.descriptor.status).toBe("available");
+    expect(adapter.descriptor.protocolVersion).toBe("codex-app-server@1");
+    expect(adapter.descriptor.capabilities?.streamProtocol).toBe(
+      "codex-app-server-json-rpc",
+    );
+  });
+
+  it("honors disabled constructor status until a forced readiness refresh", async () => {
+    let probes = 0;
+    const adapter = new CodexProviderAdapter({
+      bridge: {
+        subscribe() {
+          return () => undefined;
+        },
+      } as never,
+      repository: {} as never,
+      status: "disabled",
+      statusReasonCode: "CODEX_DISABLED_BY_ADMIN",
+      taskRuntime: {} as never,
+      async probeReadiness() {
+        probes += 1;
+        return { status: "available", protocolVersion: "codex-app-server@1" };
+      },
+    });
+
+    expect(adapter.descriptor.status).toBe("disabled");
+    expect(adapter.descriptor.reasonCode).toBe("CODEX_DISABLED_BY_ADMIN");
+    await adapter.refreshReadiness();
+    expect(probes).toBe(0);
+    await adapter.refreshReadiness({ force: true });
+    expect(probes).toBe(1);
+    expect(adapter.descriptor.status).toBe("available");
+  });
+
+  it("treats startup not_installed/available as provisional until first probe", async () => {
+    let probes = 0;
+    const adapter = new CodexProviderAdapter({
+      bridge: {
+        subscribe() {
+          return () => undefined;
+        },
+      } as never,
+      repository: {} as never,
+      status: "not_installed",
+      statusReasonCode: "CODEX_COMMAND_NOT_FOUND",
+      taskRuntime: {} as never,
+      async probeReadiness() {
+        probes += 1;
+        return {
+          protocolVersion: "codex-app-server@1",
+          status: "available",
+        };
+      },
+    });
+
+    expect(adapter.descriptor.status).toBe("not_installed");
+    await adapter.refreshReadiness();
+    expect(probes).toBe(1);
+    expect(adapter.descriptor.status).toBe("available");
+  });
+
+  it("single-flights concurrent readiness probes", async () => {
+    let probes = 0;
+    let releaseProbe!: () => void;
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const adapter = new CodexProviderAdapter({
+      bridge: {
+        subscribe() {
+          return () => undefined;
+        },
+      } as never,
+      repository: {} as never,
+      taskRuntime: {} as never,
+      async probeReadiness() {
+        probes += 1;
+        await probeGate;
+        return {
+          protocolVersion: "codex-app-server@1",
+          status: "available",
+        };
+      },
+    });
+
+    const first = adapter.refreshReadiness({ force: true });
+    const second = adapter.refreshReadiness({ force: true });
+    await Promise.resolve();
+    expect(probes).toBe(1);
+    releaseProbe();
+    await Promise.all([first, second]);
+    expect(probes).toBe(1);
+    expect(adapter.descriptor.status).toBe("available");
+  });
+});

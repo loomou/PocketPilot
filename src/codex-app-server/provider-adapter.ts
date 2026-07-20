@@ -11,10 +11,14 @@ import type {
   AgentConversationPage,
   AgentConversationUnarchiveInput,
   AgentProviderAdapter,
+  AgentProviderDescriptor,
+  AgentProviderReadinessRefreshOptions,
   AgentProviderStatus,
   AgentTaskLifecycleAdapter,
   AgentTaskStreamAdapter,
 } from "../agent-providers/types.js";
+import { PROVIDER_READINESS_TTL_MS } from "../agent-providers/types.js";
+import { readCodexCommand } from "../config/environment.js";
 import type { PocketPilotLogger } from "../logging/logger.js";
 import { noopLogger } from "../logging/logger.js";
 import { TaskError } from "../tasks/errors.js";
@@ -32,7 +36,9 @@ import {
 } from "../tasks/workspace-path-policy.js";
 import {
   type CodexAppServerBridge,
+  type CodexReadinessSnapshot,
   codexAppServerProtocolVersion,
+  probeCodexReadiness,
 } from "./bridge.js";
 import { CodexNativeJournal } from "./journal.js";
 import {
@@ -60,6 +66,82 @@ import { isCodexJsonObject, isCodexRequestId } from "./types.js";
 
 const OPERATION_RESULT_TTL_MS = 24 * 60 * 60 * 1_000;
 const CODEX_PROVIDER_ID = "codex";
+
+const CODEX_AVAILABLE_CAPABILITIES = {
+  activeTurnSteering: true,
+  approvals: true,
+  attachments: false,
+  effort: true,
+  historyPagination: "cursor" as const,
+  interrupt: true,
+  modes: true,
+  models: true,
+  nativeActions: {
+    compact: {
+      availability: "idle" as const,
+      method: "thread/compact/start",
+      startsTurn: true as const,
+    },
+    rename: {
+      availability: "always" as const,
+      method: "thread/name/set",
+      startsTurn: false as const,
+    },
+    review: {
+      availability: "idle" as const,
+      deliveries: ["inline"] as const,
+      method: "review/start",
+      startsTurn: true as const,
+      targetTypes: [
+        "uncommittedChanges",
+        "baseBranch",
+        "commit",
+        "custom",
+      ] as const,
+    },
+  },
+  newConversation: true,
+  resumeConversation: true,
+  statusCatalogs: {
+    account: true as const,
+    hooks: true as const,
+    mcpServers: true as const,
+    rateLimits: true as const,
+    skills: true as const,
+  },
+  streamProtocol: "codex-app-server-json-rpc" as const,
+  threadManagement: {
+    archive: true,
+    delete: true,
+    fork: true,
+    includeArchived: true,
+    search: true,
+    unarchive: true,
+  },
+};
+
+function buildCodexDescriptor(snapshot: {
+  protocolVersion?: string;
+  reasonCode?: string;
+  status: AgentProviderStatus;
+}): AgentProviderDescriptor {
+  const descriptor: AgentProviderDescriptor = {
+    displayName: "Codex CLI",
+    id: CODEX_PROVIDER_ID,
+    status: snapshot.status,
+  };
+  if (snapshot.status === "available") {
+    descriptor.capabilities = { ...CODEX_AVAILABLE_CAPABILITIES };
+    descriptor.protocolVersion =
+      snapshot.protocolVersion ?? codexAppServerProtocolVersion;
+  } else if (snapshot.protocolVersion !== undefined) {
+    descriptor.protocolVersion = snapshot.protocolVersion;
+  }
+  if (snapshot.reasonCode !== undefined) {
+    descriptor.reasonCode = snapshot.reasonCode;
+  }
+  return descriptor;
+}
 
 type PendingTurnStart = {
   connectionGeneration: number;
@@ -105,8 +187,14 @@ type NativeThread = CodexJsonObject & {
 
 export type CodexProviderAdapterOptions = {
   bridge: CodexAppServerBridge;
+  command?: string;
+  environment?: NodeJS.ProcessEnv;
   logger?: PocketPilotLogger;
   now?: () => number;
+  probeReadiness?: () =>
+    | Promise<CodexReadinessSnapshot>
+    | CodexReadinessSnapshot;
+  readinessTtlMs?: number;
   repository: TaskRepository;
   status?: AgentProviderStatus;
   statusReasonCode?: string;
@@ -116,93 +204,69 @@ export type CodexProviderAdapterOptions = {
 
 /** Implements Codex-native conversation and task behavior over App Server. */
 export class CodexProviderAdapter implements AgentProviderAdapter {
-  public readonly descriptor;
   public readonly taskLifecycle: AgentTaskLifecycleAdapter;
   public readonly taskStream: AgentTaskStreamAdapter;
   readonly #bridge: CodexAppServerBridge;
+  readonly #command: string;
+  readonly #environment: NodeJS.ProcessEnv;
   readonly #journal = new CodexNativeJournal();
   readonly #logger: PocketPilotLogger;
   readonly #now: () => number;
+  readonly #probeReadiness: () =>
+    | Promise<CodexReadinessSnapshot>
+    | CodexReadinessSnapshot;
+  readonly #readinessTtlMs: number;
   readonly #repository: TaskRepository;
   readonly #runtimes = new Map<string, CodexRuntime>();
   readonly #taskRuntime: ProviderTaskRuntime;
   readonly #workspaceDirectoryResolver: WorkspaceDirectoryResolver;
   readonly #unsubscribeBridge: () => void;
+  #descriptor: AgentProviderDescriptor;
+  #inFlightProbe: Promise<void> | undefined;
+  #readinessCheckedAt = 0;
+
+  public get descriptor(): AgentProviderDescriptor {
+    return this.#descriptor;
+  }
 
   public constructor(options: CodexProviderAdapterOptions) {
     this.#bridge = options.bridge;
+    this.#command =
+      options.command ??
+      readCodexCommand(options.environment ?? process.env) ??
+      "codex";
+    this.#environment = options.environment ?? process.env;
     this.#logger = options.logger ?? noopLogger;
     this.#now = options.now ?? Date.now;
+    this.#probeReadiness =
+      options.probeReadiness ??
+      (() =>
+        probeCodexReadiness({
+          command: this.#command,
+          environment: this.#environment,
+          existingBridge: this.#bridge,
+        }));
+    this.#readinessTtlMs = options.readinessTtlMs ?? PROVIDER_READINESS_TTL_MS;
     this.#repository = options.repository;
     this.#taskRuntime = options.taskRuntime;
     this.#workspaceDirectoryResolver =
       options.workspaceDirectoryResolver ?? nodeWorkspaceDirectoryResolver;
     const status = options.status ?? "available";
-    this.descriptor = {
+    this.#descriptor = buildCodexDescriptor({
+      status,
       ...(status === "available"
-        ? {
-            capabilities: {
-              activeTurnSteering: true,
-              approvals: true,
-              attachments: false,
-              effort: true,
-              historyPagination: "cursor" as const,
-              interrupt: true,
-              modes: true,
-              models: true,
-              nativeActions: {
-                compact: {
-                  availability: "idle" as const,
-                  method: "thread/compact/start",
-                  startsTurn: true as const,
-                },
-                rename: {
-                  availability: "always" as const,
-                  method: "thread/name/set",
-                  startsTurn: false as const,
-                },
-                review: {
-                  availability: "idle" as const,
-                  deliveries: ["inline"] as const,
-                  method: "review/start",
-                  startsTurn: true as const,
-                  targetTypes: [
-                    "uncommittedChanges",
-                    "baseBranch",
-                    "commit",
-                    "custom",
-                  ] as const,
-                },
-              },
-              newConversation: true,
-              resumeConversation: true,
-              statusCatalogs: {
-                account: true as const,
-                hooks: true as const,
-                mcpServers: true as const,
-                rateLimits: true as const,
-                skills: true as const,
-              },
-              streamProtocol: "codex-app-server-json-rpc" as const,
-              threadManagement: {
-                archive: true,
-                delete: true,
-                fork: true,
-                includeArchived: true,
-                search: true,
-                unarchive: true,
-              },
-            },
-            protocolVersion: codexAppServerProtocolVersion,
-          }
+        ? { protocolVersion: codexAppServerProtocolVersion }
         : {}),
-      displayName: "Codex CLI",
-      id: CODEX_PROVIDER_ID,
       ...(options.statusReasonCode === undefined
         ? {}
         : { reasonCode: options.statusReasonCode }),
-      status,
-    };
+    });
+    // Only admin-disabled status is treated as an intentional cached snapshot.
+    // Command-exists "available" / "not_installed" remain provisional until the
+    // first discovery readiness probe (version/protocol) completes.
+    if (options.status === "disabled") {
+      this.#readinessCheckedAt = this.#now();
+    }
     this.#unsubscribeBridge = this.#bridge.subscribe((delivery) =>
       this.onBridgeDelivery(delivery),
     );
@@ -464,6 +528,44 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
         };
       },
     );
+  }
+
+  public async refreshReadiness(
+    options: AgentProviderReadinessRefreshOptions = {},
+  ): Promise<void> {
+    const force = options.force === true;
+    const ageMs = this.#now() - this.#readinessCheckedAt;
+    if (
+      !force &&
+      this.#readinessCheckedAt > 0 &&
+      ageMs < this.#readinessTtlMs
+    ) {
+      return;
+    }
+    if (this.#inFlightProbe !== undefined) {
+      await this.#inFlightProbe;
+      return;
+    }
+    this.#inFlightProbe = this.#runProbe();
+    try {
+      await this.#inFlightProbe;
+    } finally {
+      this.#inFlightProbe = undefined;
+    }
+  }
+
+  async #runProbe(): Promise<void> {
+    try {
+      const snapshot = await this.#probeReadiness();
+      this.#descriptor = buildCodexDescriptor(snapshot);
+    } catch {
+      this.#descriptor = buildCodexDescriptor({
+        reasonCode: "CODEX_APP_SERVER_PROBE_FAILED",
+        status: "unhealthy",
+      });
+    } finally {
+      this.#readinessCheckedAt = this.#now();
+    }
   }
 
   public async shutdown(): Promise<void> {

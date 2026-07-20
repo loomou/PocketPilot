@@ -10,13 +10,18 @@ authenticated PocketPilot API remains the only remote boundary.
 
 ## Provider discovery
 
-Read `GET /v1/providers` before showing Codex as available. Then read
-`GET /v1/providers/codex/capabilities` and select the codec identified by:
+Read `GET /v1/providers` before showing Codex as available. PocketPilot refreshes
+provider readiness on this discovery route (and on capabilities) with a short
+server-side TTL. Treat `status` as authoritative for the current response and
+never infer availability from a local path or a previous launch.
+
+Then read `GET /v1/providers/codex/capabilities` and select the codec identified by:
 
 ```json
 {
   "id": "codex",
   "status": "available",
+  // "reasonCode": "CODEX_COMMAND_NOT_FOUND" // only when unavailable
   "protocolVersion": "codex-app-server@0.144",
   "capabilities": {
     "activeTurnSteering": true,
@@ -359,5 +364,11 @@ pnpm test:codex:live
 Remove-Item Env:CODEX_APP_SERVER_TEST_CWD
 ```
 
-Set `POCKETPILOT_CODEX_COMMAND` only when a non-default command or absolute
-executable path is required. Ordinary `pnpm test` skips the live suite.
+Set `CODEX_APP_SERVER_TEST_CWD` (or `POCKETPILOT_CODEX_LIVE_CWD`) to a writable
+authorized workspace before running live tests. The suite stays opt-in so
+default CI remains hermetic. Live coverage includes readiness probing, readonly
+status catalogs (`account`, `rateLimits`, `skills`, `hooks`, `mcpServers`),
+thread list filters, rename, fork, archive, unarchive, and delete of disposable
+test-created threads only. Set `POCKETPILOT_CODEX_COMMAND` only when a
+non-default command or absolute executable path is required. Ordinary
+`pnpm test` skips the live suite.

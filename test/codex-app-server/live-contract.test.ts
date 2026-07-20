@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { CodexAppServerBridge } from "../../src/codex-app-server/bridge.js";
+import {
+  CodexAppServerBridge,
+  isCodexCommandAvailable,
+  probeCodexReadiness,
+} from "../../src/codex-app-server/bridge.js";
+import { CodexProviderAdapter } from "../../src/codex-app-server/provider-adapter.js";
 import type {
   CodexBridgeDelivery,
   CodexJsonObject,
 } from "../../src/codex-app-server/types.js";
+import { readCodexCommand } from "../../src/config/environment.js";
 
 const workspace = process.env.CODEX_APP_SERVER_TEST_CWD;
 const describeLive = workspace === undefined ? describe.skip : describe;
@@ -184,6 +190,176 @@ describeLive("Codex App Server live contract", () => {
       if (threadId !== undefined) {
         await bridge
           .request("thread/archive", { threadId })
+          .catch(() => undefined);
+      }
+      await bridge.close();
+    }
+  }, 180_000);
+
+  it("probes readiness and projects a safe discovery descriptor", async () => {
+    const command =
+      process.env.POCKETPILOT_CODEX_COMMAND ??
+      readCodexCommand(process.env) ??
+      "codex";
+    expect(isCodexCommandAvailable(command)).toBe(true);
+
+    const snapshot = await probeCodexReadiness({
+      command,
+      probeTimeoutMs: 30_000,
+    });
+    expect(snapshot).toEqual({
+      protocolVersion: expect.stringMatching(/^codex-app-server@/u),
+      status: "available",
+    });
+    expect(JSON.stringify(snapshot)).not.toContain("secret=");
+    expect(JSON.stringify(snapshot)).not.toContain("ENOENT");
+
+    const adapter = new CodexProviderAdapter({
+      bridge: {
+        subscribe() {
+          return () => undefined;
+        },
+      } as never,
+      command,
+      repository: {} as never,
+      taskRuntime: {} as never,
+      async probeReadiness() {
+        return snapshot;
+      },
+    });
+    await adapter.refreshReadiness({ force: true });
+    expect(adapter.descriptor.status).toBe("available");
+    expect(adapter.descriptor.protocolVersion).toMatch(/^codex-app-server@/u);
+    expect(adapter.descriptor.reasonCode).toBeUndefined();
+    expect(JSON.stringify(adapter.descriptor)).not.toContain("secret");
+    expect(JSON.stringify(adapter.descriptor)).not.toContain("ENOENT");
+    expect(JSON.stringify(adapter.descriptor)).not.toContain("stderr");
+  }, 60_000);
+
+  it("covers status catalogs, list filters, rename, fork, and disposable cleanup", async () => {
+    const liveWorkspace = requireString(workspace, "CODEX_APP_SERVER_TEST_CWD");
+    const bridge = new CodexAppServerBridge({
+      ...(process.env.POCKETPILOT_CODEX_COMMAND === undefined
+        ? {}
+        : { command: process.env.POCKETPILOT_CODEX_COMMAND }),
+      cwd: liveWorkspace,
+      requestTimeoutMs: 120_000,
+    });
+
+    let primaryThreadId: string | undefined;
+    let forkedThreadId: string | undefined;
+    try {
+      await bridge.start();
+
+      // Readonly status catalogs (no refreshToken, no mutation routes).
+      // Live bridge returns native payloads; PocketPilot projection is unit-
+      // tested separately. Still assert no obvious secret fields in raw rows.
+      const account = asObject(
+        await bridge.request("account/read", { refreshToken: false }),
+      );
+      expect(account).toBeDefined();
+      const accountJson = JSON.stringify(account);
+      expect(accountJson).not.toMatch(/refreshToken/iu);
+      expect(accountJson).not.toMatch(/"accessToken"/iu);
+      expect(accountJson).not.toMatch(/"apiKey"/iu);
+
+      const rateLimits = asObject(
+        await bridge.request("account/rateLimits/read", {}),
+      );
+      expect(rateLimits).toBeDefined();
+
+      const skills = asObject(
+        await bridge.request("skills/list", { cwds: [liveWorkspace] }),
+      );
+      expect(skills).toBeDefined();
+
+      const hooks = asObject(
+        await bridge.request("hooks/list", { cwds: [liveWorkspace] }),
+      );
+      expect(hooks).toBeDefined();
+
+      const mcpServers = asObject(
+        await bridge.request("mcpServerStatus/list", {}),
+      );
+      expect(mcpServers).toBeDefined();
+
+      const started = asObject(
+        await bridge.request("thread/start", {
+          approvalPolicy: "never",
+          cwd: liveWorkspace,
+          ephemeral: false,
+          sandbox: "read-only",
+          threadSource: "pocketpilot-live-thread-mgmt",
+        }),
+      );
+      primaryThreadId = requireString(asObject(started.thread).id, "thread.id");
+
+      await expect(
+        bridge.request("thread/name/set", {
+          name: "pocketpilot-live-renamed",
+          threadId: primaryThreadId,
+        }),
+      ).resolves.toBeDefined();
+
+      const listedWithSearch = asObject(
+        await bridge.request("thread/list", {
+          cwd: liveWorkspace,
+          limit: 20,
+          searchTerm: "pocketpilot-live-renamed",
+          sourceKinds: ["cli", "vscode", "appServer"],
+        }),
+      );
+      expect(Array.isArray(listedWithSearch.data)).toBe(true);
+
+      // Fork creates the only disposable mutation target for archive/delete.
+      const forked = asObject(
+        await bridge.request("thread/fork", {
+          threadId: primaryThreadId,
+        }),
+      );
+      forkedThreadId = requireString(asObject(forked.thread).id, "thread.id");
+      expect(forkedThreadId).not.toBe(primaryThreadId);
+
+      await expect(
+        bridge.request("thread/archive", { threadId: forkedThreadId }),
+      ).resolves.toBeDefined();
+
+      const listedArchived = asObject(
+        await bridge.request("thread/list", {
+          archived: true,
+          cwd: liveWorkspace,
+          limit: 50,
+          sourceKinds: ["cli", "vscode", "appServer"],
+        }),
+      );
+      expect(Array.isArray(listedArchived.data)).toBe(true);
+
+      await expect(
+        bridge.request("thread/unarchive", { threadId: forkedThreadId }),
+      ).resolves.toBeDefined();
+
+      await expect(
+        bridge.request("thread/delete", {
+          threadId: forkedThreadId,
+        }),
+      ).resolves.toBeDefined();
+      forkedThreadId = undefined;
+
+      await expect(
+        bridge.request("thread/delete", {
+          threadId: primaryThreadId,
+        }),
+      ).resolves.toBeDefined();
+      primaryThreadId = undefined;
+    } finally {
+      if (forkedThreadId !== undefined) {
+        await bridge
+          .request("thread/delete", { threadId: forkedThreadId })
+          .catch(() => undefined);
+      }
+      if (primaryThreadId !== undefined) {
+        await bridge
+          .request("thread/delete", { threadId: primaryThreadId })
           .catch(() => undefined);
       }
       await bridge.close();

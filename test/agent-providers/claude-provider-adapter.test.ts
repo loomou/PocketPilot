@@ -150,6 +150,113 @@ describe("ClaudeProviderAdapter", () => {
     unsubscribe();
     expect(fixture.unsubscribed).toBe(true);
   });
+
+  it("probes Claude SDK readiness with TTL caching and stable reason codes", async () => {
+    let now = 1_000;
+    let probes = 0;
+    const fixture = createFixture();
+    const adapter = new ClaudeProviderAdapter(
+      fixture.manager as never,
+      fixture.journal as never,
+      {
+        now: () => now,
+        readinessTtlMs: 30_000,
+        async probeSdk() {
+          probes += 1;
+          if (probes === 1) {
+            return {
+              reasonCode: "CLAUDE_SDK_NOT_AVAILABLE",
+              status: "not_installed",
+            };
+          }
+          if (probes === 2) {
+            return {
+              reasonCode: "CLAUDE_SDK_VERSION_UNSUPPORTED",
+              status: "unsupported_version",
+            };
+          }
+          if (probes === 3) {
+            throw new Error("boom /home/secret/.claude");
+          }
+          return {
+            protocolVersion: "claude-agent-sdk@test",
+            status: "available",
+          };
+        },
+      },
+    );
+
+    await adapter.refreshReadiness();
+    expect(probes).toBe(1);
+    expect(adapter.descriptor).toEqual({
+      displayName: "Claude Code",
+      id: "claude",
+      reasonCode: "CLAUDE_SDK_NOT_AVAILABLE",
+      status: "not_installed",
+    });
+    expect(JSON.stringify(adapter.descriptor)).not.toContain("/home/secret");
+
+    await adapter.refreshReadiness();
+    expect(probes).toBe(1);
+
+    now += 30_001;
+    await adapter.refreshReadiness();
+    expect(probes).toBe(2);
+    expect(adapter.descriptor.status).toBe("unsupported_version");
+    expect(adapter.descriptor.reasonCode).toBe(
+      "CLAUDE_SDK_VERSION_UNSUPPORTED",
+    );
+
+    await adapter.refreshReadiness({ force: true });
+    expect(probes).toBe(3);
+    expect(adapter.descriptor).toEqual({
+      displayName: "Claude Code",
+      id: "claude",
+      reasonCode: "CLAUDE_SDK_PROBE_FAILED",
+      status: "unhealthy",
+    });
+    expect(JSON.stringify(adapter.descriptor)).not.toContain("/home/secret");
+
+    await adapter.refreshReadiness({ force: true });
+    expect(probes).toBe(4);
+    expect(adapter.descriptor.status).toBe("available");
+    expect(adapter.descriptor.protocolVersion).toBe("claude-agent-sdk@test");
+    expect(adapter.descriptor.capabilities?.streamProtocol).toBe(
+      "claude-agent-sdk",
+    );
+  });
+
+  it("single-flights concurrent Claude readiness probes", async () => {
+    const fixture = createFixture();
+    let probes = 0;
+    let releaseProbe!: () => void;
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const adapter = new ClaudeProviderAdapter(
+      fixture.manager as never,
+      fixture.journal as never,
+      {
+        async probeSdk() {
+          probes += 1;
+          await probeGate;
+          return {
+            protocolVersion: "claude-agent-sdk@test",
+            status: "available",
+          };
+        },
+      },
+    );
+
+    const first = adapter.refreshReadiness({ force: true });
+    const second = adapter.refreshReadiness({ force: true });
+    await Promise.resolve();
+    expect(probes).toBe(1);
+    releaseProbe();
+    await Promise.all([first, second]);
+    expect(probes).toBe(1);
+    expect(adapter.descriptor.status).toBe("available");
+  });
 });
 
 function createFixture() {
@@ -239,6 +346,8 @@ function createFixture() {
     attachInputs,
     createInputs,
     historyInputs,
+    journal,
+    manager,
     set historyResult(value: typeof historyResult) {
       historyResult = value;
     },

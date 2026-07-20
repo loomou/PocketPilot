@@ -4,6 +4,7 @@ import { AgentProviderRegistry } from "../../src/agent-providers/registry.js";
 import type {
   AgentCapabilitySnapshot,
   AgentProviderAdapter,
+  AgentProviderDescriptor,
 } from "../../src/agent-providers/types.js";
 
 function fakeProvider(
@@ -217,5 +218,139 @@ describe("AgentProviderRegistry", () => {
       search: true,
       unarchive: false,
     });
+  });
+
+  it("refreshes readiness before projecting descriptors", async () => {
+    let probes = 0;
+    const adapter = fakeProvider("ready", "not_installed") as ReturnType<
+      typeof fakeProvider
+    > & {
+      descriptor: AgentProviderDescriptor;
+      refreshReadiness?: () => Promise<void>;
+    };
+    adapter.descriptor = {
+      displayName: "Ready",
+      id: "ready",
+      reasonCode: "STALE",
+      status: "not_installed",
+    };
+    adapter.refreshReadiness = async () => {
+      probes += 1;
+      adapter.descriptor = {
+        capabilities: {
+          activeTurnSteering: false,
+          approvals: false,
+          attachments: false,
+          effort: false,
+          historyPagination: "cursor",
+          interrupt: false,
+          modes: false,
+          models: false,
+          nativeActions: {},
+          newConversation: true,
+          resumeConversation: true,
+          statusCatalogs: {},
+          streamProtocol: "test",
+          threadManagement: {
+            archive: false,
+            delete: false,
+            fork: false,
+            includeArchived: false,
+            search: false,
+            unarchive: false,
+          },
+        },
+        displayName: "Ready",
+        id: "ready",
+        protocolVersion: "ready-1",
+        status: "available",
+      };
+    };
+    const registry = new AgentProviderRegistry([adapter]);
+
+    await registry.refreshDescriptors();
+    expect(probes).toBe(1);
+    expect(registry.descriptors()).toEqual([
+      {
+        capabilities: {
+          activeTurnSteering: false,
+          approvals: false,
+          attachments: false,
+          effort: false,
+          historyPagination: "cursor",
+          interrupt: false,
+          modes: false,
+          models: false,
+          nativeActions: {},
+          newConversation: true,
+          resumeConversation: true,
+          statusCatalogs: {},
+          streamProtocol: "test",
+          threadManagement: {
+            archive: false,
+            delete: false,
+            fork: false,
+            includeArchived: false,
+            search: false,
+            unarchive: false,
+          },
+        },
+        displayName: "Ready",
+        id: "ready",
+        protocolVersion: "ready-1",
+        status: "available",
+      },
+    ]);
+
+    const refreshed = await registry.refreshDescriptor("ready", {
+      force: true,
+    });
+    expect(probes).toBe(2);
+    expect(refreshed.status).toBe("available");
+  });
+
+  it("single-flights concurrent descriptor refreshes per provider", async () => {
+    let probes = 0;
+    let releaseProbe!: () => void;
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    let inFlight: Promise<void> | undefined;
+    const adapter = fakeProvider("ready", "available") as ReturnType<
+      typeof fakeProvider
+    > & {
+      descriptor: AgentProviderDescriptor;
+      refreshReadiness?: () => Promise<void>;
+    };
+    adapter.refreshReadiness = async () => {
+      if (inFlight !== undefined) {
+        await inFlight;
+        return;
+      }
+      inFlight = (async () => {
+        probes += 1;
+        await probeGate;
+        adapter.descriptor = {
+          displayName: "Ready",
+          id: "ready",
+          protocolVersion: "ready-1",
+          status: "available",
+        };
+      })();
+      try {
+        await inFlight;
+      } finally {
+        inFlight = undefined;
+      }
+    };
+
+    const registry = new AgentProviderRegistry([adapter]);
+    const first = registry.refreshDescriptors({ force: true });
+    const second = registry.refreshDescriptors({ force: true });
+    await Promise.resolve();
+    expect(probes).toBe(1);
+    releaseProbe();
+    await Promise.all([first, second]);
+    expect(probes).toBe(1);
   });
 });
