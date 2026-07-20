@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/agent-provider-contracts.md", "reason": "Verify readiness statuses/reason codes stay closed and sanitized"}
+{"file": ".trellis/spec/backend/codex-app-server-contracts.md", "reason": "Verify version probe mapping and no secret/path leakage"}
+{"file": ".trellis/spec/backend/api-documentation-contracts.md", "reason": "Verify discovery docs/OpenAPI match readiness refresh behavior"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify probe cleanup, no unbounded process spam, no unrelated churn"}

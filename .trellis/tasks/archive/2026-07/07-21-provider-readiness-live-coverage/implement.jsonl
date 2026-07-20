@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/agent-provider-contracts.md", "reason": "Provider discovery status enum, sanitized descriptors, and unavailable execution rules"}
+{"file": ".trellis/spec/backend/codex-app-server-contracts.md", "reason": "Codex App Server initialize/version support and non-secret diagnostics boundaries"}
+{"file": ".trellis/spec/backend/api-documentation-contracts.md", "reason": "OpenAPI/provider route documentation consistency for discovery endpoints"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Code standards for probe/process lifecycle and test hygiene"}
