@@ -28,10 +28,15 @@ import {
 } from "./bridge.js";
 import { CodexNativeJournal } from "./journal.js";
 import {
+  type CodexTurnStartKind,
+  codexTurnStartKindForMethod,
+  isCodexBoundedText,
   isCodexClientRequestFrame,
   isCodexReadClientRequestMethod,
+  isCodexTurnStartingMethod,
   isForwardedCodexNotification,
   isForwardedCodexServerRequest,
+  isSupportedCodexReviewTarget,
   parseCodexClientFrame,
 } from "./protocol.js";
 import type {
@@ -46,14 +51,21 @@ import { isCodexJsonObject, isCodexRequestId } from "./types.js";
 const OPERATION_RESULT_TTL_MS = 24 * 60 * 60 * 1_000;
 const CODEX_PROVIDER_ID = "codex";
 
+type PendingTurnStart = {
+  connectionGeneration: number;
+  deviceId: string;
+  kind: CodexTurnStartKind;
+};
+
 type CodexRuntime = {
   activeDeviceId: string | undefined;
+  activeTurnKind: CodexTurnStartKind | undefined;
   activated: boolean;
   activation?: Promise<void> | undefined;
   connectionGeneration: number;
   pendingInterruptRequests: Set<string>;
   pendingServerRequests: Map<string, PendingServerRequest>;
-  pendingTurnStarts: Map<string, string>;
+  pendingTurnStarts: Map<string, PendingTurnStart>;
   taskId: string;
   threadId: string;
   workspace: string;
@@ -116,12 +128,36 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
             capabilities: {
               activeTurnSteering: true,
               approvals: true,
-              attachments: true,
+              attachments: false,
               effort: true,
               historyPagination: "cursor" as const,
               interrupt: true,
               modes: true,
               models: true,
+              nativeActions: {
+                compact: {
+                  availability: "idle" as const,
+                  method: "thread/compact/start",
+                  startsTurn: true as const,
+                },
+                rename: {
+                  availability: "always" as const,
+                  method: "thread/name/set",
+                  startsTurn: false as const,
+                },
+                review: {
+                  availability: "idle" as const,
+                  deliveries: ["inline"] as const,
+                  method: "review/start",
+                  startsTurn: true as const,
+                  targetTypes: [
+                    "uncommittedChanges",
+                    "baseBranch",
+                    "commit",
+                    "custom",
+                  ] as const,
+                },
+              },
               newConversation: true,
               resumeConversation: true,
               streamProtocol: "codex-app-server-json-rpc" as const,
@@ -235,6 +271,7 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
         const task = this.createTask(input.workspace, thread);
         this.#runtimes.set(task.id, {
           activeDeviceId: undefined,
+          activeTurnKind: undefined,
           activated: true,
           connectionGeneration: this.#bridge.connectionGeneration,
           pendingInterruptRequests: new Set(),
@@ -308,6 +345,7 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     runtime.pendingInterruptRequests.clear();
     runtime.pendingTurnStarts.clear();
     runtime.activeDeviceId = undefined;
+    runtime.activeTurnKind = undefined;
     const result = requireObject(
       await this.#bridge.request("thread/resume", {
         excludeTurns: true,
@@ -359,35 +397,38 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
       await this.validateRemotePaths(runtime.workspace, frame);
       lease.assertCurrent();
       if (isCodexClientRequestFrame(frame)) {
+        this.validateActionParams(frame);
         const forwarded = this.prepareTaskRequest(runtime, frame);
         const currentTask = this.requireCodexTask(task.id);
-        const startsTurn = frame.method === "turn/start";
-        if (startsTurn && currentTask.state !== "idle") {
+        const turnStartMethod = isCodexTurnStartingMethod(frame.method)
+          ? frame.method
+          : undefined;
+        if (turnStartMethod !== undefined && currentTask.state !== "idle") {
           throw new TaskError(
             "TASK_BUSY",
             409,
-            "An active Codex turn accepts input through turn/steer.",
+            turnStartMethod === "turn/start"
+              ? "An active Codex turn accepts input through turn/steer."
+              : "Codex review and compact require an idle task with no active turn.",
           );
         }
-        if (startsTurn) {
+        if (turnStartMethod !== undefined) {
           await this.#taskRuntime.reserveTurn(task.id, lease);
           lease.assertCurrent();
           this.#journal.beginTurn(task.id);
           runtime.activeDeviceId = input.deviceId;
-          runtime.pendingTurnStarts.set(
-            codexRequestKey(frame.id),
-            input.deviceId,
-          );
+          runtime.pendingTurnStarts.set(codexRequestKey(frame.id), {
+            connectionGeneration: runtime.connectionGeneration,
+            deviceId: input.deviceId,
+            kind: codexTurnStartKindForMethod(turnStartMethod),
+          });
         }
         try {
           await this.#bridge.forward(task.id, forwarded);
           lease.assertCurrent();
         } catch (error) {
-          if (startsTurn) {
-            runtime.pendingTurnStarts.delete(codexRequestKey(frame.id));
-            runtime.activeDeviceId = undefined;
-            this.#taskRuntime.rollbackTurn(task.id);
-            this.#journal.endTurn(task.id);
+          if (turnStartMethod !== undefined) {
+            this.rollbackPendingTurnStart(runtime, codexRequestKey(frame.id));
           }
           throw error;
         }
@@ -468,6 +509,7 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     this.#taskRuntime.beginInterrupt(task.id);
     this.#journal.endTurn(task.id);
     runtime.activeDeviceId = undefined;
+    runtime.activeTurnKind = undefined;
     runtime.pendingServerRequests.clear();
     runtime.pendingTurnStarts.clear();
     runtime.pendingInterruptRequests.add(requestKey);
@@ -513,6 +555,16 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     const task = this.#repository.require(runtime.taskId);
     if (frame.method === "turn/steer") {
       if (
+        runtime.activeTurnKind === "review" ||
+        runtime.activeTurnKind === "compact"
+      ) {
+        throw new TaskError(
+          "TASK_BUSY",
+          409,
+          "Codex review and compact turns do not accept turn/steer.",
+        );
+      }
+      if (
         task.activeTurnId === null ||
         params.expectedTurnId !== task.activeTurnId
       ) {
@@ -535,6 +587,47 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     return { ...frame, params };
   }
 
+  private validateActionParams(frame: CodexClientRequestFrame): void {
+    if (frame.method === "review/start") {
+      const delivery = frame.params.delivery;
+      if (
+        delivery !== undefined &&
+        delivery !== null &&
+        delivery !== "inline"
+      ) {
+        throw new TaskError(
+          "CODEX_REQUEST_NOT_ALLOWED",
+          403,
+          delivery === "detached"
+            ? "Codex detached review is not supported on remote tasks."
+            : "Codex review only supports inline delivery.",
+        );
+      }
+      if (!isSupportedCodexReviewTarget(frame.params.target)) {
+        throw new TaskError(
+          "CODEX_REQUEST_NOT_ALLOWED",
+          403,
+          "Codex review requires a supported native target.",
+        );
+      }
+      return;
+    }
+    if (frame.method === "thread/name/set") {
+      if (!isCodexBoundedText(frame.params.name)) {
+        throw new TaskError(
+          "CODEX_REQUEST_NOT_ALLOWED",
+          403,
+          "Codex thread rename requires a non-empty bounded name.",
+        );
+      }
+      return;
+    }
+    if (frame.method === "thread/compact/start") {
+      // Compact is bound to the current task thread by prepareTaskRequest().
+      return;
+    }
+  }
+
   private onBridgeDelivery(delivery: CodexBridgeDelivery): void {
     if (delivery.taskId !== undefined) {
       const runtime = this.#runtimes.get(delivery.taskId);
@@ -544,16 +637,12 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
           ("result" in delivery.frame || "error" in delivery.frame)
         ) {
           const requestKey = codexRequestKey(delivery.frame.id);
-          const turnOwnerDeviceId = runtime.pendingTurnStarts.get(requestKey);
-          if (runtime.pendingTurnStarts.delete(requestKey)) {
-            if ("error" in delivery.frame) {
-              if (runtime.activeDeviceId === turnOwnerDeviceId) {
-                runtime.activeDeviceId = undefined;
-              }
-              this.#taskRuntime.rollbackTurn(delivery.taskId);
-            }
+          if ("error" in delivery.frame) {
+            this.rollbackPendingTurnStart(runtime, requestKey);
           }
           if (runtime.pendingInterruptRequests.delete(requestKey)) {
+            runtime.pendingTurnStarts.clear();
+            runtime.activeTurnKind = undefined;
             this.#taskRuntime.completeInterrupt(delivery.taskId);
           }
         }
@@ -612,13 +701,16 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     if (method === "turn/started") {
       const turn = params.turn;
       if (isCodexJsonObject(turn) && typeof turn.id === "string") {
+        const pendingKind = this.activeTurnKindFor(runtime);
         runtime.pendingTurnStarts.clear();
+        runtime.activeTurnKind = pendingKind ?? "normal";
         this.#taskRuntime.turnStarted(runtime.taskId, turn.id);
       }
       return;
     }
     if (method === "turn/completed") {
       runtime.activeDeviceId = undefined;
+      runtime.activeTurnKind = undefined;
       runtime.pendingServerRequests.clear();
       runtime.pendingTurnStarts.clear();
       runtime.pendingInterruptRequests.clear();
@@ -708,6 +800,7 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
       return;
     }
     runtime.activeDeviceId = undefined;
+    runtime.activeTurnKind = undefined;
     runtime.pendingServerRequests.clear();
     try {
       await this.#bridge.request("thread/unsubscribe", {
@@ -729,6 +822,7 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     const runtime = this.#runtimes.get(taskId);
     if (runtime !== undefined) {
       runtime.activeDeviceId = undefined;
+      runtime.activeTurnKind = undefined;
       runtime.pendingServerRequests.clear();
       runtime.pendingInterruptRequests.clear();
       runtime.pendingTurnStarts.clear();
@@ -766,6 +860,7 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     }
     runtime = {
       activeDeviceId: undefined,
+      activeTurnKind: undefined,
       activated: false,
       connectionGeneration: 0,
       pendingInterruptRequests: new Set(),
@@ -777,6 +872,53 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     };
     this.#runtimes.set(task.id, runtime);
     return runtime;
+  }
+
+  private activeTurnKindFor(
+    runtime: CodexRuntime | undefined,
+  ): CodexTurnStartKind | undefined {
+    if (runtime === undefined) {
+      return undefined;
+    }
+    if (runtime.activeTurnKind !== undefined) {
+      return runtime.activeTurnKind;
+    }
+    for (const pending of runtime.pendingTurnStarts.values()) {
+      if (pending.connectionGeneration === runtime.connectionGeneration) {
+        return pending.kind;
+      }
+    }
+    return undefined;
+  }
+
+  private rollbackPendingTurnStart(
+    runtime: CodexRuntime,
+    requestKey: string,
+  ): boolean {
+    const pendingTurnStart = runtime.pendingTurnStarts.get(requestKey);
+    if (pendingTurnStart === undefined) {
+      return false;
+    }
+    if (
+      pendingTurnStart.connectionGeneration !== runtime.connectionGeneration
+    ) {
+      runtime.pendingTurnStarts.delete(requestKey);
+      return false;
+    }
+    const task = this.#repository.find(runtime.taskId);
+    // Once turn/started made a turn authoritative, late request errors must not
+    // roll that turn back. Only discard truly stale pending entries.
+    if (task?.activeTurnId !== null && task?.activeTurnId !== undefined) {
+      runtime.pendingTurnStarts.delete(requestKey);
+      return false;
+    }
+    runtime.pendingTurnStarts.delete(requestKey);
+    if (runtime.activeDeviceId === pendingTurnStart.deviceId) {
+      runtime.activeDeviceId = undefined;
+    }
+    this.#taskRuntime.rollbackTurn(runtime.taskId);
+    this.#journal.endTurn(runtime.taskId);
+    return true;
   }
 
   private requireCodexTask(taskId: string): TaskSnapshot {

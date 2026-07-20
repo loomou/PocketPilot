@@ -21,12 +21,36 @@ Read `GET /v1/providers` before showing Codex as available. Then read
   "capabilities": {
     "activeTurnSteering": true,
     "approvals": true,
-    "attachments": true,
+    "attachments": false,
     "effort": true,
     "historyPagination": "cursor",
     "interrupt": true,
     "modes": true,
     "models": true,
+    "nativeActions": {
+      "compact": {
+        "availability": "idle",
+        "method": "thread/compact/start",
+        "startsTurn": true
+      },
+      "rename": {
+        "availability": "always",
+        "method": "thread/name/set",
+        "startsTurn": false
+      },
+      "review": {
+        "availability": "idle",
+        "deliveries": ["inline"],
+        "method": "review/start",
+        "startsTurn": true,
+        "targetTypes": [
+          "uncommittedChanges",
+          "baseBranch",
+          "commit",
+          "custom"
+        ]
+      }
+    },
     "newConversation": true,
     "resumeConversation": true,
     "streamProtocol": "codex-app-server-json-rpc"
@@ -125,6 +149,7 @@ PocketPilot binds the task's native `threadId` and rejects a conflicting one.
 It currently accepts these client request methods:
 
 - `turn/start`, `turn/steer`, and `turn/interrupt`
+- `review/start`, `thread/name/set`, and `thread/compact/start`
 - `thread/read`, `thread/turns/list`, and `thread/items/list`
 - `model/list`, `collaborationMode/list`, and `permissionProfile/list`
 
@@ -133,11 +158,19 @@ clients do not send `thread/start`, `thread/resume`, archive, delete, account,
 configuration-write, filesystem, process, plugin, or arbitrary MCP methods over
 the task socket.
 
-Turn start/steer and native server-request responses use the shared P2 task
-lane. Native interrupt is P1 and invalidates older P2 work before forwarding.
-Catalog and history requests are P3 reads outside that lane, but task and
-workspace authorization are rechecked around the bridge write. Idle Codex
-turns reserve the same configured active-task capacity as Claude turns.
+Turn start, review, compact, steer, and native server-request responses use the
+shared P2 task lane. Native interrupt is P1 and invalidates older P2 work before
+forwarding. Catalog and history requests are P3 reads outside that lane, but
+task and workspace authorization are rechecked around the bridge write. Idle
+Codex turns, reviews, and compact operations reserve the same configured
+active-task capacity as Claude turns. Rename does not start a turn and does not
+reserve capacity.
+
+Codex remote tasks advertise `attachments: false`. Clients must not invent
+attachment-bearing `turn/start` input for Codex. Native review, rename, and
+compact appear under `capabilities.nativeActions` with exact methods and
+availability. Detached review is not supported; only inline review delivery is
+forwarded.
 
 ## Turn lifecycle
 
@@ -145,7 +178,12 @@ Use `turn/start` while the task has no active turn. Codex returns a native turn
 and emits `turn/started`. PocketPilot stores the returned turn ID separately as
 `activeTurnId`.
 
-When a turn is active, additional user input uses:
+Native `review/start` and `thread/compact/start` also require an idle task. They
+share the same turn-start capacity reservation and move the task to `executing`
+when `turn/started` arrives. While a review or compact turn is active, clients
+must not send `turn/steer`.
+
+When a normal turn is active, additional user input uses:
 
 ```json
 {

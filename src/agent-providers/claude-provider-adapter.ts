@@ -43,6 +43,7 @@ export class ClaudeProviderAdapter implements AgentProviderAdapter {
       interrupt: true,
       modes: true,
       models: true,
+      nativeActions: {},
       newConversation: true,
       resumeConversation: true,
       streamProtocol: "claude-agent-sdk" as const,

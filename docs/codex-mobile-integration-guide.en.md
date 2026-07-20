@@ -66,12 +66,36 @@ Show Codex only when `status` is `available`. A capability snapshot has this sha
   "capabilities": {
     "activeTurnSteering": true,
     "approvals": true,
-    "attachments": true,
+    "attachments": false,
     "effort": true,
     "historyPagination": "cursor",
     "interrupt": true,
     "modes": true,
     "models": true,
+    "nativeActions": {
+      "compact": {
+        "availability": "idle",
+        "method": "thread/compact/start",
+        "startsTurn": true
+      },
+      "rename": {
+        "availability": "always",
+        "method": "thread/name/set",
+        "startsTurn": false
+      },
+      "review": {
+        "availability": "idle",
+        "deliveries": ["inline"],
+        "method": "review/start",
+        "startsTurn": true,
+        "targetTypes": [
+          "uncommittedChanges",
+          "baseBranch",
+          "commit",
+          "custom"
+        ]
+      }
+    },
     "newConversation": true,
     "resumeConversation": true,
     "streamProtocol": "codex-app-server-json-rpc"
@@ -253,6 +277,9 @@ After the connection opens, do not send `initialize`, `initialized`, `thread/sta
 turn/start
 turn/steer
 turn/interrupt
+review/start
+thread/name/set
+thread/compact/start
 thread/read
 thread/turns/list
 thread/items/list
@@ -265,7 +292,9 @@ Use REST for conversation creation, attachment, and task close. PocketPilot does
 
 PocketPilot injects the task's bound `threadId` into most requests. If the client supplies `threadId`, it must equal the task's `nativeConversationId`; a conflict is rejected. `model/list` is the catalog request that is not bound to a thread.
 
-`turn/start`, `turn/steer`, and native server-request responses use the shared per-task P2 ordering rules. `turn/interrupt` is P1 and invalidates older active or queued P2 work before it is forwarded. Catalog and history methods are P3 reads: they do not wait behind the turn lane or consume turn capacity, but PocketPilot rechecks task availability and current workspace authorization before and after forwarding. An idle `turn/start` reserves the same configured active-task capacity used by Claude tasks.
+`turn/start`, `review/start`, `thread/compact/start`, `turn/steer`, and native server-request responses use the shared per-task P2 ordering rules. `turn/interrupt` is P1 and invalidates older active or queued P2 work before it is forwarded. Catalog and history methods are P3 reads: they do not wait behind the turn lane or consume turn capacity, but PocketPilot rechecks task availability and current workspace authorization before and after forwarding. An idle `turn/start`, review, or compact reserves the same configured active-task capacity used by Claude tasks. `thread/name/set` is always available, does not start a turn, and does not reserve capacity.
+
+Codex remote capabilities advertise `attachments: false`. Do not invent Codex attachment input for remote tasks. Read `capabilities.nativeActions` for exact review, rename, and compact methods. Detached review is rejected; only inline review delivery is allowed.
 
 ### 4.3 Frame format
 
@@ -523,6 +552,39 @@ The angle-bracket strings are explanatory placeholders and must never be sent li
 Do not call the Claude-only `/composer-options`, `/model`, `/effort`, `/permission-mode`, or approval REST controls for a Codex task. They return `TASK_CONTROL_NOT_SUPPORTED`; Codex selections and approval responses stay native on the Agent WebSocket.
 
 PocketPilot does not advertise a fixed Codex slash-command panel. Do not copy Claude `/clear`, `/compact`, `/review`, `/security-review`, `/code-review`, or aliases into Codex. Creating a new Codex conversation uses the provider conversation REST operation and native `thread/start`; selecting an existing conversation continues its native thread.
+
+Use the Codex-native methods advertised by `capabilities.nativeActions`:
+
+```json
+{
+  "id": "mobile-60",
+  "method": "review/start",
+  "params": {
+    "delivery": "inline",
+    "target": { "type": "uncommittedChanges" }
+  }
+}
+```
+
+```json
+{
+  "id": "mobile-61",
+  "method": "thread/name/set",
+  "params": {
+    "name": "Provider parity audit"
+  }
+}
+```
+
+```json
+{
+  "id": "mobile-62",
+  "method": "thread/compact/start",
+  "params": {}
+}
+```
+
+Review and compact require an idle task, share turn capacity with `turn/start`, and move the task to `executing` when `turn/started` arrives. Detached review is rejected. Rename is always available and does not start a turn.
 
 ## 8. Native Codex approvals and user input
 

@@ -113,6 +113,23 @@ describe("mobile OpenAPI generation", () => {
     ]) {
       expect(approvalSerialized).toContain(field);
     }
+
+    const providerCapabilities =
+      first.paths["/v1/providers/{providerId}/capabilities"]?.get;
+    const capabilitySerialized = JSON.stringify(providerCapabilities);
+    for (const field of [
+      "attachments",
+      "nativeActions",
+      "review",
+      "rename",
+      "compact",
+      "deliveries",
+      "targetTypes",
+      "startsTurn",
+      "availability",
+    ]) {
+      expect(capabilitySerialized).toContain(field);
+    }
   });
 
   it("documents WebSocket messages from the runtime Zod contracts", async () => {

@@ -64,12 +64,36 @@ GET /v1/providers/codex/capabilities
   "capabilities": {
     "activeTurnSteering": true,
     "approvals": true,
-    "attachments": true,
+    "attachments": false,
     "effort": true,
     "historyPagination": "cursor",
     "interrupt": true,
     "modes": true,
     "models": true,
+    "nativeActions": {
+      "compact": {
+        "availability": "idle",
+        "method": "thread/compact/start",
+        "startsTurn": true
+      },
+      "rename": {
+        "availability": "always",
+        "method": "thread/name/set",
+        "startsTurn": false
+      },
+      "review": {
+        "availability": "idle",
+        "deliveries": ["inline"],
+        "method": "review/start",
+        "startsTurn": true,
+        "targetTypes": [
+          "uncommittedChanges",
+          "baseBranch",
+          "commit",
+          "custom"
+        ]
+      }
+    },
     "newConversation": true,
     "resumeConversation": true,
     "streamProtocol": "codex-app-server-json-rpc"
@@ -251,6 +275,9 @@ WebSocket.connect(
 turn/start
 turn/steer
 turn/interrupt
+review/start
+thread/name/set
+thread/compact/start
 thread/read
 thread/turns/list
 thread/items/list
@@ -263,7 +290,9 @@ permissionProfile/list
 
 PocketPilot 会把 task 绑定的 `threadId` 注入到大多数请求中。客户端如果提供了 `threadId`，必须与 task 的 `nativeConversationId` 一致；冲突会被拒绝。`model/list` 是不绑定 thread 的目录请求。
 
-`turn/start`、`turn/steer` 和原生 server-request 响应遵循共享的 task P2 顺序；`turn/interrupt` 是 P1，会先让旧的活动或排队 P2 操作失效再转发。目录和历史方法属于 P3 读取，不等待 turn 队列也不占用 turn 容量，但 PocketPilot 会在转发前后重新检查 task 可用性和当前工作区授权。空闲 task 的 `turn/start` 与 Claude task 共用同一套活动任务容量限制。
+`turn/start`、`review/start`、`thread/compact/start`、`turn/steer` 和原生 server-request 响应遵循共享的 task P2 顺序；`turn/interrupt` 是 P1，会先让旧的活动或排队 P2 操作失效再转发。目录和历史方法属于 P3 读取，不等待 turn 队列也不占用 turn 容量，但 PocketPilot 会在转发前后重新检查 task 可用性和当前工作区授权。空闲 task 的 `turn/start`、review 和 compact 与 Claude task 共用同一套活动任务容量限制。`thread/name/set` 始终可用，不会启动 turn，也不占用 turn 容量。
+
+Codex 远程能力会声明 `attachments: false`。不要为远程 Codex task 发明附件输入。请读取 `capabilities.nativeActions` 获取 review、rename 和 compact 的确切方法。detached review 会被拒绝；只允许 inline review delivery。
 
 ### 4.3 帧格式
 
@@ -521,6 +550,39 @@ thread/tokenUsage/updated
 Codex task 不要调用 Claude 专用的 `/composer-options`、`/model`、`/effort`、`/permission-mode` 或审批 REST 控制；这些接口会返回 `TASK_CONTROL_NOT_SUPPORTED`。Codex 的配置选择和审批响应必须使用 Agent WebSocket 上的原生协议。
 
 PocketPilot 不为 Codex 提供写死的 slash command 面板。不要把 Claude 的 `/clear`、`/compact`、`/review`、`/security-review`、`/code-review` 或别名复制给 Codex。新建 Codex 会话要调用 provider conversation REST 接口并使用原生 `thread/start`；选择已有会话就是继续对应的原生 thread。
+
+请使用 `capabilities.nativeActions` 公布的 Codex 原生方法：
+
+```json
+{
+  "id": "mobile-60",
+  "method": "review/start",
+  "params": {
+    "delivery": "inline",
+    "target": { "type": "uncommittedChanges" }
+  }
+}
+```
+
+```json
+{
+  "id": "mobile-61",
+  "method": "thread/name/set",
+  "params": {
+    "name": "Provider parity audit"
+  }
+}
+```
+
+```json
+{
+  "id": "mobile-62",
+  "method": "thread/compact/start",
+  "params": {}
+}
+```
+
+review 和 compact 要求 task 处于 idle，与 `turn/start` 共享 turn 容量，并在收到 `turn/started` 后把 task 移到 `executing`。detached review 会被拒绝。rename 始终可用，且不会启动 turn。
 
 ## 8. Codex 原生审批和用户输入
 

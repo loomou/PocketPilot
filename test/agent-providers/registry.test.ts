@@ -104,10 +104,20 @@ describe("AgentProviderRegistry", () => {
       interrupt: true,
       modes: true,
       models: true,
+      nativeActions: {
+        review: {
+          availability: "idle",
+          deliveries: ["inline"],
+          method: "review/start",
+          startsTurn: true,
+          targetTypes: ["uncommittedChanges", "baseBranch", "commit", "custom"],
+        },
+      },
       newConversation: true,
       resumeConversation: true,
       streamProtocol: "claude-agent-sdk",
       executablePath: "C:\\secret\\claude.exe",
+      secretNativeFlag: true,
     } as NonNullable<AgentProviderAdapter["descriptor"]["capabilities"]>;
     Object.assign(adapter.descriptor, {
       configPath: "C:\\secret\\config.json",
@@ -116,10 +126,32 @@ describe("AgentProviderRegistry", () => {
 
     const registry = new AgentProviderRegistry([adapter]);
     const serialized = JSON.stringify(registry.descriptor("claude"));
-
     expect(serialized).not.toContain("executablePath");
     expect(serialized).not.toContain("configPath");
     expect(serialized).not.toContain("rawProcessError");
+    expect(serialized).not.toContain("secretNativeFlag");
     expect(serialized).not.toContain("C:\\\\secret");
+    expect(registry.descriptor("claude").capabilities).toEqual({
+      activeTurnSteering: true,
+      approvals: true,
+      attachments: false,
+      effort: true,
+      historyPagination: "cursor",
+      interrupt: true,
+      modes: true,
+      models: true,
+      nativeActions: {
+        review: {
+          availability: "idle",
+          deliveries: ["inline"],
+          method: "review/start",
+          startsTurn: true,
+          targetTypes: ["uncommittedChanges", "baseBranch", "commit", "custom"],
+        },
+      },
+      newConversation: true,
+      resumeConversation: true,
+      streamProtocol: "claude-agent-sdk",
+    });
   });
 });

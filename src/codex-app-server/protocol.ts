@@ -16,12 +16,88 @@ export const codexReadClientRequestMethods = [
   "thread/turns/list",
 ] as const;
 
+export const codexTurnStartingClientRequestMethods = [
+  "review/start",
+  "thread/compact/start",
+  "turn/start",
+] as const;
+
 export const codexClientRequestMethods = [
   ...codexReadClientRequestMethods,
+  ...codexTurnStartingClientRequestMethods,
+  "thread/name/set",
   "turn/interrupt",
-  "turn/start",
   "turn/steer",
 ] as const;
+
+export const codexBoundedTextMaxLength = 4_096;
+
+export type CodexTurnStartKind = "compact" | "normal" | "review";
+
+export type CodexTurnStartingClientRequestMethod =
+  (typeof codexTurnStartingClientRequestMethods)[number];
+
+export function isCodexTurnStartingMethod(
+  method: string,
+): method is CodexTurnStartingClientRequestMethod {
+  return (
+    method === "review/start" ||
+    method === "thread/compact/start" ||
+    method === "turn/start"
+  );
+}
+
+export function codexTurnStartKindForMethod(
+  method: CodexTurnStartingClientRequestMethod,
+): CodexTurnStartKind {
+  switch (method) {
+    case "review/start":
+      return "review";
+    case "thread/compact/start":
+      return "compact";
+    case "turn/start":
+      return "normal";
+  }
+}
+
+export function isCodexBoundedText(
+  value: unknown,
+  options: { allowEmpty?: boolean } = {},
+): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const trimmed = value.trim();
+  if (!options.allowEmpty && trimmed.length === 0) {
+    return false;
+  }
+  return value.length <= codexBoundedTextMaxLength;
+}
+
+export function isSupportedCodexReviewTarget(
+  value: unknown,
+): value is Record<string, unknown> {
+  if (!isCodexJsonObject(value) || typeof value.type !== "string") {
+    return false;
+  }
+  switch (value.type) {
+    case "uncommittedChanges":
+      return true;
+    case "baseBranch":
+      return isCodexBoundedText(value.branch);
+    case "commit":
+      return (
+        isCodexBoundedText(value.sha) &&
+        (value.title === undefined ||
+          value.title === null ||
+          isCodexBoundedText(value.title, { allowEmpty: true }))
+      );
+    case "custom":
+      return isCodexBoundedText(value.instructions);
+    default:
+      return false;
+  }
+}
 
 export const codexForwardedServerRequestMethods = [
   "item/commandExecution/requestApproval",

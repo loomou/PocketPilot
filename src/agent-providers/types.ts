@@ -10,6 +10,37 @@ export const agentProviderStatuses = [
 
 export type AgentProviderStatus = (typeof agentProviderStatuses)[number];
 
+export type AgentNativeReviewAction = {
+  availability: "idle";
+  deliveries: readonly ["inline"];
+  method: string;
+  startsTurn: true;
+  targetTypes: readonly [
+    "uncommittedChanges",
+    "baseBranch",
+    "commit",
+    "custom",
+  ];
+};
+
+export type AgentNativeRenameAction = {
+  availability: "always";
+  method: string;
+  startsTurn: false;
+};
+
+export type AgentNativeCompactAction = {
+  availability: "idle";
+  method: string;
+  startsTurn: true;
+};
+
+export type AgentNativeActions = {
+  compact?: AgentNativeCompactAction;
+  rename?: AgentNativeRenameAction;
+  review?: AgentNativeReviewAction;
+};
+
 export type AgentCapabilitySnapshot = {
   activeTurnSteering: boolean;
   approvals: boolean;
@@ -19,6 +50,7 @@ export type AgentCapabilitySnapshot = {
   interrupt: boolean;
   modes: boolean;
   models: boolean;
+  nativeActions: AgentNativeActions;
   newConversation: boolean;
   resumeConversation: boolean;
   streamProtocol: string;

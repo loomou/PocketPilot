@@ -47,6 +47,47 @@ const conversationOperationSchema = z.object({
   workspaceRiskAccepted: z.boolean(),
 });
 
+const agentNativeReviewActionSchema = z
+  .object({
+    availability: z.literal("idle"),
+    deliveries: z.tuple([z.literal("inline")]).readonly(),
+    method: z.string().min(1),
+    startsTurn: z.literal(true),
+    targetTypes: z
+      .tuple([
+        z.literal("uncommittedChanges"),
+        z.literal("baseBranch"),
+        z.literal("commit"),
+        z.literal("custom"),
+      ])
+      .readonly(),
+  })
+  .strict();
+
+const agentNativeRenameActionSchema = z
+  .object({
+    availability: z.literal("always"),
+    method: z.string().min(1),
+    startsTurn: z.literal(false),
+  })
+  .strict();
+
+const agentNativeCompactActionSchema = z
+  .object({
+    availability: z.literal("idle"),
+    method: z.string().min(1),
+    startsTurn: z.literal(true),
+  })
+  .strict();
+
+const agentNativeActionsSchema = z
+  .object({
+    compact: agentNativeCompactActionSchema.optional(),
+    rename: agentNativeRenameActionSchema.optional(),
+    review: agentNativeReviewActionSchema.optional(),
+  })
+  .strict();
+
 const capabilitySchema = z.object({
   activeTurnSteering: z.boolean(),
   approvals: z.boolean(),
@@ -56,6 +97,7 @@ const capabilitySchema = z.object({
   interrupt: z.boolean(),
   modes: z.boolean(),
   models: z.boolean(),
+  nativeActions: agentNativeActionsSchema,
   newConversation: z.boolean(),
   resumeConversation: z.boolean(),
   streamProtocol: z.string(),

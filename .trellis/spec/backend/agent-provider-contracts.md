@@ -55,6 +55,18 @@ GET  /v1/tasks/{taskId}/agent
   `status`, optional `reasonCode`, optional `protocolVersion`, and the exact
   capability fields. Never return executable/config paths, credentials, raw
   process errors, environment values, or unrecognized adapter fields.
+- Capability snapshots always include boolean `attachments` and a closed
+  `nativeActions` object. The sanitizer admits only the reviewed keys
+  `review`, `rename`, and `compact` and rewrites each descriptor to a closed
+  shape before publication:
+  - `review`: `{ availability: "idle", deliveries: ["inline"], method,
+    startsTurn: true, targetTypes: ["uncommittedChanges", "baseBranch",
+    "commit", "custom"] }`
+  - `rename`: `{ availability: "always", method, startsTurn: false }`
+  - `compact`: `{ availability: "idle", method, startsTurn: true }`
+  Unknown action keys, extra descriptor fields, and open-ended action catalogs
+  are dropped. Capability metadata is descriptive only; execution remains on
+  the provider-native Agent WebSocket and never invents REST mutation routes.
 - Provider installation, enablement, and configuration are local-admin-only.
   The remote provider API is read-only for status and capabilities.
 - `AgentRuntimeManager` resolves provider availability and canonicalizes the
@@ -114,18 +126,26 @@ GET  /v1/tasks/{taskId}/agent
 - Good: a provider turn reserves shared capacity through `ProviderTaskRuntime`,
   while a native history read proceeds as P3 without waiting behind that turn's
   P2 lane.
+- Good: Codex publishes `attachments: false` plus closed `nativeActions` for
+  review/rename/compact; Claude publishes `attachments: false` and an empty
+  `nativeActions` object until a reviewed attachment or action surface lands.
 - Base: Claude list/history rows retain object identity while their native
   offset/UUID cursors appear only in the common page envelope.
 - Bad: a route switches on `providerId === "claude"`, wraps native frames, lets
   the adapter authorize paths, or silently hides a missing provider.
+- Bad: advertising `attachments: true` or open-ended native action catalogs
+  before a reviewed remote transport exists.
 
 ### 6. Tests Required
 
 - Registry tests cover every availability status, duplicate IDs, safe
-  descriptor projection, unknown providers, and unavailable execution.
+  descriptor projection, closed `nativeActions` sanitization, unknown
+  providers, and unavailable execution.
 - Fake-provider route tests cover authentication, common workspace rejection,
-  list/read/create/attach delegation, native row passthrough, and operation
-  metadata.
+  list/read/create/attach delegation, native row passthrough, capability
+  schema fields (`attachments`, `nativeActions`), and operation metadata.
+- OpenAPI tests assert capability schemas include `attachments` and the closed
+  `nativeActions` action descriptors.
 - Agent WebSocket tests cover task/provider selection, subscribe-before-
   activation, bidirectional native equality, invalid/binary input, replay
   cursor forwarding, stable close codes, device revocation, and task-only close.

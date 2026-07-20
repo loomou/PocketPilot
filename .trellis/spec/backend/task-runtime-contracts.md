@@ -184,9 +184,20 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
 - Non-Claude adapters must enter P2 work through `ProviderTaskRuntime.run()` and
   call `lease.assertCurrent()` before and after every awaited native boundary.
   Query-triggering native starts call `reserveTurn()` before forwarding so the
-  same capacity counter covers every provider. Forward/native-start failure
-  calls `rollbackTurn()`; authoritative native notifications call
-  `turnStarted()` and `turnCompleted()`.
+  same capacity counter covers every provider. That includes Codex
+  `turn/start`, inline `review/start`, and `thread/compact/start`. Forward or
+  pre-authoritative native-start failure calls `rollbackTurn()`; once
+  `turnStarted()` has made a turn authoritative, late request errors must not
+  roll the turn back. Authoritative native notifications call `turnStarted()`
+  and `turnCompleted()`.
+- Provider-native non-turn P2 actions (for example Codex `thread/name/set`) may
+  run through the shared P2 lane without calling `reserveTurn()`. They still
+  require a current lease and task availability, but they do not consume active
+  capacity or invent a turn.
+- When a provider marks a turn kind non-steerable (Codex review/compact), the
+  adapter rejects mid-turn steering while preserving interrupt against the
+  current active turn ID. Runtime-only turn-kind state is never persisted into
+  task rows.
 - Provider P3 reads use `assertReadable()` outside the P2 lane. It rejects
   interrupted, terminal, closed, interrupting, and shutting-down runtimes and
   rechecks the task's current workspace authorization before data is exposed.

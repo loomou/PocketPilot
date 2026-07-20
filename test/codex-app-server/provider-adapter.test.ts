@@ -19,11 +19,13 @@ import { TaskManager } from "../../src/tasks/task-manager.js";
 import { TaskRepository } from "../../src/tasks/task-repository.js";
 
 class FakeCodexProcess extends EventEmitter {
+  public errorAfterTurnStarted = false;
   public failInterrupts = false;
   public failTurnStarts = false;
   public readonly stderr = new PassThrough();
   public readonly stdin = new PassThrough();
   public readonly stdout = new PassThrough();
+  public turnStartedBeforeResponse = false;
   public readonly writes: Record<string, unknown>[] = [];
   private nextThread = 1;
 
@@ -86,7 +88,11 @@ class FakeCodexProcess extends EventEmitter {
             : { id: frame.id, result: {} },
         );
       }
-      if (frame.method === "turn/start") {
+      if (
+        frame.method === "turn/start" ||
+        frame.method === "review/start" ||
+        frame.method === "thread/compact/start"
+      ) {
         if (this.failTurnStarts) {
           this.emitFrame({
             error: { code: -32_000, message: "turn start rejected" },
@@ -97,10 +103,42 @@ class FakeCodexProcess extends EventEmitter {
         const params = frame.params as { threadId?: unknown } | undefined;
         const threadId =
           typeof params?.threadId === "string" ? params.threadId : "thread-1";
-        this.emitFrame({ id: frame.id, result: { turn: { id: "turn-1" } } });
-        this.emitFrame({
+        const turnId =
+          frame.method === "review/start"
+            ? "review-turn-1"
+            : frame.method === "thread/compact/start"
+              ? "compact-turn-1"
+              : "turn-1";
+        const started = {
           method: "turn/started",
-          params: { threadId, turn: { id: "turn-1" } },
+          params: { threadId, turn: { id: turnId } },
+        };
+        if (this.turnStartedBeforeResponse || this.errorAfterTurnStarted) {
+          this.emitFrame(started);
+        }
+        if (this.errorAfterTurnStarted) {
+          this.emitFrame({
+            error: { code: -32_000, message: "late turn start rejection" },
+            id: frame.id,
+          });
+          return;
+        }
+        this.emitFrame({ id: frame.id, result: { turn: { id: turnId } } });
+        if (!this.turnStartedBeforeResponse) {
+          this.emitFrame(started);
+        }
+      }
+      if (frame.method === "thread/name/set") {
+        const params = frame.params as
+          | { name?: unknown; threadId?: unknown }
+          | undefined;
+        const threadId =
+          typeof params?.threadId === "string" ? params.threadId : "thread-1";
+        const name = typeof params?.name === "string" ? params.name : "renamed";
+        this.emitFrame({ id: frame.id, result: {} });
+        this.emitFrame({
+          method: "thread/name/updated",
+          params: { name, threadId },
         });
       }
     });
@@ -1004,6 +1042,416 @@ describe("CodexProviderAdapter", () => {
     expect(
       process.writes.filter((frame) => frame.method === "turn/start"),
     ).toHaveLength(0);
+
+    await manager.shutdown();
+    await adapter.shutdown();
+  });
+
+  it("advertises Codex native action capabilities without attachment support", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository: new TaskRepository(connection.database),
+      taskRuntime: createTaskRuntime(connection),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+
+    expect(adapter.descriptor.capabilities).toEqual({
+      activeTurnSteering: true,
+      approvals: true,
+      attachments: false,
+      effort: true,
+      historyPagination: "cursor",
+      interrupt: true,
+      modes: true,
+      models: true,
+      nativeActions: {
+        compact: {
+          availability: "idle",
+          method: "thread/compact/start",
+          startsTurn: true,
+        },
+        rename: {
+          availability: "always",
+          method: "thread/name/set",
+          startsTurn: false,
+        },
+        review: {
+          availability: "idle",
+          deliveries: ["inline"],
+          method: "review/start",
+          startsTurn: true,
+          targetTypes: ["uncommittedChanges", "baseBranch", "commit", "custom"],
+        },
+      },
+      newConversation: true,
+      resumeConversation: true,
+      streamProtocol: "codex-app-server-json-rpc",
+    });
+    await adapter.shutdown();
+  });
+
+  it("forwards native review, rename, and compact actions with shared lifecycle rules", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    const manager = createTaskManager(connection);
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository: new TaskRepository(connection.database),
+      taskRuntime: manager.providerTaskRuntime(),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+    manager.setProviderTaskController(adapter.taskLifecycle);
+    const created = await adapter.createConversation({
+      deviceId,
+      operationId: "00000000-0000-4000-8000-000000000031",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    const received: unknown[] = [];
+    adapter.taskStream.subscribe(created.task.id, undefined, {
+      send(frame) {
+        received.push(frame);
+      },
+    });
+    await adapter.taskStream.activate(created.task.id);
+
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "rename-1",
+        method: "thread/name/set",
+        params: { name: "Provider parity audit" },
+      }),
+      taskId: created.task.id,
+    });
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "thread/name/set",
+        params: {
+          name: "Provider parity audit",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(received).toContainEqual({
+      method: "thread/name/updated",
+      params: { name: "Provider parity audit", threadId: "thread-1" },
+    });
+    expect(manager.getTask(created.task.id).state).toBe("idle");
+
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "review-1",
+        method: "review/start",
+        params: {
+          delivery: "inline",
+          target: { type: "uncommittedChanges" },
+        },
+      }),
+      taskId: created.task.id,
+    });
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "review/start",
+        params: {
+          delivery: "inline",
+          target: { type: "uncommittedChanges" },
+          threadId: "thread-1",
+        },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(manager.getTask(created.task.id)).toMatchObject({
+      activeTurnId: "review-turn-1",
+      state: "executing",
+    });
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "steer-during-review",
+          method: "turn/steer",
+          params: {
+            expectedTurnId: "review-turn-1",
+            input: [{ text: "nudge", text_elements: [], type: "text" }],
+          },
+        }),
+        taskId: created.task.id,
+      }),
+    ).rejects.toMatchObject({ code: "TASK_BUSY" });
+    process.emitFrame({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "review-turn-1", status: "completed" },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(manager.getTask(created.task.id)).toMatchObject({
+      activeTurnId: null,
+      state: "idle",
+    });
+
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "compact-1",
+        method: "thread/compact/start",
+        params: {},
+      }),
+      taskId: created.task.id,
+    });
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "thread/compact/start",
+        params: { threadId: "thread-1" },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(manager.getTask(created.task.id)).toMatchObject({
+      activeTurnId: "compact-turn-1",
+      state: "executing",
+    });
+    process.emitFrame({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "compact-turn-1", status: "completed" },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await manager.shutdown();
+    await adapter.shutdown();
+  });
+
+  it("rejects detached review, unsupported targets, and empty rename names", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    const manager = createTaskManager(connection);
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository: new TaskRepository(connection.database),
+      taskRuntime: manager.providerTaskRuntime(),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+    manager.setProviderTaskController(adapter.taskLifecycle);
+    const created = await adapter.createConversation({
+      deviceId,
+      operationId: "00000000-0000-4000-8000-000000000032",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    await adapter.taskStream.activate(created.task.id);
+
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "detached-review",
+          method: "review/start",
+          params: {
+            delivery: "detached",
+            target: { type: "uncommittedChanges" },
+          },
+        }),
+        taskId: created.task.id,
+      }),
+    ).rejects.toMatchObject({ code: "CODEX_REQUEST_NOT_ALLOWED" });
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "bad-target",
+          method: "review/start",
+          params: {
+            delivery: "inline",
+            target: { type: "unsupported" },
+          },
+        }),
+        taskId: created.task.id,
+      }),
+    ).rejects.toMatchObject({ code: "CODEX_REQUEST_NOT_ALLOWED" });
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "empty-name",
+          method: "thread/name/set",
+          params: { name: "   " },
+        }),
+        taskId: created.task.id,
+      }),
+    ).rejects.toMatchObject({ code: "CODEX_REQUEST_NOT_ALLOWED" });
+    expect(
+      process.writes.filter(
+        (frame) =>
+          frame.method === "review/start" || frame.method === "thread/name/set",
+      ),
+    ).toHaveLength(0);
+
+    await manager.shutdown();
+    await adapter.shutdown();
+  });
+
+  it("rolls back shared capacity when a native review start fails", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    process.failTurnStarts = true;
+    const manager = createTaskManager(connection);
+    writeTaskCapacitySettings(new SettingsRepository(connection.database), {
+      concurrentTaskCapacity: 1,
+    });
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository: new TaskRepository(connection.database),
+      taskRuntime: manager.providerTaskRuntime(),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+    manager.setProviderTaskController(adapter.taskLifecycle);
+    const first = await adapter.createConversation({
+      deviceId,
+      operationId: "00000000-0000-4000-8000-000000000033",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    const second = await adapter.createConversation({
+      deviceId,
+      operationId: "00000000-0000-4000-8000-000000000034",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    await adapter.taskStream.activate(first.task.id);
+
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "failed-review",
+        method: "review/start",
+        params: {
+          delivery: "inline",
+          target: { type: "uncommittedChanges" },
+        },
+      }),
+      taskId: first.task.id,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(manager.getTask(first.task.id).state).toBe("idle");
+    expect(manager.getTask(first.task.id).activeTurnId).toBeNull();
+
+    // Capacity must be free for another task after rollback.
+    process.failTurnStarts = false;
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "second-turn",
+        method: "turn/start",
+        params: { input: [] },
+      }),
+      taskId: second.task.id,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(manager.getTask(second.task.id).state).toBe("executing");
+
+    await manager.shutdown();
+    await adapter.shutdown();
+  });
+
+  it("keeps an authoritative review turn when the native request later errors", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    process.errorAfterTurnStarted = true;
+    const manager = createTaskManager(connection);
+    writeTaskCapacitySettings(new SettingsRepository(connection.database), {
+      concurrentTaskCapacity: 1,
+    });
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository: new TaskRepository(connection.database),
+      taskRuntime: manager.providerTaskRuntime(),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+    manager.setProviderTaskController(adapter.taskLifecycle);
+    const created = await adapter.createConversation({
+      deviceId,
+      operationId: "00000000-0000-4000-8000-000000000035",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    await adapter.taskStream.activate(created.task.id);
+
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "late-error-review",
+        method: "review/start",
+        params: {
+          delivery: "inline",
+          target: { type: "uncommittedChanges" },
+        },
+      }),
+      taskId: created.task.id,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(manager.getTask(created.task.id).state).toBe("executing");
+    expect(manager.getTask(created.task.id).activeTurnId).toBe("review-turn-1");
+
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "steer-after-late-error",
+          method: "turn/steer",
+          params: {
+            input: [{ text: "should stay blocked", type: "text" }],
+            turnId: "review-turn-1",
+          },
+        }),
+        taskId: created.task.id,
+      }),
+    ).rejects.toMatchObject({ code: "TASK_BUSY" });
+    expect(process.writes.some((frame) => frame.method === "turn/steer")).toBe(
+      false,
+    );
 
     await manager.shutdown();
     await adapter.shutdown();

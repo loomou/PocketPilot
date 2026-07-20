@@ -88,8 +88,44 @@ function sanitizeCapabilities(
     interrupt: capabilities.interrupt,
     modes: capabilities.modes,
     models: capabilities.models,
+    nativeActions: sanitizeNativeActions(capabilities.nativeActions),
     newConversation: capabilities.newConversation,
     resumeConversation: capabilities.resumeConversation,
     streamProtocol: capabilities.streamProtocol,
   };
+}
+
+function sanitizeNativeActions(
+  nativeActions: AgentCapabilitySnapshot["nativeActions"],
+): AgentCapabilitySnapshot["nativeActions"] {
+  const sanitized: AgentCapabilitySnapshot["nativeActions"] = {};
+  if (nativeActions.review !== undefined) {
+    sanitized.review = {
+      availability: "idle",
+      deliveries: ["inline"] as const,
+      method: nativeActions.review.method,
+      startsTurn: true,
+      targetTypes: [
+        "uncommittedChanges",
+        "baseBranch",
+        "commit",
+        "custom",
+      ] as const,
+    };
+  }
+  if (nativeActions.rename !== undefined) {
+    sanitized.rename = {
+      availability: "always",
+      method: nativeActions.rename.method,
+      startsTurn: false,
+    };
+  }
+  if (nativeActions.compact !== undefined) {
+    sanitized.compact = {
+      availability: "idle",
+      method: nativeActions.compact.method,
+      startsTurn: true,
+    };
+  }
+  return sanitized;
 }

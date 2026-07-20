@@ -44,6 +44,10 @@ describe("provider routes", () => {
     expect(providers.json()).toEqual({
       providers: [adapter.descriptor],
     });
+    expect(providers.json().providers[0].capabilities.nativeActions).toEqual(
+      {},
+    );
+    expect(providers.json().providers[0].capabilities.attachments).toBe(false);
 
     const list = await app.inject({
       headers: { authorization: "Bearer access-token" },
@@ -169,6 +173,7 @@ function fakeProvider(
         interrupt: true,
         modes: false,
         models: false,
+        nativeActions: {},
         newConversation: true,
         resumeConversation: true,
         streamProtocol: "fake-native",
