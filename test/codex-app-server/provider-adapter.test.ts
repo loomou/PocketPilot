@@ -351,6 +351,16 @@ describe("CodexProviderAdapter", () => {
       items: [{ id: "turn-1", items: [], status: "completed" }],
       page: { cursor: null, hasMore: false },
     });
+    await expect(
+      adapter.readConversation({
+        includeSystemMessages: false,
+        nativeConversationId: "thread-1",
+        workspace,
+      }),
+    ).resolves.toEqual({
+      items: [{ id: "turn-1", items: [], status: "completed" }],
+      page: { cursor: null, hasMore: false },
+    });
 
     const attached = await adapter.attachConversation({
       deviceId,
@@ -361,6 +371,42 @@ describe("CodexProviderAdapter", () => {
     });
     expect(attached.action).toBe("attached");
     expect(requireTaskResult(attached).id).toBe(requireTaskResult(created).id);
+    await adapter.shutdown();
+  });
+
+  it("rejects includeSystemMessages=true history filters before native reads", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository: new TaskRepository(connection.database),
+      taskRuntime: createTaskRuntime(connection),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+
+    await expect(
+      adapter.readConversation({
+        includeSystemMessages: true,
+        nativeConversationId: "thread-1",
+        workspace,
+      }),
+    ).rejects.toMatchObject({
+      code: "HISTORY_FILTER_NOT_SUPPORTED",
+      statusCode: 409,
+    });
+    expect(
+      process.writes.some((frame) => frame.method === "thread/turns/list"),
+    ).toBe(false);
+    expect(adapter.descriptor.capabilities?.historyFilters).toEqual({
+      includeSystemMessages: false,
+    });
     await adapter.shutdown();
   });
 
@@ -1340,6 +1386,9 @@ describe("CodexProviderAdapter", () => {
       approvals: true,
       attachments: false,
       effort: true,
+      historyFilters: {
+        includeSystemMessages: false,
+      },
       historyPagination: "cursor",
       interrupt: true,
       modes: true,

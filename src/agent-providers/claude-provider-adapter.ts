@@ -55,6 +55,9 @@ const CLAUDE_CAPABILITIES = {
   approvals: true,
   attachments: false,
   effort: true,
+  historyFilters: {
+    includeSystemMessages: true,
+  },
   historyPagination: "cursor" as const,
   interrupt: true,
   modes: true,

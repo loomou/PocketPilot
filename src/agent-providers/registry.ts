@@ -112,6 +112,7 @@ function sanitizeCapabilities(
     approvals: capabilities.approvals,
     attachments: capabilities.attachments,
     effort: capabilities.effort,
+    historyFilters: sanitizeHistoryFilters(capabilities.historyFilters),
     historyPagination: capabilities.historyPagination,
     interrupt: capabilities.interrupt,
     modes: capabilities.modes,
@@ -122,6 +123,23 @@ function sanitizeCapabilities(
     statusCatalogs: sanitizeStatusCatalogs(capabilities.statusCatalogs),
     streamProtocol: capabilities.streamProtocol,
     threadManagement: sanitizeThreadManagement(capabilities.threadManagement),
+  };
+}
+
+function sanitizeHistoryFilters(
+  historyFilters: AgentCapabilitySnapshot["historyFilters"] | undefined | null,
+): AgentCapabilitySnapshot["historyFilters"] {
+  if (
+    historyFilters === undefined ||
+    historyFilters === null ||
+    typeof historyFilters !== "object"
+  ) {
+    return {
+      includeSystemMessages: false,
+    };
+  }
+  return {
+    includeSystemMessages: historyFilters.includeSystemMessages === true,
   };
 }
 

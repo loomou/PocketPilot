@@ -224,6 +224,9 @@ describe("ClaudeProviderAdapter", () => {
     expect(adapter.descriptor.capabilities?.streamProtocol).toBe(
       "claude-agent-sdk",
     );
+    expect(adapter.descriptor.capabilities?.historyFilters).toEqual({
+      includeSystemMessages: true,
+    });
   });
 
   it("single-flights concurrent Claude readiness probes", async () => {

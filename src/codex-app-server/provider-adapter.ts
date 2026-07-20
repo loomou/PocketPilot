@@ -72,6 +72,9 @@ const CODEX_AVAILABLE_CAPABILITIES = {
   approvals: true,
   attachments: false,
   effort: true,
+  historyFilters: {
+    includeSystemMessages: false,
+  },
   historyPagination: "cursor" as const,
   interrupt: true,
   modes: true,
@@ -322,6 +325,13 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
   public async readConversation(
     input: AgentConversationHistoryInput,
   ): Promise<AgentConversationPage<unknown>> {
+    if (input.includeSystemMessages === true) {
+      throw new TaskError(
+        "HISTORY_FILTER_NOT_SUPPORTED",
+        409,
+        "This provider does not support includeSystemMessages.",
+      );
+    }
     const thread = await this.requireAuthorizedThread(
       input.workspace,
       input.nativeConversationId,

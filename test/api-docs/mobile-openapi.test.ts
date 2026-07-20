@@ -123,6 +123,8 @@ describe("mobile OpenAPI generation", () => {
     const capabilitySerialized = JSON.stringify(providerCapabilities);
     for (const field of [
       "attachments",
+      "historyFilters",
+      "includeSystemMessages",
       "nativeActions",
       "statusCatalogs",
       "threadManagement",

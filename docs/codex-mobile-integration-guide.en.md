@@ -74,6 +74,9 @@ version returned by the server:
     "approvals": true,
     "attachments": false,
     "effort": true,
+    "historyFilters": {
+      "includeSystemMessages": false
+    },
     "historyPagination": "cursor",
     "interrupt": true,
     "modes": true,
@@ -206,6 +209,8 @@ The REST response field is `messages`:
 ```
 
 Although the outer field is named `messages`, its entries are native Codex turns. The item variants inside each turn are owned by the installed App Server version. PocketPilot returns each page in chronological display order. Load older pages with `page.cursor` and prepend them; never reconstruct historical items as a new `turn/start` input.
+
+Codex advertises `capabilities.historyFilters.includeSystemMessages: false`. Omit the query or send `includeSystemMessages=false`; both return the same native turn/item rows unchanged. `includeSystemMessages=true` is rejected with `409 HISTORY_FILTER_NOT_SUPPORTED` before any native history request. Do not invent Claude-like system-message filtering for Codex.
 
 Long histories require virtualization or segmented rendering. Load the latest page first. When the user reaches the top, request an older page and deduplicate by item or turn ID. The same item may arrive through history and the live stream, so reconcile it with the final `item/completed` event or the newest history result.
 
@@ -777,6 +782,7 @@ The mobile client should recognize at least these stable error codes:
 | `AGENT_PROVIDER_UNAVAILABLE` | Codex is not installed, ready, or available | Refresh provider state and direct the user to the computer |
 | `CODEX_THREAD_NOT_FOUND` | The thread is missing, unreadable, or outside the workspace | Remove the stale row and reload the conversation list |
 | `CODEX_HISTORY_UNAVAILABLE` | Native history is temporarily unavailable | Keep the current UI and retry history later; do not send history as a prompt |
+| `HISTORY_FILTER_NOT_SUPPORTED` | The provider rejects an unsupported history filter such as `includeSystemMessages=true` | Drop the unsupported filter; Codex only accepts omit/`false` |
 | `WORKSPACE_NOT_AUTHORIZED` | The workspace or a path is outside authorized roots | Stop the request and ask the user to select an authorized workspace |
 | `TASK_BUSY` | The turn precondition is stale or the current state rejects the action | Refresh task and active-turn state before deciding what to do |
 | `CONCURRENT_TASK_LIMIT_REACHED` | Starting this idle turn would exceed shared Claude/Codex capacity | Keep the composer input and retry after another active task becomes idle |

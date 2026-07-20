@@ -62,11 +62,16 @@ export type AgentThreadManagementCapabilities = {
   unarchive: boolean;
 };
 
+export type AgentHistoryFilters = {
+  includeSystemMessages: boolean;
+};
+
 export type AgentCapabilitySnapshot = {
   activeTurnSteering: boolean;
   approvals: boolean;
   attachments: boolean;
   effort: boolean;
+  historyFilters: AgentHistoryFilters;
   historyPagination: "cursor" | "offset" | "none";
   interrupt: boolean;
   modes: boolean;

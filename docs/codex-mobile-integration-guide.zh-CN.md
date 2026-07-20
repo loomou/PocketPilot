@@ -67,6 +67,9 @@ GET /v1/providers/codex/capabilities
     "approvals": true,
     "attachments": false,
     "effort": true,
+    "historyFilters": {
+      "includeSystemMessages": false
+    },
     "historyPagination": "cursor",
     "interrupt": true,
     "modes": true,
@@ -199,6 +202,8 @@ GET /v1/providers/codex/conversations/{threadId}?workspace=<urlEncodedWorkspace>
 ```
 
 这里的 `messages` 实际上是 Codex 原生 turn 列表，`items` 中的具体变体由已安装的 App Server 版本决定。PocketPilot 会按时间正序返回当前页，移动端可以从底部加载更旧页，并在列表顶部插入；不要把历史 item 重新组装成新的 `turn/start` 输入。
+
+Codex 会声明 `capabilities.historyFilters.includeSystemMessages: false`。省略该查询参数或发送 `includeSystemMessages=false` 都会原样返回原生 turn/item 行。`includeSystemMessages=true` 会在发起任何原生历史请求前返回 `409 HISTORY_FILTER_NOT_SUPPORTED`。不要为 Codex 发明 Claude 风格的系统消息过滤。
 
 长会话必须使用虚拟列表或分段渲染。建议流程是：先请求最新一页并展示，用户滚动到顶部时用 `page.cursor` 请求旧页，再按 `itemId` 或 turn ID 去重。历史记录和实时流的同一个 item 可能同时出现，最终以 `item/completed` 或最新历史结果校正。
 
@@ -766,6 +771,7 @@ GET /v1/tasks/{taskId}/agent?afterCursor=<opaque-cursor>
 | `AGENT_PROVIDER_UNAVAILABLE` | Codex 未安装、未就绪或不可用 | 刷新 provider 状态并提示电脑端处理 |
 | `CODEX_THREAD_NOT_FOUND` | thread 不存在、读取失败或不属于工作区 | 从列表移除该 thread，重新加载列表 |
 | `CODEX_HISTORY_UNAVAILABLE` | 历史暂时不可读 | 保留当前 UI，稍后重新读取，不要发新 prompt |
+| `HISTORY_FILTER_NOT_SUPPORTED` | provider 拒绝了不支持的历史过滤条件（例如 `includeSystemMessages=true`） | 去掉不支持的过滤条件；Codex 仅接受省略或 `false` |
 | `WORKSPACE_NOT_AUTHORIZED` | 请求路径或工作区不在授权范围 | 停止发送该请求，让用户重新选择工作区 |
 | `TASK_BUSY` | `turnId` 或 `expectedTurnId` 过期，或当前状态不允许操作 | 刷新 task 和当前 turn 后再决定操作 |
 | `CONCURRENT_TASK_LIMIT_REACHED` | 启动这个空闲 turn 会超过 Claude/Codex 共用容量 | 保留输入，等待其他活动 task 回到 idle 后重试 |

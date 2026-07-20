@@ -157,6 +157,80 @@ describe("provider routes", () => {
     expect(calls).toEqual([]);
   });
 
+  it("surfaces HISTORY_FILTER_NOT_SUPPORTED from readConversation as 409", async () => {
+    const calls: Array<{ name: string; value: unknown }> = [];
+    const adapter = fakeProvider(calls);
+    adapter.readConversation = async (input) => {
+      calls.push({ name: "read", value: input });
+      if (input.includeSystemMessages === true) {
+        throw new TaskError(
+          "HISTORY_FILTER_NOT_SUPPORTED",
+          409,
+          "This provider does not support includeSystemMessages.",
+        );
+      }
+      return {
+        items: [{ nativeHistory: true }],
+        page: { cursor: null, hasMore: false },
+      };
+    };
+    const runtime = new AgentRuntimeManager(
+      new AgentProviderRegistry([adapter]),
+      {
+        authorizeWorkspace: async (workspace) => workspace,
+        getTask: () => taskSnapshot("fake"),
+      },
+    );
+    const app = await buildRemoteApiApp({
+      agentRuntimeManager: runtime,
+      deviceAuthService: deviceAuthService(),
+    });
+    apps.push(app);
+
+    const rejected = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "GET",
+      url: "/v1/providers/fake/conversations/native-1?workspace=C%3A%5Cworkspace&includeSystemMessages=true",
+    });
+    expect(rejected.statusCode).toBe(409);
+    expect(rejected.json()).toEqual({
+      code: "HISTORY_FILTER_NOT_SUPPORTED",
+      message: "This provider does not support includeSystemMessages.",
+    });
+    expect(calls).toEqual([
+      {
+        name: "read",
+        value: {
+          includeSystemMessages: true,
+          nativeConversationId: "native-1",
+          workspace: "C:\\workspace",
+        },
+      },
+    ]);
+
+    calls.length = 0;
+    const allowed = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "GET",
+      url: "/v1/providers/fake/conversations/native-1?workspace=C%3A%5Cworkspace&includeSystemMessages=false",
+    });
+    expect(allowed.statusCode).toBe(200);
+    expect(allowed.json()).toEqual({
+      messages: [{ nativeHistory: true }],
+      page: { cursor: null, hasMore: false },
+    });
+    expect(calls).toEqual([
+      {
+        name: "read",
+        value: {
+          includeSystemMessages: false,
+          nativeConversationId: "native-1",
+          workspace: "C:\\workspace",
+        },
+      },
+    ]);
+  });
+
   it("forwards list filters and thread-management operations", async () => {
     const calls: Array<{ name: string; value: unknown }> = [];
     const adapter = fakeProvider(calls);
@@ -332,6 +406,9 @@ describe("provider routes", () => {
           approvals: false,
           attachments: false,
           effort: false,
+          historyFilters: {
+            includeSystemMessages: false,
+          },
           historyPagination: "cursor",
           interrupt: true,
           modes: false,
@@ -384,6 +461,9 @@ describe("provider routes", () => {
             approvals: false,
             attachments: false,
             effort: false,
+            historyFilters: {
+              includeSystemMessages: false,
+            },
             historyPagination: "cursor",
             interrupt: true,
             modes: false,
@@ -437,6 +517,9 @@ function fakeProvider(
         approvals: false,
         attachments: false,
         effort: false,
+        historyFilters: {
+          includeSystemMessages: false,
+        },
         historyPagination: "cursor",
         interrupt: true,
         modes: false,

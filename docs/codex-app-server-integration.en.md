@@ -28,6 +28,9 @@ Then read `GET /v1/providers/codex/capabilities` and select the codec identified
     "approvals": true,
     "attachments": false,
     "effort": true,
+    "historyFilters": {
+      "includeSystemMessages": false
+    },
     "historyPagination": "cursor",
     "interrupt": true,
     "modes": true,
@@ -198,6 +201,12 @@ attachment-bearing `turn/start` input for Codex. Native review, rename, and
 compact appear under `capabilities.nativeActions` with exact methods and
 availability. Detached review is not supported; only inline review delivery is
 forwarded.
+
+Codex advertises `capabilities.historyFilters.includeSystemMessages: false`.
+History REST may omit the filter or send `false`; both return native turn/item
+rows unchanged. `includeSystemMessages=true` is rejected with
+`409 HISTORY_FILTER_NOT_SUPPORTED` before any native history request. Do not
+reshape Codex history into Claude system/user/assistant messages.
 
 Readonly status catalogs appear under `capabilities.statusCatalogs`. Codex
 advertises `account`, `rateLimits`, `skills`, `hooks`, and `mcpServers`. Those

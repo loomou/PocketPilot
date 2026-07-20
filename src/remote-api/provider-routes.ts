@@ -115,11 +115,18 @@ const agentStatusCatalogsSchema = z
   })
   .strict();
 
+const agentHistoryFiltersSchema = z
+  .object({
+    includeSystemMessages: z.boolean(),
+  })
+  .strict();
+
 const capabilitySchema = z.object({
   activeTurnSteering: z.boolean(),
   approvals: z.boolean(),
   attachments: z.boolean(),
   effort: z.boolean(),
+  historyFilters: agentHistoryFiltersSchema,
   historyPagination: z.enum(["cursor", "offset", "none"]),
   interrupt: z.boolean(),
   modes: z.boolean(),

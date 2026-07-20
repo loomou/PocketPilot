@@ -379,9 +379,12 @@ newest within the page:
 Each page contains at most 50 messages. When `page.hasMore` is true, pass the
 returned `page.cursor` as the next request's `cursor` to load the next older
 page and prepend those rows. For Claude this cursor is the SDK message UUID.
-Keep `includeSystemMessages` unchanged for the entire cursor chain. On
-`HISTORY_CURSOR_STALE`, discard the pagination chain and reload the latest page
-without `cursor`.
+Keep `includeSystemMessages` unchanged for the entire cursor chain. Claude
+advertises `capabilities.historyFilters.includeSystemMessages: true` and honors
+the filter. Codex advertises `false` and rejects `includeSystemMessages=true`
+with `409 HISTORY_FILTER_NOT_SUPPORTED` while omit/`false` return native rows
+unchanged. On `HISTORY_CURSOR_STALE`, discard the pagination chain and reload
+the latest page without `cursor`.
 
 The SDK currently reparses the local transcript for each page. Pagination
 limits network and render work, not computer-side parsing. Serialize repeated
@@ -861,6 +864,7 @@ shape. Branch on `code`; present `message` only as user-safe context.
 | `CLAUDE_SESSION_NOT_FOUND` | 404 | Remove stale row and reload the session list without exposing another path |
 | `CLAUDE_HISTORY_UNAVAILABLE` | 409 | Keep attached Query/composer usable; retry history with backoff |
 | `HISTORY_CURSOR_STALE` | 409 | Discard older-page cursor chain and reload latest history |
+| `HISTORY_FILTER_NOT_SUPPORTED` | 409 | Drop the unsupported filter; consult `capabilities.historyFilters` before sending |
 | `CONCURRENT_TASK_LIMIT_REACHED` | 409 | Do not loop; wait for active work to finish or user closes work |
 | `TASK_NOT_FOUND` | 404 | Stop reconnecting that handle; return to session discovery/attach |
 | `TASK_INTERRUPTED` | 409 | Reattach selected session or perform explicit low-level resume |

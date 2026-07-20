@@ -104,6 +104,10 @@ describe("AgentProviderRegistry", () => {
       approvals: true,
       attachments: false,
       effort: true,
+      historyFilters: {
+        experimentalFilter: true,
+        includeSystemMessages: true,
+      },
       historyPagination: "cursor",
       interrupt: true,
       modes: true,
@@ -147,6 +151,9 @@ describe("AgentProviderRegistry", () => {
       approvals: true,
       attachments: false,
       effort: true,
+      historyFilters: {
+        includeSystemMessages: true,
+      },
       historyPagination: "cursor",
       interrupt: true,
       modes: true,
@@ -178,6 +185,155 @@ describe("AgentProviderRegistry", () => {
     });
   });
 
+  it("sanitizes historyFilters into a closed boolean capability object", () => {
+    const adapter = fakeProvider("codex");
+    adapter.descriptor.capabilities = {
+      activeTurnSteering: true,
+      approvals: true,
+      attachments: false,
+      effort: true,
+      historyFilters: {
+        experimentalFilter: true,
+        includeSystemMessages: "yes",
+      },
+      historyPagination: "cursor",
+      interrupt: true,
+      modes: true,
+      models: true,
+      nativeActions: {},
+      newConversation: true,
+      resumeConversation: true,
+      statusCatalogs: {},
+      streamProtocol: "codex-app-server-json-rpc",
+      threadManagement: {
+        archive: false,
+        delete: false,
+        fork: false,
+        includeArchived: false,
+        search: false,
+        unarchive: false,
+      },
+    } as unknown as NonNullable<
+      AgentProviderAdapter["descriptor"]["capabilities"]
+    >;
+
+    expect(
+      new AgentProviderRegistry([adapter]).descriptor("codex").capabilities
+        ?.historyFilters,
+    ).toEqual({
+      includeSystemMessages: false,
+    });
+  });
+
+  it("preserves includeSystemMessages true and rejects null historyFilters objects", () => {
+    const trueAdapter = fakeProvider("claude");
+    trueAdapter.descriptor.capabilities = {
+      activeTurnSteering: true,
+      approvals: true,
+      attachments: false,
+      effort: true,
+      historyFilters: {
+        includeSystemMessages: true,
+        unknown: false,
+      },
+      historyPagination: "cursor",
+      interrupt: true,
+      modes: true,
+      models: true,
+      nativeActions: {},
+      newConversation: true,
+      resumeConversation: true,
+      statusCatalogs: {},
+      streamProtocol: "claude-agent-sdk",
+      threadManagement: {
+        archive: false,
+        delete: false,
+        fork: false,
+        includeArchived: false,
+        search: false,
+        unarchive: false,
+      },
+    } as unknown as NonNullable<
+      AgentProviderAdapter["descriptor"]["capabilities"]
+    >;
+    expect(
+      new AgentProviderRegistry([trueAdapter]).descriptor("claude").capabilities
+        ?.historyFilters,
+    ).toEqual({
+      includeSystemMessages: true,
+    });
+
+    const nullAdapter = fakeProvider("codex");
+    nullAdapter.descriptor.capabilities = {
+      activeTurnSteering: true,
+      approvals: true,
+      attachments: false,
+      effort: true,
+      historyFilters: null,
+      historyPagination: "cursor",
+      interrupt: true,
+      modes: true,
+      models: true,
+      nativeActions: {},
+      newConversation: true,
+      resumeConversation: true,
+      statusCatalogs: {},
+      streamProtocol: "codex-app-server-json-rpc",
+      threadManagement: {
+        archive: false,
+        delete: false,
+        fork: false,
+        includeArchived: false,
+        search: false,
+        unarchive: false,
+      },
+    } as unknown as NonNullable<
+      AgentProviderAdapter["descriptor"]["capabilities"]
+    >;
+    expect(
+      new AgentProviderRegistry([nullAdapter]).descriptor("codex").capabilities
+        ?.historyFilters,
+    ).toEqual({
+      includeSystemMessages: false,
+    });
+  });
+
+  it("defaults missing historyFilters to includeSystemMessages false", () => {
+    const adapter = fakeProvider("codex");
+    adapter.descriptor.capabilities = {
+      activeTurnSteering: true,
+      approvals: true,
+      attachments: false,
+      effort: true,
+      historyPagination: "cursor",
+      interrupt: true,
+      modes: true,
+      models: true,
+      nativeActions: {},
+      newConversation: true,
+      resumeConversation: true,
+      statusCatalogs: {},
+      streamProtocol: "codex-app-server-json-rpc",
+      threadManagement: {
+        archive: false,
+        delete: false,
+        fork: false,
+        includeArchived: false,
+        search: false,
+        unarchive: false,
+      },
+    } as unknown as NonNullable<
+      AgentProviderAdapter["descriptor"]["capabilities"]
+    >;
+
+    expect(
+      new AgentProviderRegistry([adapter]).descriptor("codex").capabilities
+        ?.historyFilters,
+    ).toEqual({
+      includeSystemMessages: false,
+    });
+  });
+
   it("sanitizes threadManagement into a closed boolean capability object", () => {
     const adapter = fakeProvider("codex");
     adapter.descriptor.capabilities = {
@@ -185,6 +341,9 @@ describe("AgentProviderRegistry", () => {
       approvals: true,
       attachments: false,
       effort: true,
+      historyFilters: {
+        includeSystemMessages: false,
+      },
       historyPagination: "cursor",
       interrupt: true,
       modes: true,
@@ -242,6 +401,9 @@ describe("AgentProviderRegistry", () => {
           approvals: false,
           attachments: false,
           effort: false,
+          historyFilters: {
+            includeSystemMessages: false,
+          },
           historyPagination: "cursor",
           interrupt: false,
           modes: false,
@@ -277,6 +439,9 @@ describe("AgentProviderRegistry", () => {
           approvals: false,
           attachments: false,
           effort: false,
+          historyFilters: {
+            includeSystemMessages: false,
+          },
           historyPagination: "cursor",
           interrupt: false,
           modes: false,
