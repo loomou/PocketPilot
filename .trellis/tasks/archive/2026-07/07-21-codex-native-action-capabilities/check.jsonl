@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/agent-provider-contracts.md", "reason": "Verify sanitized capabilities publish attachments:false and closed nativeActions shape"}
+{"file": ".trellis/spec/backend/codex-app-server-contracts.md", "reason": "Verify only reviewed methods are allowlisted and turn/review/compact lifecycle stays native"}
+{"file": ".trellis/spec/backend/task-runtime-contracts.md", "reason": "Verify capacity, lease invalidation, and non-steerable turn gating match runtime contracts"}
+{"file": ".trellis/spec/backend/api-documentation-contracts.md", "reason": "Verify OpenAPI and mobile docs match the generated capability contract"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify no forbidden patterns, credential/path leakage, or unrelated churn"}
