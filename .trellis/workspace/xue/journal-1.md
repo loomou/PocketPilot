@@ -506,3 +506,36 @@ Aligned Codex App Server with the shared provider task runtime: P2 capacity and 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: Codex native action capabilities
+
+**Date**: 2026-07-21
+**Task**: Codex native action capabilities
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Implemented Codex nativeActions for review/rename/compact, set attachments false, shared turn lifecycle with non-steerable review/compact, updated contracts/docs/tests, and committed the feature.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `effa056` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
