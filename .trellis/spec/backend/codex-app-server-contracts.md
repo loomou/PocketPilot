@@ -160,6 +160,13 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
   writes, filesystem/process RPCs, plugin installation, arbitrary MCP calls,
   detached review, deprecated `thread/rollback`, path-based fork, and unknown
   privileged methods are denied from the remote stream.
+- Provider readiness for Codex is a bounded App Server initialize probe:
+  command missing → `not_installed` / `CODEX_COMMAND_NOT_FOUND`; unsupported
+  CLI/protocol → `unsupported_version` /
+  `CODEX_APP_SERVER_VERSION_UNSUPPORTED`; timeout/unexpected failure →
+  `unhealthy` / `CODEX_APP_SERVER_PROBE_FAILED`; success → `available`.
+  Short-lived probe children must close in `finally` and must not leave orphan
+  App Server processes.
 - List supports optional `includeArchived` / `searchTerm` filters by forwarding
   native `thread/list` params `archived` and `searchTerm` after workspace
   authorization.
@@ -251,10 +258,11 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
 - Journal tests cover task isolation, entry/byte eviction, known cursor replay,
   absent/unknown/stale cursor fallback, active-turn reset, and end-turn cleanup
   without dropping live subscribers.
-- The caller-configured live suite must prove initialize, `model/list`, all
-  thread sources, `thread/start`, native streaming, `thread/turns/list`,
-  `thread/read`, `thread/resume`, active-turn interrupt, archive cleanup, and
-  process shutdown:
+- The caller-configured live suite must prove initialize, readiness probe
+  semantics, `model/list`, all thread sources, `thread/start`, native streaming,
+  `thread/turns/list`, `thread/read`, `thread/resume`, active-turn interrupt,
+  non-destructive status-catalog reads when available, disposable
+  fork/archive/unarchive cleanup, and process shutdown:
 
 ```powershell
 $env:CODEX_APP_SERVER_TEST_CWD = "<absolute-workspace-path>"
@@ -262,7 +270,8 @@ pnpm test:codex:live
 ```
 
 The suite must not commit a workspace path, executable path, account, or
-credential. Ordinary `pnpm test` skips it.
+credential. Ordinary `pnpm test` skips it. Live cleanup must prefer disposable
+forked threads and must not leave permanent host threads behind.
 
 ## 7. Wrong vs Correct
 

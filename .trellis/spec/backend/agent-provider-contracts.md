@@ -60,6 +60,25 @@ unarchive, or delete.
 - Register every configured provider, including unavailable providers. Status is
   one of `available`, `not_installed`, `disabled`, `unhealthy`, or
   `unsupported_version`; unavailable providers remain discoverable.
+- Readiness is a bounded, cached probe—not a continuous health daemon:
+  - Adapters may implement `refreshReadiness({ force? })`. Discovery routes
+    (`GET /v1/providers`, `GET /v1/providers/{providerId}/capabilities`) refresh
+    stale readiness before returning descriptors/capabilities.
+  - Default cache TTL is `PROVIDER_READINESS_TTL_MS` (30s). Concurrent refresh
+    for one provider must single-flight.
+  - Install-presence-only constructor snapshots are provisional and must still
+    run the first version/protocol probe; only intentionally configured
+    `disabled` may skip probing as a cached decision.
+  - Stable non-secret reason codes include:
+    - Codex: `CODEX_COMMAND_NOT_FOUND`,
+      `CODEX_APP_SERVER_VERSION_UNSUPPORTED`,
+      `CODEX_APP_SERVER_PROBE_FAILED`
+    - Claude: `CLAUDE_SDK_NOT_AVAILABLE`,
+      `CLAUDE_SDK_VERSION_UNSUPPORTED`,
+      `CLAUDE_SDK_PROBE_FAILED`
+  - Probes are timeboxed and must clean up short-lived children in `finally`.
+    Never return executable/config paths, env dumps, raw stderr, credentials,
+    or stack traces in descriptors.
 - Descriptor responses project only stable fields: `id`, `displayName`,
   `status`, optional `reasonCode`, optional `protocolVersion`, and the exact
   capability fields. Never return executable/config paths, credentials, raw
@@ -139,6 +158,8 @@ unarchive, or delete.
   without a provider-ID branch in route or runtime code.
 - Good: an unavailable provider exposes a stable reason code but no local path
   or raw process diagnostics.
+- Good: concurrent discovery refreshes single-flight one Codex initialize probe
+  and reuse the cached result within the TTL.
 - Good: a provider turn reserves shared capacity through `ProviderTaskRuntime`,
   while a native history read proceeds as P3 without waiting behind that turn's
   P2 lane.
@@ -169,6 +190,10 @@ unarchive, or delete.
 - Registry tests cover every availability status, duplicate IDs, safe
   descriptor projection, closed `nativeActions` sanitization, closed
   `statusCatalogs` sanitization, unknown providers, and unavailable execution.
+- Readiness tests cover TTL caching, single-flight concurrent refresh,
+  provisional install-presence snapshots that still probe, disabled skip
+  behavior, stable reason codes without path/secret leakage, discovery route
+  refresh before descriptor/capability responses, and probe-child cleanup.
 - Fake-provider route tests cover authentication, common workspace rejection,
   list/read/create/attach delegation, native row passthrough, capability
   schema fields (`attachments`, `nativeActions`, `statusCatalogs`), and
