@@ -605,3 +605,44 @@ Implemented Codex conversation list filters plus REST fork/archive/unarchive/del
 ### Next Steps
 
 - None - task complete
+
+
+## Session 19: Provider readiness and live coverage
+
+**Date**: 2026-07-21
+**Task**: Provider readiness and live coverage
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Implemented bounded provider readiness probes (30s TTL, single-flight, stable reason codes) for Codex/Claude discovery, expanded opt-in Codex live coverage for status catalogs and disposable fork cleanup, updated contracts/docs/tests, and archived the task.
+
+### Main Changes
+
+- Added `refreshReadiness` with TTL caching and single-flight refresh on discovery/capabilities.
+- Codex App Server initialize probe maps install/version/unhealthy statuses without path/secret leakage.
+- Claude adapter readiness probe with matching reason-code projection.
+- Expanded `pnpm test:codex:live` for status catalogs + disposable thread cleanup.
+- Updated agent-provider and codex-app-server contracts for readiness/live harness rules.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8b21262` | feat(providers): add readiness refresh and expand Codex live coverage |
+| `e590a18` | docs(spec): record provider readiness and live harness contracts |
+| `785eea1` | chore(task): archive 07-21-provider-readiness-live-coverage |
+
+### Testing
+
+- Unit/route/adapter readiness tests (TTL, single-flight, provisional probe, route refresh).
+- Opt-in live suite remains skipped under ordinary `pnpm test`.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Parent audit `07-20-claude-code-parity-audit` is 4/4 children done; update findings/archive when ready.
+- Remaining planning tasks: `07-19-claude-session-id-timing`, `07-19-enable-sdk-streaming`.
