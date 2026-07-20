@@ -22,6 +22,8 @@ new AgentRuntimeManager(registry, {
   getTask(taskId): TaskSnapshot;
 });
 
+taskManager.providerTaskRuntime(): ProviderTaskRuntime;
+
 interface AgentProviderAdapter {
   readonly descriptor: AgentProviderDescriptor;
   readonly taskStream: AgentTaskStreamAdapter;
@@ -64,13 +66,24 @@ GET  /v1/tasks/{taskId}/agent
   `sdkSessionId` field until a provider-neutral native identity store is
   introduced by a separately reviewed migration.
 - Common response envelopes contain only task/provider metadata and
-  `{ page: { cursor, hasMore } }`. Conversation rows, history rows, approvals,
-  errors, client frames, and server frames remain provider-native.
+  `{ page: { cursor, hasMore } }`. Conversation rows, history rows, errors,
+  client frames, native approval requests, and native approval responses remain
+  provider-native.
 - `/v1/tasks/{taskId}/agent` selects the adapter from the persisted task. It
   installs the native subscriber before activation and transports JSON frames
   without `{ kind: "agent", payload: ... }` or another synthetic wrapper.
 - `/v1/events` remains the independent PocketPilot control stream. Task state,
-  approvals, task IDs, and control cursors never enter provider-native frames.
+  task IDs, and control cursors never enter provider-native frames. A provider
+  approval may additionally project a metadata-only `approval.requested`
+  control event, but the client must still answer with the provider's unchanged
+  native response frame on the Agent WebSocket.
+- Provider adapters use `ProviderTaskRuntime` for shared P2 serialization,
+  active-task capacity, generation invalidation, task-state transitions,
+  approval projection, and turn retention. Do not build a second scheduler or
+  capacity counter inside an adapter.
+- Provider-native catalog and history reads are P3. They remain outside the P2
+  task lane, reject unavailable/interrupted/terminal tasks, and recheck current
+  workspace authorization before forwarding or returning data.
 - The Claude adapter validates the raw base message but submits the same parsed
   object reference, preserving extension fields. It converts only pagination
   cursors outside native rows.
@@ -85,6 +98,8 @@ GET  /v1/tasks/{taskId}/agent
 | Unknown provider | `404 AGENT_PROVIDER_NOT_FOUND`. |
 | Registered but unavailable provider | `409 AGENT_PROVIDER_UNAVAILABLE`; discovery still returns its safe descriptor. |
 | Workspace is missing or outside authorized roots | Existing `403 WORKSPACE_NOT_AUTHORIZED`; adapter is not called. |
+| A P3 read targets an interrupted, terminal, or revoked task | Reject with the existing task/workspace error; forward no provider request. |
+| A queued P2 operation is invalidated by P0/P1 | `409 TASK_OPERATION_SUPERSEDED`; perform no later provider write or task-state update. |
 | Agent WebSocket authentication fails | Close `4003 / AUTHENTICATION_FAILED`; register no socket. |
 | Native client frame is invalid | Close `4000 / SDK_MESSAGE_INVALID`; submit nothing. |
 | Task is missing or its runtime is unavailable | Close `4004 / TASK_NOT_FOUND` or `4009 / TASK_SESSION_UNAVAILABLE`. |
@@ -96,6 +111,9 @@ GET  /v1/tasks/{taskId}/agent
   without a provider-ID branch in route or runtime code.
 - Good: an unavailable provider exposes a stable reason code but no local path
   or raw process diagnostics.
+- Good: a provider turn reserves shared capacity through `ProviderTaskRuntime`,
+  while a native history read proceeds as P3 without waiting behind that turn's
+  P2 lane.
 - Base: Claude list/history rows retain object identity while their native
   offset/UUID cursors appear only in the common page envelope.
 - Bad: a route switches on `providerId === "claude"`, wraps native frames, lets
@@ -111,6 +129,9 @@ GET  /v1/tasks/{taskId}/agent
 - Agent WebSocket tests cover task/provider selection, subscribe-before-
   activation, bidirectional native equality, invalid/binary input, replay
   cursor forwarding, stable close codes, device revocation, and task-only close.
+- Provider adapter tests cover shared capacity, queued P2 invalidation by P0/P1,
+  P3 progress outside a blocked P2 lane, workspace reauthorization, approval
+  projection, and native approval-response ownership.
 - Claude adapter tests cover offset and history cursor conversion, unchanged
   native row identity, create/attach delegation, raw parse/submit identity,
   subscribe forwarding, and activation.

@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AgentProviderAdapter } from "../../src/agent-providers/types.js";
 import { InMemoryDeviceConnectionRegistry } from "../../src/auth/device-connection-registry.js";
 import { parseSdkUserMessageFrame } from "../../src/claude-sdk/transport.js";
+import { CodexNativeJournal } from "../../src/codex-app-server/journal.js";
+import { parseCodexClientFrame } from "../../src/codex-app-server/protocol.js";
 import { createHttpApp } from "../../src/http/create-http-app.js";
 import { createPocketPilotLogger } from "../../src/logging/logger.js";
 import { InMemoryTaskAgentConnectionRegistry } from "../../src/remote-api/task-agent-connection-registry.js";
@@ -77,6 +79,69 @@ describe("task Agent WebSocket", () => {
     expect(fixture.submissions).toEqual([]);
   });
 
+  it("replays the complete retained Codex turn without wrapping native frames", async () => {
+    const journal = new CodexNativeJournal();
+    const provider = codexReplayProvider(journal);
+    const fixture = await createFixture(apps, {
+      provider,
+      snapshot: taskSnapshot("codex"),
+    });
+    const first = {
+      method: "turn/started",
+      params: { threadId: "thread-1", turn: { id: "turn-1" } },
+    };
+    const second = {
+      method: "item/agentMessage/delta",
+      params: { delta: "hello", itemId: "item-1", threadId: "thread-1" },
+    };
+    journal.beginTurn(taskId);
+    journal.publish(taskId, first);
+    journal.publish(taskId, second);
+
+    const initialMessages: unknown[] = [];
+    const initial = await fixture.app.injectWS(
+      `/v1/tasks/${taskId}/agent`,
+      { headers: { authorization: "Bearer access-token" } },
+      { onInit: (socket) => collectMessages(socket, initialMessages) },
+    );
+    await waitFor(() => initialMessages.length === 2);
+    expect(initialMessages).toEqual([first, second]);
+    const live = {
+      method: "item/completed",
+      params: { item: { id: "item-1" }, threadId: "thread-1" },
+    };
+    journal.publish(taskId, live);
+    await waitFor(() => initialMessages.length === 3);
+    expect(initialMessages[2]).toEqual(live);
+    initial.terminate();
+
+    const fallbackMessages: unknown[] = [];
+    const fallback = await fixture.app.injectWS(
+      `/v1/tasks/${taskId}/agent?afterCursor=evicted-cursor`,
+      { headers: { authorization: "Bearer access-token" } },
+      { onInit: (socket) => collectMessages(socket, fallbackMessages) },
+    );
+    await waitFor(() => fallbackMessages.length === 3);
+    expect(fallbackMessages).toEqual([first, second, live]);
+    fallback.terminate();
+
+    const nextTurn = {
+      method: "turn/started",
+      params: { threadId: "thread-1", turn: { id: "turn-2" } },
+    };
+    journal.beginTurn(taskId);
+    journal.publish(taskId, nextTurn);
+    const nextTurnMessages: unknown[] = [];
+    const next = await fixture.app.injectWS(
+      `/v1/tasks/${taskId}/agent`,
+      { headers: { authorization: "Bearer access-token" } },
+      { onInit: (socket) => collectMessages(socket, nextTurnMessages) },
+    );
+    await waitFor(() => nextTurnMessages.length === 1);
+    expect(nextTurnMessages).toEqual([nextTurn]);
+    next.terminate();
+  });
+
   it("uses stable close codes for authentication and missing tasks", async () => {
     const unauthorizedFixture = await createFixture(apps, {
       authenticate: false,
@@ -136,7 +201,12 @@ describe("task Agent WebSocket", () => {
 
 async function createFixture(
   apps: Array<Awaited<ReturnType<typeof createHttpApp>>>,
-  options: { authenticate?: boolean; taskExists?: boolean } = {},
+  options: {
+    authenticate?: boolean;
+    provider?: AgentProviderAdapter;
+    snapshot?: TaskSnapshot;
+    taskExists?: boolean;
+  } = {},
 ) {
   const app = await createHttpApp({ websocket: true });
   const logs = createCapture();
@@ -146,7 +216,7 @@ async function createFixture(
   const activationObservedSubscriber: boolean[] = [];
   let subscriber: { send(message: unknown): void } | undefined;
   let afterCursor: string | undefined;
-  const provider: AgentProviderAdapter = {
+  const defaultProvider: AgentProviderAdapter = {
     descriptor: {
       displayName: "Claude Code",
       id: "claude",
@@ -185,13 +255,15 @@ async function createFixture(
       page: { cursor: null, hasMore: false },
     }),
   };
+  const provider = options.provider ?? defaultProvider;
+  const snapshot = options.snapshot ?? taskSnapshot();
   registerTaskAgentRoutes(app, {
     agentRuntimeManager: {
       task(): TaskSnapshot {
         if (options.taskExists === false) {
           throw new TaskError("TASK_NOT_FOUND", 404, "Task not found.");
         }
-        return taskSnapshot();
+        return snapshot;
       },
       taskProvider(): AgentProviderAdapter {
         if (options.taskExists === false) {
@@ -234,7 +306,7 @@ async function createFixture(
   };
 }
 
-function taskSnapshot(): TaskSnapshot {
+function taskSnapshot(provider: "claude" | "codex" = "claude"): TaskSnapshot {
   return {
     activeTurnId: null,
     createdAt: 1,
@@ -242,17 +314,63 @@ function taskSnapshot(): TaskSnapshot {
     initialCwd: "C:\\workspace",
     interruptedAt: null,
     model: null,
-    nativeConversationId: null,
-    nativeProtocolVersion: "@anthropic-ai/claude-agent-sdk@0.3.210",
-    nativeSessionId: null,
-    origin: "pocketpilot",
-    permissionMode: "default",
-    provider: "claude",
+    nativeConversationId: provider === "codex" ? "thread-1" : null,
+    nativeProtocolVersion:
+      provider === "codex" ? "0.144" : "@anthropic-ai/claude-agent-sdk@0.3.210",
+    nativeSessionId: provider === "codex" ? "session-1" : null,
+    origin: provider === "codex" ? "agent-conversation" : "pocketpilot",
+    permissionMode: provider === "codex" ? null : "default",
+    provider,
     sdkSessionId: null,
     state: "idle",
     terminalAt: null,
     updatedAt: 1,
   };
+}
+
+function codexReplayProvider(
+  journal: CodexNativeJournal,
+): AgentProviderAdapter {
+  return {
+    descriptor: {
+      displayName: "Codex CLI",
+      id: "codex",
+      protocolVersion: "0.144",
+      status: "available",
+    },
+    taskStream: {
+      activate: async () => undefined,
+      parseClientFrame: parseCodexClientFrame,
+      submit: async () => taskSnapshot("codex"),
+      subscribe: (task, afterCursor, subscriber) =>
+        journal.subscribe(task, afterCursor, subscriber),
+    },
+    attachConversation: async () => {
+      throw new Error("not used");
+    },
+    createConversation: async () => {
+      throw new Error("not used");
+    },
+    listConversations: async () => ({
+      items: [],
+      page: { cursor: null, hasMore: false },
+    }),
+    readConversation: async () => ({
+      items: [],
+      page: { cursor: null, hasMore: false },
+    }),
+  };
+}
+
+function collectMessages(
+  socket: {
+    on(event: "message", listener: (data: Buffer) => void): unknown;
+  },
+  messages: unknown[],
+): void {
+  socket.on("message", (data) => {
+    messages.push(JSON.parse(data.toString("utf8")));
+  });
 }
 
 type WebSocketFailure = { code: number; reason: string };

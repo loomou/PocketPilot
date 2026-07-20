@@ -14,6 +14,7 @@ import type {
 import type { PocketPilotLogger } from "../logging/logger.js";
 import { noopLogger } from "../logging/logger.js";
 import { TaskError } from "../tasks/errors.js";
+import type { ProviderTaskRuntime } from "../tasks/provider-task-runtime.js";
 import type { TaskRepository } from "../tasks/task-repository.js";
 import type { TaskOperationResult, TaskSnapshot } from "../tasks/task-types.js";
 import {
@@ -28,6 +29,7 @@ import {
 import { CodexNativeJournal } from "./journal.js";
 import {
   isCodexClientRequestFrame,
+  isCodexReadClientRequestMethod,
   isForwardedCodexNotification,
   isForwardedCodexServerRequest,
   parseCodexClientFrame,
@@ -45,13 +47,25 @@ const OPERATION_RESULT_TTL_MS = 24 * 60 * 60 * 1_000;
 const CODEX_PROVIDER_ID = "codex";
 
 type CodexRuntime = {
+  activeDeviceId: string | undefined;
   activated: boolean;
   activation?: Promise<void> | undefined;
   connectionGeneration: number;
-  pendingServerRequests: Map<string, string>;
+  pendingInterruptRequests: Set<string>;
+  pendingServerRequests: Map<string, PendingServerRequest>;
+  pendingTurnStarts: Map<string, string>;
   taskId: string;
   threadId: string;
   workspace: string;
+};
+
+type PendingServerRequest = {
+  connectionGeneration: number;
+  deviceId: string;
+  itemId?: string;
+  method: string;
+  threadId: string;
+  turnId?: string;
 };
 
 type NativeThread = CodexJsonObject & {
@@ -68,6 +82,7 @@ export type CodexProviderAdapterOptions = {
   repository: TaskRepository;
   status?: AgentProviderStatus;
   statusReasonCode?: string;
+  taskRuntime: ProviderTaskRuntime;
   workspaceDirectoryResolver?: WorkspaceDirectoryResolver;
 };
 
@@ -82,6 +97,7 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
   readonly #now: () => number;
   readonly #repository: TaskRepository;
   readonly #runtimes = new Map<string, CodexRuntime>();
+  readonly #taskRuntime: ProviderTaskRuntime;
   readonly #workspaceDirectoryResolver: WorkspaceDirectoryResolver;
   readonly #unsubscribeBridge: () => void;
 
@@ -90,6 +106,7 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     this.#logger = options.logger ?? noopLogger;
     this.#now = options.now ?? Date.now;
     this.#repository = options.repository;
+    this.#taskRuntime = options.taskRuntime;
     this.#workspaceDirectoryResolver =
       options.workspaceDirectoryResolver ?? nodeWorkspaceDirectoryResolver;
     const status = options.status ?? "available";
@@ -217,9 +234,12 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
         }
         const task = this.createTask(input.workspace, thread);
         this.#runtimes.set(task.id, {
+          activeDeviceId: undefined,
           activated: true,
           connectionGeneration: this.#bridge.connectionGeneration,
+          pendingInterruptRequests: new Set(),
           pendingServerRequests: new Map(),
+          pendingTurnStarts: new Map(),
           taskId: task.id,
           threadId: thread.id,
           workspace: input.workspace,
@@ -285,6 +305,9 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     // Approval request IDs belong to one App Server generation. They must not
     // be replayed into a newly initialized process after a bridge failure.
     runtime.pendingServerRequests.clear();
+    runtime.pendingInterruptRequests.clear();
+    runtime.pendingTurnStarts.clear();
+    runtime.activeDeviceId = undefined;
     const result = requireObject(
       await this.#bridge.request("thread/resume", {
         excludeTurns: true,
@@ -307,6 +330,8 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
       nativeSessionId: thread.sessionId,
       updatedAt: this.#now(),
     });
+    this.#taskRuntime.turnCompleted(runtime.taskId);
+    this.#journal.endTurn(runtime.taskId);
   }
 
   private async submit(input: {
@@ -316,37 +341,151 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
   }): Promise<TaskSnapshot> {
     const task = this.requireCodexTask(input.taskId);
     const runtime = this.runtime(task);
-    await this.activate(task.id);
     const frame = input.message as CodexClientFrame;
-    await this.validateRemotePaths(runtime.workspace, frame);
-    if (isCodexClientRequestFrame(frame)) {
-      const forwarded = this.prepareTaskRequest(runtime, frame);
-      await this.#bridge.forward(task.id, forwarded);
+    if (isCodexClientRequestFrame(frame) && frame.method === "turn/interrupt") {
+      return this.submitInterrupt(input.deviceId, runtime, frame);
+    }
+    if (
+      isCodexClientRequestFrame(frame) &&
+      isCodexReadClientRequestMethod(frame.method)
+    ) {
+      return this.submitRead(input.deviceId, runtime, frame);
+    }
+
+    return this.#taskRuntime.run(task.id, async (lease) => {
+      lease.assertCurrent();
+      await this.activate(task.id);
+      lease.assertCurrent();
+      await this.validateRemotePaths(runtime.workspace, frame);
+      lease.assertCurrent();
+      if (isCodexClientRequestFrame(frame)) {
+        const forwarded = this.prepareTaskRequest(runtime, frame);
+        const currentTask = this.requireCodexTask(task.id);
+        const startsTurn = frame.method === "turn/start";
+        if (startsTurn && currentTask.state !== "idle") {
+          throw new TaskError(
+            "TASK_BUSY",
+            409,
+            "An active Codex turn accepts input through turn/steer.",
+          );
+        }
+        if (startsTurn) {
+          await this.#taskRuntime.reserveTurn(task.id, lease);
+          lease.assertCurrent();
+          this.#journal.beginTurn(task.id);
+          runtime.activeDeviceId = input.deviceId;
+          runtime.pendingTurnStarts.set(
+            codexRequestKey(frame.id),
+            input.deviceId,
+          );
+        }
+        try {
+          await this.#bridge.forward(task.id, forwarded);
+          lease.assertCurrent();
+        } catch (error) {
+          if (startsTurn) {
+            runtime.pendingTurnStarts.delete(codexRequestKey(frame.id));
+            runtime.activeDeviceId = undefined;
+            this.#taskRuntime.rollbackTurn(task.id);
+            this.#journal.endTurn(task.id);
+          }
+          throw error;
+        }
+        this.#repository.recordAudit({
+          deviceId: input.deviceId,
+          occurredAt: this.#now(),
+          operation: `codex.${forwarded.method}`,
+          result: "forwarded",
+          taskId: task.id,
+        });
+        return this.#repository.require(task.id);
+      }
+
+      const requestKey = codexRequestKey(frame.id);
+      const pending = runtime.pendingServerRequests.get(requestKey);
+      if (
+        pending === undefined ||
+        pending.connectionGeneration !== runtime.connectionGeneration ||
+        pending.connectionGeneration !== this.#bridge.connectionGeneration ||
+        pending.deviceId !== input.deviceId ||
+        pending.threadId !== runtime.threadId
+      ) {
+        throw new TaskError(
+          "STALE_APPROVAL",
+          409,
+          "The Codex server request is no longer pending for this task.",
+        );
+      }
+      await this.#bridge.respond(frame.id, frame.result);
+      lease.assertCurrent();
+      runtime.pendingServerRequests.delete(requestKey);
+      this.#taskRuntime.approvalResolved(
+        task.id,
+        runtime.pendingServerRequests.size,
+      );
       this.#repository.recordAudit({
         deviceId: input.deviceId,
         occurredAt: this.#now(),
-        operation: `codex.${forwarded.method}`,
-        result: "forwarded",
+        operation: "codex.server-request-resolved",
+        result: "resolved",
         taskId: task.id,
       });
       return this.#repository.require(task.id);
-    }
+    });
+  }
 
-    const requestKey = codexRequestKey(frame.id);
-    if (!runtime.pendingServerRequests.has(requestKey)) {
-      throw new TaskError(
-        "STALE_APPROVAL",
-        409,
-        "The Codex server request is no longer pending for this task.",
-      );
-    }
-    await this.#bridge.respond(frame.id, frame.result);
-    runtime.pendingServerRequests.delete(requestKey);
+  private async submitRead(
+    deviceId: string,
+    runtime: CodexRuntime,
+    frame: CodexClientRequestFrame,
+  ): Promise<TaskSnapshot> {
+    await this.#taskRuntime.assertReadable(runtime.taskId);
+    await this.activate(runtime.taskId);
+    await this.#taskRuntime.assertReadable(runtime.taskId);
+    await this.validateRemotePaths(runtime.workspace, frame);
+    await this.#taskRuntime.assertReadable(runtime.taskId);
+    const forwarded = this.prepareTaskRequest(runtime, frame);
+    await this.#bridge.forward(runtime.taskId, forwarded);
+    const task = await this.#taskRuntime.assertReadable(runtime.taskId);
     this.#repository.recordAudit({
-      deviceId: input.deviceId,
+      deviceId,
       occurredAt: this.#now(),
-      operation: "codex.server-request-resolved",
-      result: "resolved",
+      operation: `codex.${forwarded.method}`,
+      result: "forwarded",
+      taskId: runtime.taskId,
+    });
+    return task;
+  }
+
+  private async submitInterrupt(
+    deviceId: string,
+    runtime: CodexRuntime,
+    frame: CodexClientRequestFrame,
+  ): Promise<TaskSnapshot> {
+    const task = this.requireCodexTask(runtime.taskId);
+    this.prepareTaskRequest(runtime, frame);
+    const requestKey = codexRequestKey(frame.id);
+    this.#taskRuntime.beginInterrupt(task.id);
+    this.#journal.endTurn(task.id);
+    runtime.activeDeviceId = undefined;
+    runtime.pendingServerRequests.clear();
+    runtime.pendingTurnStarts.clear();
+    runtime.pendingInterruptRequests.add(requestKey);
+    try {
+      await this.activate(task.id);
+      const forwarded = this.prepareTaskRequest(runtime, frame);
+      await this.validateRemotePaths(runtime.workspace, frame);
+      await this.#bridge.forward(task.id, forwarded);
+    } catch (error) {
+      runtime.pendingInterruptRequests.delete(requestKey);
+      this.#taskRuntime.completeInterrupt(task.id);
+      throw error;
+    }
+    this.#repository.recordAudit({
+      deviceId,
+      occurredAt: this.#now(),
+      operation: "codex.turn/interrupt",
+      result: "forwarded",
       taskId: task.id,
     });
     return this.#repository.require(task.id);
@@ -398,7 +537,26 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
 
   private onBridgeDelivery(delivery: CodexBridgeDelivery): void {
     if (delivery.taskId !== undefined) {
-      if (this.#runtimes.has(delivery.taskId)) {
+      const runtime = this.#runtimes.get(delivery.taskId);
+      if (runtime !== undefined) {
+        if (
+          isCodexRequestId(delivery.frame.id) &&
+          ("result" in delivery.frame || "error" in delivery.frame)
+        ) {
+          const requestKey = codexRequestKey(delivery.frame.id);
+          const turnOwnerDeviceId = runtime.pendingTurnStarts.get(requestKey);
+          if (runtime.pendingTurnStarts.delete(requestKey)) {
+            if ("error" in delivery.frame) {
+              if (runtime.activeDeviceId === turnOwnerDeviceId) {
+                runtime.activeDeviceId = undefined;
+              }
+              this.#taskRuntime.rollbackTurn(delivery.taskId);
+            }
+          }
+          if (runtime.pendingInterruptRequests.delete(requestKey)) {
+            this.#taskRuntime.completeInterrupt(delivery.taskId);
+          }
+        }
         this.#journal.publish(delivery.taskId, delivery.frame);
       }
       return;
@@ -452,27 +610,20 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
       return;
     }
     if (method === "turn/started") {
-      if (task.state === "interrupted") {
-        return;
-      }
       const turn = params.turn;
       if (isCodexJsonObject(turn) && typeof turn.id === "string") {
-        this.#repository.update(runtime.taskId, {
-          activeTurnId: turn.id,
-          state: "executing",
-          updatedAt: this.#now(),
-        });
+        runtime.pendingTurnStarts.clear();
+        this.#taskRuntime.turnStarted(runtime.taskId, turn.id);
       }
       return;
     }
     if (method === "turn/completed") {
+      runtime.activeDeviceId = undefined;
       runtime.pendingServerRequests.clear();
-      this.#repository.update(runtime.taskId, {
-        activeTurnId: null,
-        interruptedAt: null,
-        state: "idle",
-        updatedAt: this.#now(),
-      });
+      runtime.pendingTurnStarts.clear();
+      runtime.pendingInterruptRequests.clear();
+      this.#taskRuntime.turnCompleted(runtime.taskId);
+      this.#journal.endTurn(runtime.taskId);
       return;
     }
     if (
@@ -480,6 +631,10 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
       isCodexRequestId(params.requestId)
     ) {
       runtime.pendingServerRequests.delete(codexRequestKey(params.requestId));
+      this.#taskRuntime.approvalResolved(
+        runtime.taskId,
+        runtime.pendingServerRequests.size,
+      );
     }
   }
 
@@ -507,7 +662,43 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
       );
       return;
     }
-    runtime.pendingServerRequests.set(codexRequestKey(frame.id), method);
+    const task = this.#repository.find(runtime.taskId);
+    const params = isCodexJsonObject(frame.params) ? frame.params : {};
+    if (
+      runtime.activeDeviceId === undefined ||
+      runtime.connectionGeneration !== this.#bridge.connectionGeneration ||
+      task === undefined ||
+      (task.state !== "executing" && task.state !== "awaiting_approval") ||
+      (typeof params.turnId === "string" && params.turnId !== task.activeTurnId)
+    ) {
+      await this.#bridge.rejectServerRequest(
+        frame.id,
+        "This Codex server request is no longer attached.",
+      );
+      return;
+    }
+    runtime.pendingServerRequests.set(codexRequestKey(frame.id), {
+      connectionGeneration: runtime.connectionGeneration,
+      deviceId: runtime.activeDeviceId,
+      ...(typeof params.itemId === "string" ? { itemId: params.itemId } : {}),
+      method,
+      threadId: runtime.threadId,
+      ...(typeof params.turnId === "string" ? { turnId: params.turnId } : {}),
+    });
+    const pending = this.#taskRuntime.approvalRequested(runtime.taskId, {
+      method,
+      params: frame.params,
+      provider: CODEX_PROVIDER_ID,
+      requestId: frame.id,
+    });
+    if (pending === undefined) {
+      runtime.pendingServerRequests.delete(codexRequestKey(frame.id));
+      await this.#bridge.rejectServerRequest(
+        frame.id,
+        "This Codex server request is no longer attached.",
+      );
+      return;
+    }
     this.#journal.publish(runtime.taskId, frame);
   }
 
@@ -516,16 +707,15 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     if (runtime === undefined) {
       return;
     }
+    runtime.activeDeviceId = undefined;
     runtime.pendingServerRequests.clear();
     try {
       await this.#bridge.request("thread/unsubscribe", {
         threadId: runtime.threadId,
       });
     } finally {
-      this.#repository.update(taskId, {
-        activeTurnId: null,
-        updatedAt: this.#now(),
-      });
+      runtime.pendingInterruptRequests.clear();
+      runtime.pendingTurnStarts.clear();
       this.#journal.clear(taskId);
       this.#runtimes.delete(taskId);
     }
@@ -536,16 +726,18 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     if (task.activeTurnId === null) {
       return;
     }
+    const runtime = this.#runtimes.get(taskId);
+    if (runtime !== undefined) {
+      runtime.activeDeviceId = undefined;
+      runtime.pendingServerRequests.clear();
+      runtime.pendingInterruptRequests.clear();
+      runtime.pendingTurnStarts.clear();
+    }
     await this.#bridge.request("turn/interrupt", {
       threadId: task.nativeConversationId,
       turnId: task.activeTurnId,
     });
-    const runtime = this.#runtimes.get(taskId);
-    runtime?.pendingServerRequests.clear();
-    this.#repository.update(task.id, {
-      activeTurnId: null,
-      updatedAt: this.#now(),
-    });
+    this.#journal.endTurn(taskId);
   }
 
   private createTask(workspace: string, thread: NativeThread): TaskSnapshot {
@@ -573,9 +765,12 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
       throw codexThreadNotFound();
     }
     runtime = {
+      activeDeviceId: undefined,
       activated: false,
       connectionGeneration: 0,
+      pendingInterruptRequests: new Set(),
       pendingServerRequests: new Map(),
+      pendingTurnStarts: new Map(),
       taskId: task.id,
       threadId: task.nativeConversationId,
       workspace: task.initialCwd,

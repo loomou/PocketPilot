@@ -62,6 +62,21 @@ manager.setPermissionMode({ deviceId, operationId, taskId, permissionMode });
 manager.setEffortLevel({ deviceId, operationId, taskId, effortLevel });
 manager.shutdown();
 
+manager.providerTaskRuntime(): ProviderTaskRuntime;
+
+interface ProviderTaskRuntime {
+  run(taskId, operationWithLease): Promise<unknown>;
+  assertReadable(taskId): Promise<TaskSnapshot>;
+  reserveTurn(taskId, lease): Promise<TaskSnapshot>;
+  rollbackTurn(taskId): TaskSnapshot | undefined;
+  turnStarted(taskId, nativeTurnId): TaskSnapshot | undefined;
+  turnCompleted(taskId): TaskSnapshot | undefined;
+  beginInterrupt(taskId): TaskSnapshot;
+  completeInterrupt(taskId): TaskSnapshot | undefined;
+  approvalRequested(taskId, request): TaskSnapshot | undefined;
+  approvalResolved(taskId, pendingRequestCount): TaskSnapshot | undefined;
+}
+
 journal.publishSdkMessage(taskId, message: SDKMessage): void;
 journal.subscribeSdk(taskId, afterUuid, subscriber): Unsubscribe;
 journal.publishControlEvent(taskId, event): TaskControlEventEnvelope;
@@ -166,6 +181,17 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   Query to `idle`; P0 leaves `terminal`. New P2 is rejected during P1 cleanup
   and may run on the new generation after cleanup even if an already-handed
   stale SDK call has not settled.
+- Non-Claude adapters must enter P2 work through `ProviderTaskRuntime.run()` and
+  call `lease.assertCurrent()` before and after every awaited native boundary.
+  Query-triggering native starts call `reserveTurn()` before forwarding so the
+  same capacity counter covers every provider. Forward/native-start failure
+  calls `rollbackTurn()`; authoritative native notifications call
+  `turnStarted()` and `turnCompleted()`.
+- Provider P3 reads use `assertReadable()` outside the P2 lane. It rejects
+  interrupted, terminal, closed, interrupting, and shutting-down runtimes and
+  rechecks the task's current workspace authorization before data is exposed.
+  Adapters recheck around activation and native forwarding because P0 may revoke
+  the workspace between awaits.
 - Idempotent HTTP controls use the 24-hour `(deviceId, operationId)` cache.
   Superseded operations persist an error tombstone, so a retry after P1/P0
   returns `TASK_OPERATION_SUPERSEDED` instead of running on a newer generation.
@@ -177,6 +203,13 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   `{ operationId, result: PermissionResult }`, and its response is the shared
   `TaskOperationResult` metadata shape `{ action, task }`. Return the submitted
   result unchanged to the deferred callback without echoing it in the response.
+- A non-Claude provider approval moves only an active task to
+  `awaiting_approval` and emits
+  `{ provider, requestId, method, params }` on the control stream. Resolving the
+  last known request returns the task to `executing`; an unknown resolution on
+  an idle/interrupted/terminal task never resurrects it. Provider adapters own
+  native request IDs, device/generation binding, and unchanged native response
+  frames.
 - SDK and control journal APIs are disjoint. Raw subscribers receive only
   `SDKMessage`; control subscribers receive only PocketPilot envelopes. Never
   publish `{ kind: "sdk", payload }` on `/v1/events`.
@@ -219,6 +252,10 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
 | Picker-selected volume root lacks explicit acceptance | `VOLUME_ROOT_RISK_NOT_ACCEPTED`; write no setting. |
 | Root removal revision or affected-runtime count changed | `AUTHORIZED_DIRECTORY_SNAPSHOT_STALE`; stop no task and require a fresh confirmation. |
 | Older P2 reaches a lease checkpoint after P0/P1 | `TASK_OPERATION_SUPERSEDED`; persist a rejecting tombstone and perform no later state write. |
+| Provider P3 read targets an interrupted/closed/interrupting runtime | `TASK_SESSION_UNAVAILABLE`; perform no native read. |
+| Provider turn start exceeds shared active capacity | `CONCURRENT_TASK_LIMIT_REACHED`; forward no native start frame. |
+| Native turn start fails after reservation | Roll back to `idle`, end retained replay, and release capacity. |
+| Unknown provider approval resolution arrives while idle | Keep `idle`; never change the task to `executing`. |
 | Replay reaches 256 MiB | Notify control subscribers, retain no later records, and continue live SDK/control delivery. |
 
 ### 5. Good / Base / Bad Cases
@@ -231,6 +268,11 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   best-effort Query interruption.
 - Base: P1 invalidates a blocked model change; a new-generation permission
   change runs after cleanup without waiting for the stale SDK promise.
+- Good: a Codex turn and a Claude query share one configured capacity limit;
+  interrupting the Codex turn invalidates queued P2 frames before native cleanup
+  begins.
+- Base: a provider catalog read proceeds outside a blocked P2 lane, but fails if
+  root revocation wins before its final authorization check.
 - Good: selecting a validated SDK session returns its existing opaque task
   handle, the raw subscriber receives original `system/init`, and a later raw
   user message continues through `Options.resume`.
@@ -269,6 +311,9 @@ authorized roots. `/v1/tasks/{taskId}/instruction` does not exist.
   normalization, and volume-root confirmation.
 - Test P1/P0 generation invalidation, new-generation progress while a stale SDK
   call remains pending, persisted superseded retries, and close-vs-interrupt.
+- Test provider P2 lease checkpoints, shared cross-provider capacity, failed
+  native-start rollback, P3 progress outside a blocked lane, P3 workspace
+  reauthorization, and idle-state protection from unknown approval resolution.
 - Route-test that P0 closes only the selected provider-native task socket with `4009`
   while a device control socket remains connected.
 - Test SDK catalog option forwarding and cwd filtering; unchanged latest/older

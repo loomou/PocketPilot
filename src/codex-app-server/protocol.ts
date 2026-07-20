@@ -7,13 +7,17 @@ import type {
 } from "./types.js";
 import { isCodexJsonObject, isCodexRequestId } from "./types.js";
 
-export const codexClientRequestMethods = [
+export const codexReadClientRequestMethods = [
   "collaborationMode/list",
   "model/list",
   "permissionProfile/list",
   "thread/items/list",
   "thread/read",
   "thread/turns/list",
+] as const;
+
+export const codexClientRequestMethods = [
+  ...codexReadClientRequestMethods,
   "turn/interrupt",
   "turn/start",
   "turn/steer",
@@ -120,6 +124,10 @@ export function isCodexClientRequestFrame(
     isCodexRequestId(frame.id) &&
     isCodexJsonObject(frame.params)
   );
+}
+
+export function isCodexReadClientRequestMethod(method: string): boolean {
+  return (codexReadClientRequestMethods as readonly string[]).includes(method);
 }
 
 export function isForwardedCodexServerRequest(method: string): boolean {

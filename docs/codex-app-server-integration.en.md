@@ -66,11 +66,11 @@ POST /v1/providers/codex/conversations/{threadId}/attach
 ```
 
 List requests include Codex CLI, VS Code, and App Server thread sources. Rows
-are native Codex thread objects inside the common page envelope:
+are native Codex thread objects inside the REST response envelope:
 
 ```json
 {
-  "items": [
+  "conversations": [
     {
       "id": "019...",
       "sessionId": "019...",
@@ -88,9 +88,10 @@ Creating a conversation calls native `thread/start`, so the returned task has
 the same Codex thread when one exists. Selecting a conversation is the attach
 action; clients must not replay historical messages as a new prompt.
 
-History uses native Codex turns and items. Pages are chronological for display,
-while `page.cursor` remains opaque. Clients should virtualize long histories
-and prepend older pages without translating item variants.
+History uses native Codex turns and items inside the `messages` response field.
+Pages are chronological for display, while `page.cursor` remains opaque.
+Clients should virtualize long histories and prepend older pages without
+translating item variants.
 
 ## Native Agent WebSocket
 
@@ -132,6 +133,12 @@ clients do not send `thread/start`, `thread/resume`, archive, delete, account,
 configuration-write, filesystem, process, plugin, or arbitrary MCP methods over
 the task socket.
 
+Turn start/steer and native server-request responses use the shared P2 task
+lane. Native interrupt is P1 and invalidates older P2 work before forwarding.
+Catalog and history requests are P3 reads outside that lane, but task and
+workspace authorization are rechecked around the bridge write. Idle Codex
+turns reserve the same configured active-task capacity as Claude turns.
+
 ## Turn lifecycle
 
 Use `turn/start` while the task has no active turn. Codex returns a native turn
@@ -160,6 +167,11 @@ native `turn/interrupt(threadId, turnId)`. `turn/completed` remains the
 authoritative native terminal event and can report `completed`, `interrupted`,
 or `failed`. Closing a PocketPilot task unsubscribes/detaches; it does not
 archive or delete the Codex thread.
+
+PocketPilot independently projects native lifecycle changes as `task.state`
+events on `/v1/events`: executing, awaiting approval, executing after the last
+approval resolves, and idle after completion. These control events never wrap
+or replace the native Agent frames.
 
 ## Streaming and items
 
@@ -196,6 +208,11 @@ Use native catalogs rather than Claude enums:
 The client should render only values returned by the installed server. It must
 not reuse Claude model, effort, or permission-mode schemas.
 
+Claude-only composer/model/effort/permission/approval REST controls return
+`TASK_CONTROL_NOT_SUPPORTED` for Codex. PocketPilot also exposes no fixed
+Codex slash-command panel: Claude `/clear`, `/compact`, review commands, and
+aliases must not be emulated. A new Codex conversation is a native new thread.
+
 ## Concurrent server requests
 
 App Server can have several outstanding requests at the same time. PocketPilot
@@ -213,6 +230,11 @@ not collapse Codex decisions into a generic allow/deny type. Requests become
 stale after native resolution, turn completion, interrupt, close, bridge exit,
 workspace revocation, or shutdown.
 
+The unchanged request and response stay on the Agent WebSocket. `/v1/events`
+also publishes `approval.requested` with
+`{ provider: "codex", requestId, method, params }` for shared task UI. This is
+a control projection only and is never inserted into a native frame.
+
 ## Workspace authorization
 
 PocketPilot canonicalizes every workspace selected through the common REST API.
@@ -226,10 +248,16 @@ user's selection.
 
 ## Reconnect and failure handling
 
-`afterCursor` is outside native frames. A known cursor replays later retained
-frames before live delivery. A missing, malformed, expired, or evicted cursor
-replays the retained window from its beginning. Keep the cursor in transport
-state, not as a Codex thread, turn, or item ID.
+`afterCursor` is outside native frames. A retained known cursor replays later
+frames for compatibility. A missing, malformed, expired, or evicted cursor
+replays the complete retained active turn from its beginning. Beginning a new
+turn resets the window; completion, interrupt, close, or revocation clears it.
+
+The current Agent stream does not expose a latest Codex cursor. Clients should
+omit `afterCursor`, discard the pre-disconnect active-turn reducer, rebuild it
+once from the full replay, and then consume live frames. Do not append replayed
+text/reasoning deltas to old buffers. Reconcile completed work from native
+history; native thread/turn/item IDs are not transport cursors.
 
 An App Server process restart creates a new bridge generation. PocketPilot
 initializes it, sends `initialized`, and calls `thread/resume` before forwarding
@@ -247,8 +275,8 @@ WebSocket close reasons are stable PocketPilot transport metadata:
 | 4011 | `SDK_TRANSPORT_FAILED` |
 
 Do not automatically resend a prompt after an uncertain transport failure.
-Refresh task state, reconnect with the last cursor, and let native history and
-turn state determine the next action.
+Refresh task state, reconnect without a Codex cursor, rebuild the active-turn
+projection, and let native history determine completed state before sending.
 
 ## Live verification
 

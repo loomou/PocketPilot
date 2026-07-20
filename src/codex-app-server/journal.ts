@@ -12,6 +12,7 @@ type TaskJournal = {
   entries: JournalEntry[];
   nextCursor: number;
   subscribers: Set<AgentTaskStreamSubscriber<CodexServerFrame>>;
+  turnActive: boolean;
 };
 
 export type CodexNativeJournalOptions = {
@@ -37,22 +38,41 @@ export class CodexNativeJournal {
       cursor: journal.nextCursor++,
       frame,
     };
-    journal.entries.push(entry);
-    journal.byteLength += entry.byteLength;
-    while (
-      journal.entries.length > this.#maxEntriesPerTask ||
-      journal.byteLength > this.#maxBytesPerTask
-    ) {
-      const removed = journal.entries.shift();
-      if (removed === undefined) {
-        break;
+    if (journal.turnActive) {
+      journal.entries.push(entry);
+      journal.byteLength += entry.byteLength;
+      while (
+        journal.entries.length > this.#maxEntriesPerTask ||
+        journal.byteLength > this.#maxBytesPerTask
+      ) {
+        const removed = journal.entries.shift();
+        if (removed === undefined) {
+          break;
+        }
+        journal.byteLength -= removed.byteLength;
       }
-      journal.byteLength -= removed.byteLength;
     }
     for (const subscriber of journal.subscribers) {
       subscriber.send(frame);
     }
     return String(entry.cursor);
+  }
+
+  public beginTurn(taskId: string): void {
+    const journal = this.task(taskId);
+    journal.byteLength = 0;
+    journal.entries = [];
+    journal.turnActive = true;
+  }
+
+  public endTurn(taskId: string): void {
+    const journal = this.#tasks.get(taskId);
+    if (journal === undefined) {
+      return;
+    }
+    journal.byteLength = 0;
+    journal.entries = [];
+    journal.turnActive = false;
   }
 
   public subscribe(
@@ -92,6 +112,7 @@ export class CodexNativeJournal {
         entries: [],
         nextCursor: 1,
         subscribers: new Set(),
+        turnActive: false,
       };
       this.#tasks.set(taskId, journal);
     }

@@ -37,7 +37,7 @@ const eventServerMessageSchema = z.discriminatedUnion("type", [
 
 export const taskEventRouteDocumentation = {
   description:
-    "Authenticated WebSocket subscription for PocketPilot task/control events only. Claude SDK messages use the task-specific SDK WebSocket.",
+    "Authenticated WebSocket subscription for PocketPilot task/control events only. Provider-native conversation frames use the task-specific Agent WebSocket.",
   operationId: "subscribeTaskEvents",
   security: [{ bearerAuth: [] }],
   summary: "Subscribe to task events",

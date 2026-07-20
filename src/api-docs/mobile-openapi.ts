@@ -79,8 +79,9 @@ function addControlWebSocketExtension(document: MobileOpenApiDocument): void {
         "4003": "Authentication failed or the paired device was revoked.",
       },
       notes: [
-        "This stream carries PocketPilot control events only and never carries Claude SDK conversation messages.",
+        "This stream carries PocketPilot control events only and never carries provider-native conversation frames.",
         "afterCursor replays retained active-turn control events before live delivery.",
+        "Codex approval.requested events contain provider, requestId, method, and native params as a rendering projection; the unchanged native request and its method-specific response remain on the Agent WebSocket.",
         "A mobile disconnect never pauses or cancels task work.",
         "Swagger UI displays this contract but does not execute WebSocket messages.",
       ],
@@ -98,36 +99,53 @@ function addControlWebSocketExtension(document: MobileOpenApiDocument): void {
 const approvalRequestedControlEventSchema = {
   additionalProperties: false,
   description:
-    "PocketPilot control envelope carrying every serializable CanUseTool callback argument. AbortSignal remains local.",
+    "PocketPilot approval rendering projection. Claude carries serializable CanUseTool callback fields; Codex carries provider-tagged native request metadata.",
   properties: {
     event: {
       additionalProperties: false,
       properties: {
         kind: { const: "approval.requested" },
         payload: {
-          additionalProperties: false,
-          properties: {
-            input: { additionalProperties: true, type: "object" },
-            options: {
-              additionalProperties: true,
+          oneOf: [
+            {
+              additionalProperties: false,
               properties: {
-                agentID: { type: "string" },
-                blockedPath: { type: "string" },
-                decisionReason: { type: "string" },
-                description: { type: "string" },
-                displayName: { type: "string" },
-                requestId: { type: "string" },
-                suggestions: { items: {}, type: "array" },
-                title: { type: "string" },
-                toolUseID: { type: "string" },
+                input: { additionalProperties: true, type: "object" },
+                options: {
+                  additionalProperties: true,
+                  properties: {
+                    agentID: { type: "string" },
+                    blockedPath: { type: "string" },
+                    decisionReason: { type: "string" },
+                    description: { type: "string" },
+                    displayName: { type: "string" },
+                    requestId: { type: "string" },
+                    suggestions: { items: {}, type: "array" },
+                    title: { type: "string" },
+                    toolUseID: { type: "string" },
+                  },
+                  required: ["toolUseID", "requestId"],
+                  type: "object",
+                },
+                toolName: { type: "string" },
               },
-              required: ["toolUseID", "requestId"],
+              required: ["toolName", "input", "options"],
               type: "object",
             },
-            toolName: { type: "string" },
-          },
-          required: ["toolName", "input", "options"],
-          type: "object",
+            {
+              additionalProperties: false,
+              properties: {
+                method: { type: "string" },
+                params: {},
+                provider: { const: "codex" },
+                requestId: {
+                  oneOf: [{ type: "integer" }, { type: "string" }],
+                },
+              },
+              required: ["provider", "requestId", "method", "params"],
+              type: "object",
+            },
+          ],
         },
       },
       required: ["kind", "payload"],
@@ -196,7 +214,10 @@ function addAgentWebSocketExtension(document: MobileOpenApiDocument): void {
         "For Claude, wire types are owned by @anthropic-ai/claude-agent-sdk@0.3.210 and remain raw SDKUserMessage/SDKMessage objects.",
         "For a session-centric runtime, PocketPilot installs this raw subscriber before activating the new or resumed Query so the original system/init message is delivered unchanged.",
         "History uses the separate SDK SessionMessage API; clients virtualize, prepend older pages, and deduplicate history/live rows by SDK UUID where available.",
-        "The optional afterCursor query is interpreted by the selected provider; for Claude it contains an SDK UUID, while Codex uses PocketPilot's out-of-band native-frame cursor. A missing or unknown value replays the retained window from its beginning.",
+        "The optional afterCursor query is interpreted by the selected provider. Claude uses an SDK UUID. Codex clients normally reconnect without a cursor, discard their in-progress projection, and rebuild it from the complete retained active-turn window; an absent, invalid, or evicted Codex cursor selects that same full replay.",
+        "Codex replay never inserts a cursor or PocketPilot field into native frames. After a completed turn, reconcile final items from Codex-native history instead of appending replayed deltas to an old projection.",
+        "A Codex server request is delivered unchanged here and also projected as approval.requested on /v1/events. Send its method-specific native response on this Agent WebSocket; Claude approval responses use the Claude-only REST route.",
+        "Claude-only composer, model, effort, permission-mode, and approval REST controls return TASK_CONTROL_NOT_SUPPORTED for Codex tasks. Codex uses installed native catalogs and turn parameters on this Agent WebSocket.",
         "Swagger UI displays this contract but does not execute WebSocket messages.",
       ],
       serverMessages: { providerNativeMessage: nativeMessageSchema },

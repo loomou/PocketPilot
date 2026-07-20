@@ -5,6 +5,7 @@ import { CodexNativeJournal } from "../../src/codex-app-server/journal.js";
 describe("CodexNativeJournal", () => {
   it("replays native frames while keeping the cursor outside each frame", () => {
     const journal = new CodexNativeJournal();
+    journal.beginTurn("task-1");
     journal.publish("task-1", {
       method: "turn/started",
       params: { threadId: "t" },
@@ -29,6 +30,7 @@ describe("CodexNativeJournal", () => {
 
   it("replays the current retained window after a stale cursor", () => {
     const journal = new CodexNativeJournal({ maxEntriesPerTask: 2 });
+    journal.beginTurn("task-1");
     journal.publish("task-1", { method: "one" });
     journal.publish("task-1", { method: "two" });
     const stale = "1";
@@ -42,5 +44,32 @@ describe("CodexNativeJournal", () => {
     });
 
     expect(replayed).toEqual([{ method: "two" }, { method: "three" }]);
+  });
+
+  it("clears retained frames at turn end without removing live subscribers", () => {
+    const journal = new CodexNativeJournal();
+    const received: unknown[] = [];
+    journal.subscribe("task-1", undefined, {
+      send(frame) {
+        received.push(frame);
+      },
+    });
+    journal.beginTurn("task-1");
+    journal.publish("task-1", { method: "turn/started" });
+    journal.endTurn("task-1");
+    journal.publish("task-1", { method: "thread/status/changed" });
+
+    const replayed: unknown[] = [];
+    journal.subscribe("task-1", undefined, {
+      send(frame) {
+        replayed.push(frame);
+      },
+    });
+
+    expect(received).toEqual([
+      { method: "turn/started" },
+      { method: "thread/status/changed" },
+    ]);
+    expect(replayed).toEqual([]);
   });
 });

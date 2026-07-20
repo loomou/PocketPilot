@@ -40,6 +40,10 @@ import {
 import type { StorageDatabase } from "../storage/database.js";
 import type { SettingsRepository } from "../storage/settings-repository.js";
 import { TaskError } from "./errors.js";
+import type {
+  ProviderApprovalRequest,
+  ProviderTaskRuntime,
+} from "./provider-task-runtime.js";
 import { readTaskRuntimeSettings } from "./settings.js";
 import type { TaskEventSink } from "./task-events.js";
 import {
@@ -245,6 +249,8 @@ export class TaskManager {
   readonly #supportedPermissionModes: readonly PermissionMode[];
   readonly #taskLanes = new Map<string, TaskOperationScheduler>();
   readonly #publishedTaskStates = new Map<string, TaskSnapshot["state"]>();
+  readonly #providerInterruptTasks = new Set<string>();
+  readonly #providerTurnReservations = new Set<string>();
   #authorizationRevision = 0;
   #providerTaskController: AgentTaskController | undefined;
   #shuttingDown = false;
@@ -273,6 +279,24 @@ export class TaskManager {
 
   public setProviderTaskController(controller: AgentTaskController): void {
     this.#providerTaskController = controller;
+  }
+
+  public providerTaskRuntime(): ProviderTaskRuntime {
+    return {
+      approvalRequested: (taskId, request) =>
+        this.providerApprovalRequested(taskId, request),
+      approvalResolved: (taskId, pendingRequestCount) =>
+        this.providerApprovalResolved(taskId, pendingRequestCount),
+      assertReadable: (taskId) => this.assertProviderTaskReadable(taskId),
+      beginInterrupt: (taskId) => this.beginProviderInterrupt(taskId),
+      completeInterrupt: (taskId) => this.completeProviderInterrupt(taskId),
+      reserveTurn: (taskId, lease) => this.reserveProviderTurn(taskId, lease),
+      rollbackTurn: (taskId) => this.rollbackProviderTurn(taskId),
+      run: (taskId, operation) => this.runProviderTaskLane(taskId, operation),
+      turnCompleted: (taskId) => this.completeProviderTurn(taskId),
+      turnStarted: (taskId, nativeTurnId) =>
+        this.startProviderTurn(taskId, nativeTurnId),
+    };
   }
 
   /** Converts unfinished active work from a prior unexpected exit to interrupted. */
@@ -495,6 +519,8 @@ export class TaskManager {
     const interruptions: Promise<unknown>[] = [];
     for (const terminalTask of terminalTasks) {
       const liveTask = this.#liveTasks.get(terminalTask.id);
+      this.#providerInterruptTasks.delete(terminalTask.id);
+      this.#providerTurnReservations.delete(terminalTask.id);
       if (liveTask !== undefined) {
         liveTask.closed = true;
         liveTask.interrupting = false;
@@ -789,6 +815,7 @@ export class TaskManager {
     return this.runTaskLane(taskId, async (lease) => {
       const task = this.requireTask(taskId);
       this.assertTaskNotTerminal(task);
+      this.assertClaudeTaskControl(task);
       if (task.state === "interrupted") {
         throw interruptedTaskError();
       }
@@ -938,6 +965,7 @@ export class TaskManager {
       const liveTask = this.liveTask(task.id);
       liveTask.interrupting = true;
       this.#taskLanes.get(task.id)?.invalidate();
+      this.#providerTurnReservations.delete(task.id);
       this.cancelPendingApproval(liveTask, "The user interrupted this task.");
       liveTask.pendingQueryCount = 0;
       const wasIdle = task.state === "idle";
@@ -996,6 +1024,8 @@ export class TaskManager {
       liveTask.closed = true;
       liveTask.interrupting = false;
       this.#taskLanes.get(task.id)?.invalidate();
+      this.#providerInterruptTasks.delete(task.id);
+      this.#providerTurnReservations.delete(task.id);
       this.cancelPendingApproval(liveTask, "The user closed this task.");
       liveTask.pendingQueryCount = 0;
       const terminal = this.#repository.update(task.id, {
@@ -1097,6 +1127,7 @@ export class TaskManager {
       this.runTaskLane(input.taskId, (lease) => {
         const task = this.requireTask(input.taskId);
         this.assertTaskNotTerminal(task);
+        this.assertClaudeTaskControl(task);
         const liveTask = this.liveTask(task.id);
         const pending = liveTask.pendingApproval;
         if (
@@ -1157,6 +1188,7 @@ export class TaskManager {
       this.runTaskLane(input.taskId, async (lease) => {
         const task = this.requireTask(input.taskId);
         this.assertTaskNotTerminal(task);
+        this.assertClaudeTaskControl(task);
         if (task.state === "interrupted") {
           throw interruptedTaskError();
         }
@@ -1214,6 +1246,7 @@ export class TaskManager {
       this.runTaskLane(input.taskId, async (lease) => {
         const task = this.requireTask(input.taskId);
         this.assertTaskNotTerminal(task);
+        this.assertClaudeTaskControl(task);
         if (task.state === "interrupted") {
           throw interruptedTaskError();
         }
@@ -1274,6 +1307,7 @@ export class TaskManager {
       this.runTaskLane(input.taskId, async (lease) => {
         const task = this.requireTask(input.taskId);
         this.assertTaskNotTerminal(task);
+        this.assertClaudeTaskControl(task);
         if (task.state === "interrupted") {
           throw interruptedTaskError();
         }
@@ -1318,6 +1352,8 @@ export class TaskManager {
     for (const task of nonTerminalTasks) {
       const liveTask = this.#liveTasks.get(task.id);
       this.#taskLanes.get(task.id)?.invalidate();
+      this.#providerInterruptTasks.delete(task.id);
+      this.#providerTurnReservations.delete(task.id);
       if (liveTask !== undefined) {
         liveTask.closed = true;
         liveTask.interrupting = false;
@@ -1354,6 +1390,8 @@ export class TaskManager {
       { taskCount: nonTerminalTasks.length },
     );
     this.#taskLanes.clear();
+    this.#providerInterruptTasks.clear();
+    this.#providerTurnReservations.clear();
   }
 
   private adoptAttachedTask(task: TaskSnapshot): TaskSnapshot {
@@ -2010,6 +2048,259 @@ export class TaskManager {
     });
   }
 
+  private providerApprovalRequested(
+    taskId: string,
+    request: ProviderApprovalRequest,
+  ): TaskSnapshot | undefined {
+    const task = this.#repository.find(taskId);
+    if (
+      task === undefined ||
+      (task.state !== "executing" && task.state !== "awaiting_approval")
+    ) {
+      return undefined;
+    }
+    const awaiting =
+      task.state === "awaiting_approval"
+        ? task
+        : this.#repository.update(taskId, {
+            state: "awaiting_approval",
+            updatedAt: this.#now(),
+          });
+    if (awaiting !== task) {
+      this.publishTaskState(awaiting);
+    }
+    this.#logger.info(
+      logEvents.taskApprovalRequested,
+      "Provider approval requested",
+      {
+        method: request.method,
+        provider: request.provider,
+        requestId: request.requestId,
+        taskId,
+      },
+    );
+    this.#eventSink?.publishControlEvent(taskId, {
+      kind: "approval.requested",
+      payload: request,
+    });
+    return awaiting;
+  }
+
+  private providerApprovalResolved(
+    taskId: string,
+    pendingRequestCount: number,
+  ): TaskSnapshot | undefined {
+    const task = this.#repository.find(taskId);
+    if (
+      task === undefined ||
+      task.state === "interrupted" ||
+      task.state === "terminal"
+    ) {
+      return undefined;
+    }
+    if (pendingRequestCount === 0 && task.state !== "awaiting_approval") {
+      return task;
+    }
+    const nextState =
+      pendingRequestCount > 0 ? "awaiting_approval" : "executing";
+    if (task.state === nextState) {
+      return task;
+    }
+    const updated = this.#repository.update(taskId, {
+      state: nextState,
+      updatedAt: this.#now(),
+    });
+    this.publishTaskState(updated);
+    return updated;
+  }
+
+  private async assertProviderTaskReadable(
+    taskId: string,
+  ): Promise<TaskSnapshot> {
+    this.assertAcceptingWork();
+    const task = this.requireTask(taskId);
+    this.assertTaskNotTerminal(task);
+    const liveTask = this.#liveTasks.get(taskId);
+    if (
+      task.state === "interrupted" ||
+      liveTask?.closed === true ||
+      liveTask?.interrupting === true
+    ) {
+      throw new TaskError(
+        "TASK_SESSION_UNAVAILABLE",
+        409,
+        "The task runtime is temporarily unavailable.",
+      );
+    }
+    await this.withCurrentWorkspaceAuthorization(
+      task.initialCwd,
+      () => undefined,
+    );
+
+    this.assertAcceptingWork();
+    const current = this.requireTask(taskId);
+    this.assertTaskNotTerminal(current);
+    if (
+      current.state === "interrupted" ||
+      this.#liveTasks.get(taskId)?.closed === true ||
+      this.#liveTasks.get(taskId)?.interrupting === true
+    ) {
+      throw new TaskError(
+        "TASK_SESSION_UNAVAILABLE",
+        409,
+        "The task runtime is temporarily unavailable.",
+      );
+    }
+    return current;
+  }
+
+  private beginProviderInterrupt(taskId: string): TaskSnapshot {
+    const task = this.requireTask(taskId);
+    this.assertTaskNotTerminal(task);
+    if (task.state === "interrupted") {
+      throw interruptedTaskError();
+    }
+    const liveTask = this.liveTask(taskId);
+    liveTask.interrupting = true;
+    liveTask.pendingQueryCount = 0;
+    this.#taskLanes.get(taskId)?.invalidate();
+    this.#providerInterruptTasks.add(taskId);
+    this.cancelPendingApproval(liveTask, "The user interrupted this task.");
+    const interrupted = this.#repository.update(taskId, {
+      interruptedAt: this.#now(),
+      state: "interrupted",
+      updatedAt: this.#now(),
+    });
+    this.publishTaskState(interrupted);
+    this.#eventSink?.endTurn(taskId);
+    return interrupted;
+  }
+
+  private completeProviderInterrupt(taskId: string): TaskSnapshot | undefined {
+    if (!this.#providerInterruptTasks.delete(taskId)) {
+      return this.#repository.find(taskId);
+    }
+    const liveTask = this.#liveTasks.get(taskId);
+    if (liveTask !== undefined) {
+      liveTask.interrupting = false;
+    }
+    const task = this.#repository.find(taskId);
+    if (task === undefined || task.state === "terminal") {
+      return task;
+    }
+    const idle = this.#repository.update(taskId, {
+      activeTurnId: null,
+      interruptedAt: null,
+      state: "idle",
+      updatedAt: this.#now(),
+    });
+    this.publishTaskState(idle);
+    return idle;
+  }
+
+  private reserveProviderTurn(
+    taskId: string,
+    lease: TaskOperationLease,
+  ): Promise<TaskSnapshot> {
+    return this.#capacityLane.run(() => {
+      lease.assertCurrent();
+      this.assertAcceptingWork();
+      const task = this.requireTask(taskId);
+      this.assertTaskNotTerminal(task);
+      if (task.state === "interrupted") {
+        throw interruptedTaskError();
+      }
+      if (task.state !== "idle") {
+        return task;
+      }
+      const settings = readTaskRuntimeSettings(this.#settingsRepository);
+      if (
+        this.#repository.countActiveTasks() >= settings.concurrentTaskCapacity
+      ) {
+        throw new TaskError(
+          "CONCURRENT_TASK_LIMIT_REACHED",
+          409,
+          "The configured concurrent-task capacity has been reached.",
+        );
+      }
+      this.#eventSink?.beginTurn(taskId);
+      this.#providerTurnReservations.add(taskId);
+      const executing = this.#repository.update(taskId, {
+        state: "executing",
+        updatedAt: this.#now(),
+      });
+      this.publishTaskState(executing);
+      return executing;
+    });
+  }
+
+  private rollbackProviderTurn(taskId: string): TaskSnapshot | undefined {
+    if (!this.#providerTurnReservations.delete(taskId)) {
+      return this.#repository.find(taskId);
+    }
+    const task = this.#repository.find(taskId);
+    if (task === undefined || task.state === "terminal") {
+      return task;
+    }
+    const idle = this.#repository.update(taskId, {
+      activeTurnId: null,
+      state: "idle",
+      updatedAt: this.#now(),
+    });
+    this.publishTaskState(idle);
+    this.#eventSink?.endTurn(taskId);
+    return idle;
+  }
+
+  private startProviderTurn(
+    taskId: string,
+    nativeTurnId: string,
+  ): TaskSnapshot | undefined {
+    const task = this.#repository.find(taskId);
+    if (task === undefined || task.state === "terminal") {
+      return undefined;
+    }
+    if (task.state === "interrupted") {
+      return task;
+    }
+    this.#providerTurnReservations.delete(taskId);
+    if (task.state === "idle") {
+      this.#eventSink?.beginTurn(taskId);
+    }
+    const started = this.#repository.update(taskId, {
+      activeTurnId: nativeTurnId,
+      state: "executing",
+      updatedAt: this.#now(),
+    });
+    if (task.state !== started.state) {
+      this.publishTaskState(started);
+    }
+    return started;
+  }
+
+  private completeProviderTurn(taskId: string): TaskSnapshot | undefined {
+    if (this.#providerInterruptTasks.has(taskId)) {
+      return this.completeProviderInterrupt(taskId);
+    }
+    this.#providerTurnReservations.delete(taskId);
+    const task = this.#repository.find(taskId);
+    if (
+      task === undefined ||
+      task.state === "terminal" ||
+      (task.state !== "executing" && task.state !== "awaiting_approval")
+    ) {
+      return task;
+    }
+    const idle = this.#repository.update(taskId, {
+      activeTurnId: null,
+      updatedAt: this.#now(),
+      state: "idle",
+    });
+    this.publishTaskState(idle);
+    this.#eventSink?.endTurn(taskId);
+    return idle;
+  }
+
   private requireTask(taskId: string): TaskSnapshot {
     const task = this.#repository.find(taskId);
     if (task === undefined) {
@@ -2045,6 +2336,18 @@ export class TaskManager {
     return lane.run(operation);
   }
 
+  private runProviderTaskLane<T>(
+    taskId: string,
+    operation: (lease: TaskOperationLease) => Promise<T> | T,
+  ): Promise<T> {
+    const task = this.requireTask(taskId);
+    this.assertTaskNotTerminal(task);
+    if (task.state === "interrupted") {
+      throw interruptedTaskError();
+    }
+    return this.runTaskLane(taskId, operation);
+  }
+
   private runHistoryLane<T>(
     key: string,
     operation: () => Promise<T> | T,
@@ -2078,6 +2381,16 @@ export class TaskManager {
         "TASK_SESSION_UNAVAILABLE",
         409,
         "The task's Claude SDK session is currently unavailable.",
+      );
+    }
+  }
+
+  private assertClaudeTaskControl(task: TaskSnapshot): void {
+    if (task.provider !== "claude") {
+      throw new TaskError(
+        "TASK_CONTROL_NOT_SUPPORTED",
+        409,
+        "This task provider requires its native control protocol.",
       );
     }
   }

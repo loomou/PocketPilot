@@ -30,6 +30,14 @@ describeLive("Codex App Server live contract", () => {
 
       const models = asObject(await bridge.request("model/list", {}));
       expect(Array.isArray(models.data)).toBe(true);
+      const collaborationModes = asObject(
+        await bridge.request("collaborationMode/list", {}),
+      );
+      expect(Array.isArray(collaborationModes.data)).toBe(true);
+      const permissionProfiles = asObject(
+        await bridge.request("permissionProfile/list", {}),
+      );
+      expect(Array.isArray(permissionProfiles.data)).toBe(true);
 
       const listed = asObject(
         await bridge.request("thread/list", {
@@ -147,6 +155,19 @@ describeLive("Codex App Server live contract", () => {
         asObject(asObject(interruptStarted.frame.params).turn).id,
         "turn.id",
       );
+      await expect(
+        bridge.request("turn/steer", {
+          expectedTurnId: interruptTurnId,
+          input: [
+            {
+              text: "After the command finishes, reply with exactly DONE.",
+              text_elements: [],
+              type: "text",
+            },
+          ],
+          threadId,
+        }),
+      ).resolves.toBeDefined();
       await expect(
         bridge.request("turn/interrupt", { threadId, turnId: interruptTurnId }),
       ).resolves.toBeDefined();

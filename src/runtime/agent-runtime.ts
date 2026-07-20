@@ -158,6 +158,7 @@ export class AgentRuntime {
         }),
         logger: this.logger,
         repository: new TaskRepository(this.storage.database),
+        taskRuntime: this.taskManager.providerTaskRuntime(),
         ...(codexAvailable
           ? {}
           : {

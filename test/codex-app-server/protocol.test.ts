@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   isCodexClientRequestFrame,
+  isCodexReadClientRequestMethod,
   parseCodexClientFrame,
 } from "../../src/codex-app-server/protocol.js";
 
@@ -48,6 +49,22 @@ describe("Codex native transport guard", () => {
           JSON.stringify({ id: method, method, params: {} }),
         ),
       ).toMatchObject({ id: method, method, params: {} });
+    }
+  });
+
+  it("classifies native catalogs and history as P3 reads", () => {
+    for (const method of [
+      "model/list",
+      "collaborationMode/list",
+      "permissionProfile/list",
+      "thread/read",
+      "thread/turns/list",
+      "thread/items/list",
+    ]) {
+      expect(isCodexReadClientRequestMethod(method)).toBe(true);
+    }
+    for (const method of ["turn/start", "turn/steer", "turn/interrupt"]) {
+      expect(isCodexReadClientRequestMethod(method)).toBe(false);
     }
   });
 });

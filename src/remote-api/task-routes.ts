@@ -296,7 +296,7 @@ export function registerTaskRoutes(
       schema: {
         body: operationSchema.extend({ model: z.string().min(1).optional() }),
         description:
-          "Immediately forwards a live model change. The accepted value applies to the next turn without restarting the Query; await this response before Send when ordering matters.",
+          "Claude-only control that immediately forwards a live model change. The accepted value applies to the next turn without restarting the Query; await this response before Send when ordering matters. Codex tasks return TASK_CONTROL_NOT_SUPPORTED and use native model/list plus turn parameters on the Agent WebSocket.",
         operationId: "setTaskModel",
         params: taskIdParamsSchema,
         response: { 200: taskOperationResultSchema, ...taskErrorResponses },
@@ -318,7 +318,7 @@ export function registerTaskRoutes(
     {
       schema: {
         description:
-          "Returns installed-SDK model rows, per-model effort choices, permission modes, and the resolved starting effort for an activated Query. Open the raw SDK stream first; raw system/init and system/status remain authoritative for active model and permission state.",
+          "Claude-only control that returns installed-SDK model rows, per-model effort choices, permission modes, and the resolved starting effort for an activated Query. Open the raw SDK stream first; raw system/init and system/status remain authoritative for active model and permission state. Codex tasks return TASK_CONTROL_NOT_SUPPORTED and use native catalogs on the Agent WebSocket.",
         operationId: "getTaskComposerOptions",
         params: taskIdParamsSchema,
         response: { 200: composerOptionsResponseSchema, ...taskErrorResponses },
@@ -340,7 +340,7 @@ export function registerTaskRoutes(
           effortLevel: effortLevelSchema.nullable(),
         }),
         description:
-          "Immediately forwards a named effort change through Query.applyFlagSettings(). The accepted value applies to the next turn; null clears the live flag-layer override.",
+          "Claude-only control that immediately forwards a named effort change through Query.applyFlagSettings(). The accepted value applies to the next turn; null clears the live flag-layer override. Codex tasks return TASK_CONTROL_NOT_SUPPORTED and send installed native effort values in turn parameters.",
         operationId: "setTaskEffort",
         params: taskIdParamsSchema,
         response: { 200: taskOperationResultSchema, ...taskErrorResponses },
@@ -362,7 +362,7 @@ export function registerTaskRoutes(
       schema: {
         body: operationSchema.extend({ permissionMode: z.string().min(1) }),
         description:
-          "Forwards a supported permission mode to the installed Claude Agent SDK.",
+          "Claude-only control that forwards a supported permission mode to the installed Claude Agent SDK. Codex tasks return TASK_CONTROL_NOT_SUPPORTED and use permissionProfile/list plus native turn parameters.",
         operationId: "setTaskPermissionMode",
         params: taskIdParamsSchema,
         response: { 200: taskOperationResultSchema, ...taskErrorResponses },
@@ -384,7 +384,7 @@ export function registerTaskRoutes(
       schema: {
         body: operationSchema.extend({ result: permissionResultSchema }),
         description:
-          "Returns the complete Claude Agent SDK PermissionResult for the pending request.",
+          "Claude-only control that returns the complete Claude Agent SDK PermissionResult for the pending request. Codex approvals keep their native request and method-specific response on the Agent WebSocket.",
         operationId: "resolveTaskApproval",
         params: taskIdParamsSchema.extend({ requestId: z.string().min(1) }),
         response: { 200: taskOperationResultSchema, ...taskErrorResponses },

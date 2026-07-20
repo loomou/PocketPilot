@@ -17,11 +17,18 @@ bridge.respond(requestId, nativeResult): Promise<void>;
 bridge.rejectServerRequest(requestId, message): Promise<void>;
 bridge.close(): Promise<void>;
 
-new CodexProviderAdapter({ bridge, repository, workspaceDirectoryResolver });
 adapter.listConversations(input): Promise<AgentConversationPage<unknown>>;
 adapter.readConversation(input): Promise<AgentConversationPage<unknown>>;
 adapter.createConversation(input): Promise<TaskOperationResult>;
 adapter.attachConversation(input): Promise<TaskOperationResult>;
+
+new CodexProviderAdapter({
+  bridge,
+  journal,
+  providerTaskRuntime: taskManager.providerTaskRuntime(),
+  repository,
+  workspaceDirectoryResolver,
+});
 ```
 
 The task table persists `active_turn_id`, `native_conversation_id`, and
@@ -60,6 +67,16 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
   `turn/completed` clears `activeTurnId` and pending server requests, and moves
   a non-terminal task to `idle`; late notifications cannot resurrect a terminal
   task.
+- `turn/start`, `turn/steer`, and native approval responses run through the
+  shared P2 task lane. A new `turn/start` requires `idle`; while a turn is
+  active, clients use native `turn/steer` with the current turn ID. Turn start
+  reserves the shared cross-provider capacity before the frame is forwarded and
+  rolls back the reservation and replay window if forwarding or the native
+  response fails.
+- Native `turn/interrupt` is P1. Persist `interrupted`, invalidate older queued
+  and active P2 leases, clear pending approvals/turn starts, end replay, and
+  forward only when the named turn is still current. Complete cleanup to `idle`
+  when the native response arrives, even if no `turn/completed` follows.
 - A bridge generation change resumes every activated thread before forwarding
   new work. Clear approval IDs from the previous generation before resume; a
   client response to one of those IDs returns `STALE_APPROVAL`.
@@ -68,13 +85,20 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
   for the request response before offering interrupt. `turn/completed` remains
   the authoritative terminal event.
 - `afterCursor` is PocketPilot transport metadata. Codex frames never contain
-  it. An unknown or evicted cursor replays the retained native window.
+  it. Retain only the active turn: `beginTurn()` clears the prior window and
+  `endTurn()` clears retained frames without disconnecting subscribers. A
+  missing, invalid, unknown, or evicted cursor replays the full retained active
+  turn; a known cursor replays only later native frames.
 
 ### Remote methods, history, and approvals
 
 - The task stream may forward only `turn/start`, `turn/steer`,
   `turn/interrupt`, `thread/read`, `thread/turns/list`, `thread/items/list`,
   `model/list`, `collaborationMode/list`, and `permissionProfile/list`.
+- `model/list`, `collaborationMode/list`, `permissionProfile/list`,
+  `thread/read`, `thread/turns/list`, and `thread/items/list` are P3 reads. They
+  do not wait behind P2 input, and they recheck task availability plus current
+  workspace authorization around activation/path validation and after forward.
 - Conversation REST methods own `thread/list`, `thread/read`, `thread/start`,
   `thread/resume`, and detach. Account/configuration writes, filesystem/process
   RPCs, plugin installation, arbitrary MCP calls, archive/delete, and unknown
@@ -82,11 +106,15 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
 - List CLI, VS Code, and App Server thread sources. Prefer negotiated
   `thread/turns/list` pagination and preserve native rows; use only an explicitly
   bounded `thread/read(includeTurns=true)` fallback.
-- Track each server request by native JSON-RPC request ID and owning task,
-  thread, turn, item, and method. Multiple requests may be pending concurrently.
-  Return method-specific native results unchanged. Clear requests on native
-  resolution, turn completion, interrupt, close, revocation, bridge exit, or
-  shutdown.
+- Track each server request by native JSON-RPC request ID, owning device, bridge
+  generation, task, thread, turn, item, and method. Multiple requests may be
+  pending concurrently. Return method-specific native results unchanged only
+  from the owning device and generation. Clear requests on native resolution,
+  turn completion, interrupt, close, revocation, bridge exit, or shutdown.
+- Publish a secondary PocketPilot control projection as
+  `{ kind: "approval.requested", payload: { provider: "codex", requestId,
+  method, params } }`. This projection is for task UI/state only; the native
+  request and its response remain unchanged on the Codex Agent WebSocket.
 - Path authorization checks only path-bearing Codex fields such as `cwd`,
   roots, sandbox roots, and attachment paths. Prompt text is opaque user input.
 
@@ -101,8 +129,11 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
 | Two tasks use the same client JSON-RPC ID | Allocate distinct wire IDs and return each response only to its owning task. |
 | A server request contains an unauthorized path | Send native JSON-RPC error `-32601`; never publish the request remotely. |
 | A response references a cleared or prior-generation approval | `409 STALE_APPROVAL`; write nothing to the new App Server process. |
+| A different device answers a pending approval | `409 STALE_APPROVAL`; preserve the request for its owning device. |
+| `turn/start` arrives while the task is active | `409 TASK_BUSY`; the client must use native `turn/steer`. |
 | `turn/steer` or `turn/interrupt` names a stale turn | `409 TASK_BUSY`; do not substitute a different active turn. |
 | A cursor is absent, invalid, or outside retention | Replay the retained native window without modifying its frames. |
+| A Claude-only composer/model/mode/effort route targets Codex | `409 TASK_CONTROL_NOT_SUPPORTED`; use Codex native catalogs and turn parameters. |
 
 ## 5. Good / Base / Bad Cases
 
@@ -111,6 +142,10 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
   native item deltas and `turn/completed` unchanged.
 - Good: App Server exits with two pending approvals; reconnect resumes the same
   thread and both old request IDs become stale before any new frame is sent.
+- Good: two devices can observe task control events, but only the device that
+  started the turn can answer its native Codex approval request.
+- Base: an active P2 turn is blocked waiting on native work while `model/list`
+  proceeds independently as a P3 read after workspace reauthorization.
 - Base: `thread/list` returns mixed roots and sources; PocketPilot includes
   `cli`, `vscode`, and `appServer`, then removes rows outside the authorized
   workspace without changing retained rows.
@@ -125,9 +160,11 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
   Windows command resolution, bounded writes, and deterministic shutdown.
 - Adapter tests cover list/read/start/resume, native row identity, concurrent
   approvals, server-request path rejection, stale approvals after generation
-  changes, start/steer/interrupt state, workspace revocation, and cleanup.
+  changes and device mismatch, start/steer/interrupt state, shared capacity/P2
+  invalidation, P3 reads, workspace revocation, and cleanup.
 - Journal tests cover task isolation, entry/byte eviction, known cursor replay,
-  and absent/unknown/stale cursor fallback.
+  absent/unknown/stale cursor fallback, active-turn reset, and end-turn cleanup
+  without dropping live subscribers.
 - The caller-configured live suite must prove initialize, `model/list`, all
   thread sources, `thread/start`, native streaming, `thread/turns/list`,
   `thread/read`, `thread/resume`, active-turn interrupt, archive cleanup, and

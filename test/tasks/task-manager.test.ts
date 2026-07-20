@@ -44,6 +44,7 @@ import {
   TaskManager,
   type TaskSdkSession,
 } from "../../src/tasks/task-manager.js";
+import { TaskRepository } from "../../src/tasks/task-repository.js";
 
 const deviceId = "00000000-0000-4000-8000-000000000001";
 
@@ -116,6 +117,143 @@ describe("TaskManager", () => {
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
     );
     expect(fourth.task.initialCwd).toBe(first.task.initialCwd);
+  });
+
+  it("applies shared capacity and lifecycle events to provider-native turns", async () => {
+    const fixture = createFixture(connections, temporaryDirectories, managers);
+    writeTaskCapacitySettings(fixture.settingsRepository, {
+      concurrentTaskCapacity: 1,
+    });
+    const first = createCodexTask(fixture.connection, fixture.workspace);
+    const second = createCodexTask(fixture.connection, fixture.workspace);
+    const runtime = fixture.manager.providerTaskRuntime();
+
+    await runtime.run(first.id, (lease) =>
+      runtime.reserveTurn(first.id, lease),
+    );
+    await expect(
+      runtime.run(second.id, (lease) => runtime.reserveTurn(second.id, lease)),
+    ).rejects.toMatchObject({ code: "CONCURRENT_TASK_LIMIT_REACHED" });
+    runtime.turnStarted(first.id, "turn-1");
+    runtime.approvalRequested(first.id, {
+      method: "item/fileChange/requestApproval",
+      params: { itemId: "item-1", turnId: "turn-1" },
+      provider: "codex",
+      requestId: 7,
+    });
+
+    expect(fixture.manager.getTask(first.id)).toMatchObject({
+      activeTurnId: "turn-1",
+      state: "awaiting_approval",
+    });
+    expect(fixture.eventSink.controlEvents).toContainEqual(
+      expect.objectContaining({
+        event: {
+          kind: "approval.requested",
+          payload: {
+            method: "item/fileChange/requestApproval",
+            params: { itemId: "item-1", turnId: "turn-1" },
+            provider: "codex",
+            requestId: 7,
+          },
+        },
+        taskId: first.id,
+      }),
+    );
+
+    runtime.approvalResolved(first.id, 0);
+    expect(fixture.manager.getTask(first.id).state).toBe("executing");
+    runtime.turnCompleted(first.id);
+    expect(fixture.manager.getTask(first.id)).toMatchObject({
+      activeTurnId: null,
+      state: "idle",
+    });
+  });
+
+  it("terminalizes and closes provider-native tasks when their root is revoked", async () => {
+    const fixture = createFixture(connections, temporaryDirectories, managers);
+    const task = createCodexTask(fixture.connection, fixture.workspace);
+    const closedTaskIds: string[] = [];
+    fixture.manager.setProviderTaskController({
+      close: async (taskId) => {
+        closedTaskIds.push(taskId);
+      },
+      interrupt: async () => undefined,
+      resume: async () => undefined,
+    });
+    const snapshot = await fixture.manager.authorizedDirectorySnapshot();
+    const root = snapshot.directories.find(
+      (directory) => directory.path === fixture.workspace,
+    );
+    if (root === undefined) {
+      throw new Error("The provider test workspace root is missing.");
+    }
+
+    const removed = await fixture.manager.removeAuthorizedDirectory({
+      expectedNonTerminalRuntimeCount: 1,
+      path: root.path,
+      revision: snapshot.revision,
+      runtimeStopAccepted: true,
+    });
+
+    expect(removed.stoppedTaskCount).toBe(1);
+    expect(fixture.manager.getTask(task.id).state).toBe("terminal");
+    expect(closedTaskIds).toEqual([task.id]);
+  });
+
+  it("invalidates active and queued provider work when P1 interrupt starts", async () => {
+    const fixture = createFixture(connections, temporaryDirectories, managers);
+    const task = createCodexTask(fixture.connection, fixture.workspace);
+    const runtime = fixture.manager.providerTaskRuntime();
+    let markStarted = (): void => {};
+    let release = (): void => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const blocker = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const active = runtime.run(task.id, async (lease) => {
+      markStarted();
+      await blocker;
+      lease.assertCurrent();
+      return "active";
+    });
+    await started;
+    const queued = runtime.run(task.id, () => "queued");
+    const activeResult = expect(active).rejects.toMatchObject({
+      code: "TASK_OPERATION_SUPERSEDED",
+    });
+    const queuedResult = expect(queued).rejects.toMatchObject({
+      code: "TASK_OPERATION_SUPERSEDED",
+    });
+
+    runtime.beginInterrupt(task.id);
+    release();
+    await Promise.all([activeResult, queuedResult]);
+    expect(fixture.manager.getTask(task.id).state).toBe("interrupted");
+    await expect(
+      Promise.resolve().then(() => runtime.run(task.id, () => "stale")),
+    ).rejects.toMatchObject({ code: "TASK_INTERRUPTED" });
+    runtime.completeInterrupt(task.id);
+    expect(fixture.manager.getTask(task.id).state).toBe("idle");
+  });
+
+  it("rejects Claude-only controls for a Codex task", async () => {
+    const fixture = createFixture(connections, temporaryDirectories, managers);
+    const task = createCodexTask(fixture.connection, fixture.workspace);
+
+    await expect(
+      fixture.manager.getComposerOptions(task.id),
+    ).rejects.toMatchObject({ code: "TASK_CONTROL_NOT_SUPPORTED" });
+    await expect(
+      fixture.manager.setModel({
+        deviceId,
+        model: "gpt-test",
+        operationId: randomUUID(),
+        taskId: task.id,
+      }),
+    ).rejects.toMatchObject({ code: "TASK_CONTROL_NOT_SUPPORTED" });
   });
 
   it("deduplicates a state-changing operation and writes one metadata-only audit", async () => {
@@ -1003,6 +1141,21 @@ function createFixture(
     settingsRepository,
     workspace,
   };
+}
+
+function createCodexTask(connection: StorageConnection, workspace: string) {
+  return new TaskRepository(connection.database).create({
+    createdAt: Date.now(),
+    id: randomUUID(),
+    initialCwd: workspace,
+    model: null,
+    nativeConversationId: `thread-${randomUUID()}`,
+    nativeProtocolVersion: "codex-app-server@0.144.x",
+    nativeSessionId: `session-${randomUUID()}`,
+    origin: "agent-conversation",
+    permissionMode: null,
+    provider: "codex",
+  });
 }
 
 function createCapture(): {
