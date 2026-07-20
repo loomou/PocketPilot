@@ -1,0 +1,31 @@
+{
+  "id": "claude-code-parity-audit",
+  "name": "claude-code-parity-audit",
+  "title": "Audit Claude Code provider parity",
+  "description": "Inventory remaining PocketPilot capability differences from Claude Code and classify parity gaps, intentional provider differences, and follow-up priorities without implementing changes in this planning task.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "xue",
+  "assignee": "xue",
+  "createdAt": "2026-07-20",
+  "completedAt": "2026-07-21",
+  "branch": null,
+  "base_branch": "audit/claude-code-parity",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-21-codex-native-action-capabilities",
+    "07-21-codex-readonly-status-catalogs",
+    "07-21-codex-thread-management",
+    "07-21-provider-readiness-live-coverage"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
