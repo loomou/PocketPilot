@@ -42,3 +42,33 @@
 - A release candidate must pass all four package scripts on Node 24.
 - A Windows packaging/release change must pass the packed-install smoke test;
   source-tree execution alone is insufficient.
+
+## Windows Path Assertions
+
+- Production workspace paths are canonicalized with
+  `node:fs/promises.realpath`. Tests that compare SDK `cwd` or catalog `dir`
+  values must canonicalize newly created fixture directories after `mkdir`
+  with `realpathSync.native`.
+- On Windows, plain `realpathSync` can retain an 8.3 alias such as
+  `FJFANG~1`, while Promise `realpath` expands the same directory to its long
+  name. Comparing those strings directly creates a false test failure even
+  though they identify the same directory.
+
+### Wrong
+
+```ts
+const workspace = realpathSync(workspacePath);
+expect(options.cwd).toBe(workspace);
+```
+
+### Correct
+
+```ts
+mkdirSync(workspacePath);
+const workspace = realpathSync.native(workspacePath);
+expect(options.cwd).toBe(workspace);
+```
+
+The native synchronous call matches the production Promise implementation on
+Windows without weakening production canonicalization or path-containment
+checks.

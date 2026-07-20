@@ -350,3 +350,111 @@ return sessionMessagePage; // unchanged SDK rows + out-of-band page metadata
 
 The lane preserves control/input order only; the SDK controls scheduling and
 the Agent records no message or history content.
+
+## Workspace Authorization Addendum
+
+### 1. Scope / Trigger
+
+Apply these rules whenever configured task workspace roots are read, replaced,
+inspected, exposed to mobile discovery, or used to admit a task/session action.
+The `WorkspaceAuthorizationCoordinator` is the single owner of this policy;
+callers must not read or write `tasks.workspaceRoots` directly for authorization.
+
+### 2. Signatures
+
+```ts
+coordinator.readTaskRuntimeSettings(): TaskRuntimeSettings;
+coordinator.authorizedWorkspaceRoots(): Promise<readonly string[]>;
+coordinator.inspectWorkspaceRoots(paths): Promise<WorkspaceRootInspection[]>;
+coordinator.authorizeWorkspace(path): Promise<string>;
+coordinator.isPathWithinWorkspace(workspace, candidate): Promise<boolean>;
+coordinator.replaceTaskRuntimeSettings({
+  ...taskRuntimeSettings,
+  confirmedHighRiskRoots?: readonly string[], // transport-only
+}): Promise<TaskRuntimeSettings>;
+```
+
+### 3. Contracts
+
+- Newly authorized roots must be absolute, canonical, existing directories.
+  Canonical identity uses component-boundary containment, not string prefix
+  matching; Windows drive and UNC identities compare case-insensitively after
+  slash normalization.
+- A saved row is not silently migrated when its symlink/junction identity
+  changes. An unavailable, missing, non-directory, or identity-changed saved row
+  remains in the persisted string array so the user can repair or remove it.
+- A replacement preserves saved unavailable rows, rejects newly requested
+  unavailable/non-directory roots, rejects canonical exact duplicates, and
+  preserves explicit nested roots and user order. Coverage is inspection
+  metadata, not an implicit deletion rule.
+- `authorizedWorkspaceRoots()` is availability-aware and returns only currently
+  available canonical roots. It may therefore return fewer roots than the
+  persisted task settings.
+- Filesystem, volume, and UNC roots are high risk. Confirmation paths are
+  accepted only in the task-settings write request and are never persisted or
+  returned in settings responses.
+- Filesystem inspection occurs outside the serial admission lane. The final
+  revision comparison, replacement, and task admission are serialized; stale
+  attempts retry against fresh settings and must not overwrite a concurrent
+  save.
+- Removing a root revokes future activation, resume, and SDK-message admission.
+  It does not interrupt an already executing turn, and approval resolution,
+  interrupt, and close remain available so that the current turn can finish or
+  be explicitly controlled. Re-authorization restores future admission.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+| --- | --- |
+| Relative, malformed, or non-existent candidate | `WORKSPACE_PATH_INVALID` or `WORKSPACE_PATH_UNAVAILABLE`; persist nothing. |
+| Candidate is not a directory | `WORKSPACE_PATH_NOT_DIRECTORY`; persist nothing. |
+| Canonical duplicate (including case/slash aliases) | `WORKSPACE_ROOT_DUPLICATE`; persist nothing. |
+| New filesystem/volume/UNC root lacks matching confirmation | `WORKSPACE_ROOT_HIGH_RISK_CONFIRMATION_REQUIRED`; persist nothing. |
+| Existing saved row is unavailable or identity-changed | Preserve the exact saved row; do not silently retarget it. |
+| Admission path is outside every currently available root | `WORKSPACE_NOT_AUTHORIZED`. |
+| Root is removed during an active turn | Keep the turn running; deny only the next activation/resume/message admission. |
+
+### 5. Good / Base / Bad Cases
+
+- Good: save `C:\\Work` and `C:\\Work\\Nested` in order, report nested
+  coverage, and retain both rows after a later save.
+- Base: a deleted saved root remains visible as unavailable while discovery
+  omits it; recreating the same path makes it available again without changing
+  the saved row.
+- Bad: canonicalize a retargeted symlink and overwrite the saved identity,
+  remove nested roots because they are covered, or authorize `C:\\Worktree`
+  because it shares the string prefix `C:\\Work`.
+
+### 6. Tests Required
+
+- Assert POSIX, drive-letter, UNC, case, slash, component-boundary, volume-root,
+  duplicate, nested-root, and symlink/junction identity behavior.
+- Assert unavailable preservation/recovery, new unavailable rejection, high-risk
+  confirmation, revision retry, and concurrent save/admission serialization.
+- Assert discovery returns only available canonical roots while settings retain
+  unavailable rows.
+- Assert root removal allows current-turn completion and approval/interrupt/close
+  controls, then denies message/resume/activation until reauthorized.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+const roots = settingsRepository.read().workspaceRoots;
+return roots.filter((root) => candidate.startsWith(root));
+```
+
+This bypasses canonical identity, availability, component boundaries, and the
+single serialized policy owner.
+
+#### Correct
+
+```ts
+const workspace = await coordinator.authorizeWorkspace(requestedCwd);
+await coordinator.replaceTaskRuntimeSettings(input);
+const roots = await coordinator.authorizedWorkspaceRoots();
+```
+
+All persistence and runtime admission reuse the same canonical, revisioned
+coordinator while preserving the saved-row and revocation contracts.

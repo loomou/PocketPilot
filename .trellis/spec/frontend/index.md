@@ -21,6 +21,7 @@ This directory records conventions for the local-only PocketPilot configuration 
 | [State Management](./state-management.md) | Local form, server snapshot, and transient action state | Established |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Established |
 | [Type Safety](./type-safety.md) | Type patterns, validation | Established |
+| [Internationalization](./i18n-guidelines.md) | Locale registry, state preservation, opaque values, notices, and formatting | Established |
 
 ---
 

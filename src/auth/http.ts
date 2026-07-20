@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { AgentProviderError } from "../agent-providers/errors.js";
 import { logEvents } from "../logging/events.js";
@@ -29,31 +29,8 @@ export function registerDeviceAuthErrorHandler(
   logger: PocketPilotLogger = noopLogger,
 ): void {
   app.setErrorHandler((error, request, reply) => {
-    if (error instanceof DeviceAuthError) {
-      logger.warn(
-        logEvents.authRequestRejected,
-        "Authentication request rejected",
-        {
-          ...safeRequestFields(request),
-          code: error.code,
-          statusCode: error.statusCode,
-        },
-      );
-      return reply.code(error.statusCode).send({
-        code: error.code,
-        message: error.message,
-      });
-    }
-    if (error instanceof TaskError) {
-      logger.warn(logEvents.httpRequestRejected, "Task request rejected", {
-        ...safeRequestFields(request),
-        code: error.code,
-        statusCode: error.statusCode,
-      });
-      return reply.code(error.statusCode).send({
-        code: error.code,
-        message: error.message,
-      });
+    if (sendDeviceAuthOrTaskError(error, reply, { logger, request })) {
+      return;
     }
     if (error instanceof AgentProviderError) {
       logger.warn(
@@ -77,6 +54,37 @@ export function registerDeviceAuthErrorHandler(
     });
     return reply.send(error);
   });
+}
+
+/** Sends the stable HTTP response for errors shared by authenticated routes. */
+export function sendDeviceAuthOrTaskError(
+  error: unknown,
+  reply: FastifyReply,
+  context?: { logger: PocketPilotLogger; request: FastifyRequest },
+): boolean {
+  if (!(error instanceof DeviceAuthError) && !(error instanceof TaskError)) {
+    return false;
+  }
+  if (context !== undefined) {
+    context.logger.warn(
+      error instanceof DeviceAuthError
+        ? logEvents.authRequestRejected
+        : logEvents.httpRequestRejected,
+      error instanceof DeviceAuthError
+        ? "Authentication request rejected"
+        : "Task request rejected",
+      {
+        ...safeRequestFields(context.request),
+        code: error.code,
+        statusCode: error.statusCode,
+      },
+    );
+  }
+  void reply.code(error.statusCode).send({
+    code: error.code,
+    message: error.message,
+  });
+  return true;
 }
 
 export function readBearerAccessToken(request: FastifyRequest): string {

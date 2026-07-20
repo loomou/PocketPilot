@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -45,6 +45,7 @@ import {
   type TaskSdkSession,
 } from "../../src/tasks/task-manager.js";
 import { TaskRepository } from "../../src/tasks/task-repository.js";
+import { WorkspaceAuthorizationCoordinator } from "../../src/tasks/workspace-authorization-coordinator.js";
 
 const deviceId = "00000000-0000-4000-8000-000000000001";
 
@@ -117,6 +118,43 @@ describe("TaskManager", () => {
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
     );
     expect(fourth.task.initialCwd).toBe(first.task.initialCwd);
+  });
+
+  it("lets an executing turn finish but rechecks authorization before the next message", async () => {
+    const fixture = createFixture(connections, temporaryDirectories, managers);
+    const created = await fixture.manager.createTask(
+      createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
+    );
+    await fixture.manager.submitSdkMessage(sdkInput(created.task.id));
+    const session = fixture.sessionFor(created.task.id);
+
+    await fixture.authorizationCoordinator.replaceTaskRuntimeSettings({
+      concurrentTaskCapacity: 3,
+      workspaceRoots: [],
+    });
+    session.emitState("idle");
+    await waitFor(
+      () => fixture.manager.getTask(created.task.id).state === "idle",
+    );
+
+    expect(fixture.manager.getTask(created.task.id)).toMatchObject({
+      id: created.task.id,
+      initialCwd: created.task.initialCwd,
+      state: "idle",
+    });
+    await expect(
+      fixture.manager.submitSdkMessage(sdkInput(created.task.id, "denied")),
+    ).rejects.toMatchObject({ code: "WORKSPACE_NOT_AUTHORIZED" });
+    expect(session.submissions).toHaveLength(1);
+
+    await fixture.authorizationCoordinator.replaceTaskRuntimeSettings({
+      concurrentTaskCapacity: 3,
+      workspaceRoots: [fixture.workspace],
+    });
+    await expect(
+      fixture.manager.submitSdkMessage(sdkInput(created.task.id, "restored")),
+    ).resolves.toMatchObject({ state: "executing" });
+    expect(session.submissions).toHaveLength(2);
   });
 
   it("applies shared capacity and lifecycle events to provider-native turns", async () => {
@@ -413,6 +451,44 @@ describe("TaskManager", () => {
     expect(session.submissions).toHaveLength(2);
   });
 
+  it("keeps approval resolution, interrupt, and close available after root removal", async () => {
+    const fixture = createFixture(connections, temporaryDirectories, managers);
+    const created = await fixture.manager.createTask(
+      createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
+    );
+    await fixture.manager.submitSdkMessage(sdkInput(created.task.id));
+    const session = fixture.sessionFor(created.task.id);
+    const decision = session.requestApproval("approval-after-revocation");
+
+    await waitFor(
+      () =>
+        fixture.manager.getTask(created.task.id).state === "awaiting_approval",
+    );
+    await fixture.authorizationCoordinator.replaceTaskRuntimeSettings({
+      concurrentTaskCapacity: 3,
+      workspaceRoots: [],
+    });
+
+    const result = {
+      behavior: "deny",
+      message: "Denied after workspace revocation.",
+    } satisfies PermissionResult;
+    await expect(
+      fixture.manager.resolveApproval({
+        ...operationInput(created.task.id),
+        requestId: "approval-after-revocation",
+        result,
+      }),
+    ).resolves.toMatchObject({ task: { state: "executing" } });
+    await expect(decision).resolves.toEqual(result);
+
+    await expect(
+      fixture.manager.interruptTask(operationInput(created.task.id)),
+    ).resolves.toMatchObject({ task: { state: "idle" } });
+    await expect(
+      fixture.manager.closeTask(operationInput(created.task.id)),
+    ).resolves.toMatchObject({ task: { state: "terminal" } });
+  });
   it("allows model and permission changes during execution for the next turn", async () => {
     const fixture = createFixture(connections, temporaryDirectories, managers);
     const created = await fixture.manager.createTask(
@@ -449,6 +525,7 @@ describe("TaskManager", () => {
 
     const recoveredSessions: FakeTaskSession[] = [];
     const recovered = new TaskManager({
+      authorizationCoordinator: fixture.authorizationCoordinator,
       createSession: (options) => {
         const session = new FakeTaskSession(
           options,
@@ -467,6 +544,19 @@ describe("TaskManager", () => {
     await expect(
       recovered.submitSdkMessage(sdkInput(created.task.id)),
     ).rejects.toMatchObject({ code: "TASK_INTERRUPTED" });
+
+    await fixture.authorizationCoordinator.replaceTaskRuntimeSettings({
+      concurrentTaskCapacity: 3,
+      workspaceRoots: [],
+    });
+    await expect(
+      recovered.resumeTask(operationInput(created.task.id)),
+    ).rejects.toMatchObject({ code: "WORKSPACE_NOT_AUTHORIZED" });
+    expect(recovered.getTask(created.task.id).state).toBe("interrupted");
+    await fixture.authorizationCoordinator.replaceTaskRuntimeSettings({
+      concurrentTaskCapacity: 3,
+      workspaceRoots: [fixture.workspace],
+    });
 
     const resumed = await recovered.resumeTask(operationInput(created.task.id));
     expect(resumed.task.state).toBe("idle");
@@ -1074,6 +1164,7 @@ function createFixture(
   closeTaskAgentConnections?: { closeTaskConnections(taskId: string): void },
   logger?: PocketPilotLogger,
 ): {
+  authorizationCoordinator: WorkspaceAuthorizationCoordinator;
   connection: StorageConnection;
   directory: string;
   eventSink: RecordingTaskEventSink;
@@ -1082,7 +1173,9 @@ function createFixture(
   settingsRepository: SettingsRepository;
   workspace: string;
 } {
-  const directory = mkdtempSync(join(tmpdir(), "pocketpilot-task-"));
+  const directory = realpathSync.native(
+    mkdtempSync(join(tmpdir(), "pocketpilot-task-")),
+  );
   const workspace = join(directory, "workspace");
   mkdirSync(workspace);
   const connection = openStorage({
@@ -1101,10 +1194,15 @@ function createFixture(
   const sessionsByTask = new Map<string, FakeTaskSession>();
   const unassignedSessions: FakeTaskSession[] = [];
   const eventSink = new RecordingTaskEventSink();
+  const authorizationCoordinator = new WorkspaceAuthorizationCoordinator({
+    settingsRepository,
+    strictSavedIdentity: false,
+  });
   const manager = new TaskManager({
     ...(closeTaskAgentConnections === undefined
       ? {}
       : { closeTaskAgentConnections }),
+    authorizationCoordinator,
     createSession: (options) => {
       const session = new FakeTaskSession(options, `sdk-${randomUUID()}`);
       unassignedSessions.push(session);
@@ -1133,6 +1231,7 @@ function createFixture(
   temporaryDirectories.push(directory);
   managers.push(manager);
   return {
+    authorizationCoordinator,
     connection,
     directory,
     eventSink,

@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { resolve } from "node:path";
 
 import type {
   EffortLevel,
@@ -56,6 +54,10 @@ import type {
   TaskOperationResult,
   TaskSnapshot,
 } from "./task-types.js";
+import {
+  WorkspaceAuthorizationCoordinator,
+  WorkspaceAuthorizationError,
+} from "./workspace-authorization-coordinator.js";
 import {
   addCanonicalRoot,
   canonicalPathsEqual,
@@ -183,6 +185,7 @@ export type TaskManagerOptions = {
   eventSink?: TaskEventSink;
   logger?: PocketPilotLogger;
   now?: () => number;
+  authorizationCoordinator?: WorkspaceAuthorizationCoordinator;
   pathResolver?: TaskPathResolver;
   settingsRepository: SettingsRepository;
   sqlite: StorageDatabase;
@@ -243,7 +246,7 @@ export class TaskManager {
   readonly #historyLanes = new Map<string, SerialExecutor>();
   readonly #logger: PocketPilotLogger;
   readonly #now: () => number;
-  readonly #pathResolver: TaskPathResolver;
+  readonly #authorizationCoordinator: WorkspaceAuthorizationCoordinator;
   readonly #repository: TaskRepository;
   readonly #settingsRepository: SettingsRepository;
   readonly #supportedPermissionModes: readonly PermissionMode[];
@@ -267,7 +270,20 @@ export class TaskManager {
     this.#eventSink = options.eventSink;
     this.#logger = options.logger ?? noopLogger;
     this.#now = options.now ?? Date.now;
-    this.#pathResolver = options.pathResolver ?? nodeTaskPathResolver;
+    this.#authorizationCoordinator =
+      options.authorizationCoordinator ??
+      new WorkspaceAuthorizationCoordinator({
+        ...(options.pathResolver === undefined
+          ? {}
+          : {
+              fileSystem: {
+                realpath: options.pathResolver.canonicalize,
+                stat: async () => ({ isDirectory: () => true }),
+              },
+            }),
+        settingsRepository: options.settingsRepository,
+        strictSavedIdentity: false,
+      });
     this.#repository = new TaskRepository(options.sqlite);
     for (const task of this.#repository.list()) {
       this.#publishedTaskStates.set(task.id, task.state);
@@ -322,10 +338,8 @@ export class TaskManager {
     return this.#supportedPermissionModes;
   }
 
-  public authorizedWorkspaceRoots(): readonly string[] {
-    return [
-      ...readTaskRuntimeSettings(this.#settingsRepository).workspaceRoots,
-    ];
+  public authorizedWorkspaceRoots(): Promise<readonly string[]> {
+    return this.#authorizationCoordinator.authorizedWorkspaceRoots();
   }
 
   /**
@@ -334,8 +348,7 @@ export class TaskManager {
    * the same directory policy, while Claude retains checks for direct callers.
    */
   public async authorizeWorkspace(workspace: string): Promise<string> {
-    const settings = readTaskRuntimeSettings(this.#settingsRepository);
-    return this.authorizeInitialWorkspace(workspace, settings.workspaceRoots);
+    return this.authorizeInitialWorkspace(workspace);
   }
 
   public async authorizedDirectorySnapshot(): Promise<AuthorizedDirectorySnapshot> {
@@ -571,10 +584,8 @@ export class TaskManager {
     if (!parsed.success) {
       throw invalidTaskOperationError();
     }
-    const settings = readTaskRuntimeSettings(this.#settingsRepository);
     const workspace = await this.authorizeInitialWorkspace(
       parsed.data.workspace,
-      settings.workspaceRoots,
     );
 
     let sdkSessions: SDKSessionInfo[];
@@ -625,10 +636,8 @@ export class TaskManager {
     if (!parsed.success) {
       throw invalidTaskOperationError();
     }
-    const settings = readTaskRuntimeSettings(this.#settingsRepository);
     const workspace = await this.authorizeInitialWorkspace(
       parsed.data.workspace,
-      settings.workspaceRoots,
     );
     const laneKey = `${workspace}\0${parsed.data.sessionId}`;
     return this.runHistoryLane(laneKey, async () => {
@@ -697,10 +706,8 @@ export class TaskManager {
     return this.executeIdempotent(parsed.data, async () =>
       this.#attachmentLane.run(async () => {
         this.assertAcceptingWork();
-        const settings = readTaskRuntimeSettings(this.#settingsRepository);
         const initialCwd = await this.authorizeInitialWorkspace(
           parsed.data.workspace,
-          settings.workspaceRoots,
         );
         return this.withCurrentWorkspaceAuthorization(initialCwd, () => {
           const now = this.#now();
@@ -743,10 +750,8 @@ export class TaskManager {
     return this.executeIdempotent(parsed.data, async () =>
       this.#attachmentLane.run(async () => {
         this.assertAcceptingWork();
-        const settings = readTaskRuntimeSettings(this.#settingsRepository);
         const initialCwd = await this.authorizeInitialWorkspace(
           parsed.data.workspace,
-          settings.workspaceRoots,
         );
         await this.requireAuthorizedClaudeSession(
           initialCwd,
@@ -792,6 +797,9 @@ export class TaskManager {
       if (task.origin !== "claude-session") {
         return;
       }
+      await this.assertTaskWorkspaceAuthorized(task);
+      task = this.requireTask(taskId);
+      this.assertTaskNotTerminal(task);
       if (task.state === "interrupted") {
         task = this.#repository.update(task.id, {
           interruptedAt: null,
@@ -855,7 +863,8 @@ export class TaskManager {
     return this.executeIdempotent(parsed.data, async () =>
       this.#capacityLane.run(async () => {
         this.assertAcceptingWork();
-        const settings = readTaskRuntimeSettings(this.#settingsRepository);
+        const settings =
+          this.#authorizationCoordinator.readTaskRuntimeSettings();
         if (
           this.#repository.countActiveTasks() >= settings.concurrentTaskCapacity
         ) {
@@ -868,7 +877,6 @@ export class TaskManager {
 
         const initialCwd = await this.authorizeInitialWorkspace(
           parsed.data.initialCwd,
-          settings.workspaceRoots,
         );
         return this.withCurrentWorkspaceAuthorization(initialCwd, () => {
           const now = this.#now();
@@ -921,7 +929,10 @@ export class TaskManager {
 
     return this.runTaskLane(input.taskId, async (lease) => {
       this.assertAcceptingWork();
-      const task = this.requireTask(input.taskId);
+      let task = this.requireTask(input.taskId);
+      this.assertTaskCanAcceptSdkMessage(task);
+      await this.assertTaskWorkspaceAuthorized(task);
+      task = this.requireTask(input.taskId);
       this.assertTaskCanAcceptSdkMessage(task);
       const startsQuery = input.message.shouldQuery !== false;
 
@@ -1063,7 +1074,8 @@ export class TaskManager {
     return this.executeIdempotent(identity, async () =>
       this.runTaskLane(input.taskId, async (lease) => {
         this.assertAcceptingWork();
-        const task = this.requireTask(input.taskId);
+        let task = this.requireTask(input.taskId);
+        this.assertTaskNotTerminal(task);
         if (task.state !== "interrupted") {
           throw new TaskError(
             "TASK_BUSY",
@@ -1093,6 +1105,16 @@ export class TaskManager {
           );
         }
 
+        await this.assertTaskWorkspaceAuthorized(task);
+        task = this.requireTask(input.taskId);
+        this.assertTaskNotTerminal(task);
+        if (task.state !== "interrupted") {
+          throw new TaskError(
+            "TASK_BUSY",
+            409,
+            "Only an interrupted task can be resumed.",
+          );
+        }
         lease.assertCurrent();
         this.ensureSession(task);
         lease.assertCurrent();
@@ -1504,17 +1526,14 @@ export class TaskManager {
     liveTask.composerInitialized = true;
   }
 
-  private async isSessionCwdAuthorized(
+  private isSessionCwdAuthorized(
     workspace: string,
     sessionCwd: string,
   ): Promise<boolean> {
-    try {
-      const canonicalSessionCwd =
-        await this.#pathResolver.canonicalize(sessionCwd);
-      return isPathWithinRoot(workspace, canonicalSessionCwd);
-    } catch {
-      return false;
-    }
+    return this.#authorizationCoordinator.isPathWithinWorkspace(
+      workspace,
+      sessionCwd,
+    );
   }
 
   private async requireAuthorizedClaudeSession(
@@ -1570,34 +1589,27 @@ export class TaskManager {
 
   private async authorizeInitialWorkspace(
     requestedCwd: string,
-    configuredRoots: readonly string[],
   ): Promise<string> {
-    let cwd: string;
     try {
-      cwd = await this.#pathResolver.canonicalize(requestedCwd);
-    } catch {
-      throw new TaskError(
-        "WORKSPACE_NOT_AUTHORIZED",
-        403,
-        "The requested working directory is not an authorized workspace.",
+      return await this.#authorizationCoordinator.authorizeWorkspace(
+        requestedCwd,
       );
-    }
-
-    for (const configuredRoot of configuredRoots) {
-      try {
-        const root = await this.#pathResolver.canonicalize(configuredRoot);
-        if (isPathWithinRoot(root, cwd)) {
-          return cwd;
-        }
-      } catch {
-        // A removed or inaccessible configured root cannot authorize work.
+    } catch (error) {
+      if (error instanceof WorkspaceAuthorizationError) {
+        throw new TaskError(
+          "WORKSPACE_NOT_AUTHORIZED",
+          403,
+          "The requested working directory is not an authorized workspace.",
+        );
       }
+      throw error;
     }
-    throw new TaskError(
-      "WORKSPACE_NOT_AUTHORIZED",
-      403,
-      "The requested working directory is not an authorized workspace.",
-    );
+  }
+
+  private async assertTaskWorkspaceAuthorized(
+    task: TaskSnapshot,
+  ): Promise<void> {
+    await this.authorizeInitialWorkspace(task.initialCwd);
   }
 
   private async withCurrentWorkspaceAuthorization<T>(
@@ -1606,8 +1618,7 @@ export class TaskManager {
   ): Promise<T> {
     for (;;) {
       const revision = this.#authorizationRevision;
-      const settings = readTaskRuntimeSettings(this.#settingsRepository);
-      await this.authorizeInitialWorkspace(workspace, settings.workspaceRoots);
+      await this.authorizeInitialWorkspace(workspace);
       if (revision === this.#authorizationRevision) {
         return operation();
       }
@@ -2457,7 +2468,7 @@ export class TaskManager {
       return task;
     }
 
-    const settings = readTaskRuntimeSettings(this.#settingsRepository);
+    const settings = this.#authorizationCoordinator.readTaskRuntimeSettings();
     if (
       this.#repository.countActiveTasks() >= settings.concurrentTaskCapacity
     ) {
@@ -2563,12 +2574,6 @@ class SerialExecutor {
     return result;
   }
 }
-
-const nodeTaskPathResolver: TaskPathResolver = {
-  async canonicalize(path: string): Promise<string> {
-    return realpath(resolve(path));
-  },
-};
 
 function interruptedTaskError(): TaskError {
   return new TaskError(

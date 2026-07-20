@@ -1,48 +1,157 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/App";
+import { I18nProvider } from "../src/lib/i18n/i18n-context";
+import { localeStorageKey } from "../src/lib/i18n/locale-resolution";
 
 describe("App", () => {
   afterEach(() => {
     cleanup();
-    vi.useRealTimers();
+    localStorage.clear();
+    document.documentElement.lang = "";
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
-  it("renders loaded configuration, pairing, device, and audit data", async () => {
+  it("renders the approved console views with loaded server data", async () => {
     installFetchMock();
-    render(<App />);
+    renderApp();
 
-    expect(
-      screen.getByRole("heading", { name: "Agent configuration" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "总览" })).toBeInTheDocument();
+    expect(await screen.findByText("127.0.0.1:43183")).toBeInTheDocument();
+    expect(screen.getByText("Pixel 9")).toBeInTheDocument();
+    expect(screen.getByText("task.created")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "配置" }));
     expect(
       await screen.findByDisplayValue("https://agent.example.test"),
     ).toBeInTheDocument();
-    expect(screen.getByText("C:\\code")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "已授权目录" }));
+    expect(await screen.findByText("C:\\code")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "设备" }));
     expect(
-      screen.getByRole("heading", { name: "Authorized directories" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { name: "Pair a mobile device" }),
+      screen.getByRole("heading", { name: "配对新设备" }),
     ).toBeInTheDocument();
     expect(screen.getByText("My phone")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "审计记录" }));
     expect(screen.getByText("task.created")).toBeInTheDocument();
-    expect(screen.getByText("127.0.0.1:43183")).toBeInTheDocument();
+  });
+
+  it("approves a generated pairing directly from the QR dialog", async () => {
+    const pairingId = "00000000-0000-4000-8000-000000000005";
+    const pairedDevice = {
+      createdAt: 1_700_000_000_100,
+      displayName: "Tablet",
+      id: "00000000-0000-4000-8000-000000000006",
+      revokedAt: null,
+    };
+    let approved = false;
+    const fetchMock = installFetchMock(
+      new Map<string, FetchOverride>([
+        [
+          "/admin/pairings",
+          {
+            expiresAt: 1_900_000_000_000,
+            pairingId,
+            qrPayload: {
+              agentId: "00000000-0000-4000-8000-000000000001",
+              baseUrl: "https://agent.example.test",
+              expiresAt: 1_900_000_000_000,
+              pairingId,
+              version: 1,
+            },
+          },
+        ],
+        [
+          `/admin/pairings/${pairingId}/approve`,
+          () => {
+            approved = true;
+            return pairedDevice;
+          },
+        ],
+        [
+          "/admin/devices",
+          () =>
+            approved ? [...snapshot.devices, pairedDevice] : snapshot.devices,
+        ],
+        ["/admin/pairings/pending", () => (approved ? [] : snapshot.pairings)],
+      ]),
+    );
+    renderApp("en");
+
+    await screen.findByText("127.0.0.1:43183");
+    fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Generate pairing QR code" }),
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByRole("img", {
+        name: "PocketPilot device pairing QR code",
+      }),
+    ).toBeInTheDocument();
+    const codeInput = within(dialog).getByRole("textbox", {
+      name: `Mobile verification code for ${pairingId}`,
+    });
+    const approveButton = within(dialog).getByRole("button", {
+      name: "Approve",
+    });
+
+    expect(codeInput).toBeInTheDocument();
+    expect(approveButton).toBeDisabled();
+    fireEvent.change(codeInput, { target: { value: "12a34" } });
+    expect(codeInput).toHaveValue("1234");
+    expect(approveButton).toBeDisabled();
+    fireEvent.change(codeInput, { target: { value: "1234567" } });
+    expect(codeInput).toHaveValue("123456");
+    expect(approveButton).toBeEnabled();
+    fireEvent.click(approveButton);
+
+    expect(
+      await screen.findByText("Device pairing approved."),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByText("Tablet")).toBeInTheDocument();
+
+    const approvalRequest = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        requestPath(input) === `/admin/pairings/${pairingId}/approve` &&
+        init?.method === "POST",
+    );
+    expect(JSON.parse(String(approvalRequest?.[1]?.body))).toEqual({
+      verificationCode: "123456",
+    });
   });
 
   it("sends both configuration writes with the CSRF token", async () => {
     const fetchMock = installFetchMock();
-    render(<App />);
+    renderApp();
 
-    await screen.findByDisplayValue("https://agent.example.test");
-    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    await screen.findByText("127.0.0.1:43183");
+    fireEvent.click(screen.getByRole("button", { name: "配置" }));
+    const mobileBaseUrl = await screen.findByDisplayValue(
+      "https://agent.example.test",
+    );
+    fireEvent.change(mobileBaseUrl, {
+      target: { value: "https://updated.example.test" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
 
     expect(
-      await screen.findByText(
-        "Configuration saved. Listener changes apply on next start.",
-      ),
+      await screen.findByText("配置已保存。监听器更改将在下次启动时生效。"),
     ).toBeInTheDocument();
     const writes = fetchMock.mock.calls.filter(
       (call) => call[1]?.method === "PUT",
@@ -54,332 +163,315 @@ describe("App", () => {
       expect(headers.get("content-type")).toBe("application/json");
     }
     expect(
-      screen.getByRole("button", { name: "Save configuration" }),
-    ).toBeEnabled();
-  });
-
-  it("approves the active QR code only after clicking and preserves edits", async () => {
-    const pairing = {
-      expiresAt: Date.now() + 5 * 60 * 1_000,
-      pairingId: "00000000-0000-4000-8000-000000000030",
-      qrPayload: {
-        agentId: "00000000-0000-4000-8000-000000000031",
-        baseUrl: "https://agent.example.test",
-        expiresAt: Date.now() + 5 * 60 * 1_000,
-        pairingId: "00000000-0000-4000-8000-000000000030",
-        version: 1,
+      writes.map(([input, init]) => ({
+        body: JSON.parse(String(init?.body)),
+        path: requestPath(input),
+      })),
+    ).toEqual([
+      {
+        body: {
+          mobileBaseUrl: "https://updated.example.test",
+          remoteListener: { host: "127.0.0.1", port: 43_182 },
+        },
+        path: "/admin/configuration/runtime",
       },
-    } as const;
-    const approvedDevice = {
-      createdAt: Date.now(),
-      displayName: "New phone",
-      id: "00000000-0000-4000-8000-000000000032",
-      revokedAt: null,
-    } as const;
-    const fetchMock = installFetchMock(
-      new Map<string, ResponseOverride>([
-        ["POST /admin/pairings", pairing],
-        [`POST /admin/pairings/${pairing.pairingId}/approve`, approvedDevice],
-      ]),
-    );
-    render(<App />);
-
-    const capacity = await screen.findByLabelText("Concurrent task capacity");
-    fireEvent.change(capacity, { target: { value: "9" } });
-    fireEvent.click(screen.getByRole("button", { name: "Generate QR" }));
+      {
+        body: {
+          concurrentTaskCapacity: 5,
+          confirmedHighRiskRoots: [],
+          workspaceRoots: ["C:\\code"],
+        },
+        path: "/admin/configuration/tasks",
+      },
+    ]);
     expect(
-      await screen.findByAltText("PocketPilot device pairing QR code"),
-    ).toBeInTheDocument();
-
-    const mobileCode = screen.getByLabelText("Mobile code");
-    const approveButton = screen.getByRole("button", { name: "Approve" });
-    expect(approveButton).toBeDisabled();
-    expect(
-      fetchMock.mock.calls.some(
-        (call) => requestPath(call[0]) === "/admin/pairings/pending",
-      ),
-    ).toBe(false);
-
-    fireEvent.change(mobileCode, { target: { value: "65a43-21" } });
-    expect(mobileCode).toHaveValue("654321");
-    expect(approveButton).toBeEnabled();
-    expect(
-      fetchMock.mock.calls.some(
-        (call) =>
-          requestPath(call[0]) ===
-          `/admin/pairings/${pairing.pairingId}/approve`,
-      ),
-    ).toBe(false);
-
-    fireEvent.click(approveButton);
-    expect(
-      await screen.findByText("Device pairing approved."),
-    ).toBeInTheDocument();
-
-    expect(screen.getByDisplayValue("9")).toBeInTheDocument();
-    expect(screen.getByText("New phone")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Mobile code")).not.toBeInTheDocument();
-    expect(
-      screen.queryByAltText("PocketPilot device pairing QR code"),
+      screen.queryByText("存在尚未保存的配置更改。"),
     ).not.toBeInTheDocument();
 
-    const approvalRequest = fetchMock.mock.calls.find(
-      (call) =>
-        requestPath(call[0]) === `/admin/pairings/${pairing.pairingId}/approve`,
-    );
-    expect(approvalRequest?.[1]?.method).toBe("POST");
-    expect(JSON.parse(String(approvalRequest?.[1]?.body))).toEqual({
-      verificationCode: "654321",
-    });
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
     expect(
-      new Headers(approvalRequest?.[1]?.headers).get(
-        "x-pocketpilot-csrf-token",
+      await screen.findByText(
+        "Configuration saved. Listener changes take effect the next time the Agent starts.",
       ),
-    ).toBe("csrf-token");
+    ).toBeInTheDocument();
   });
 
-  it("keeps the QR and code after a rejected approval", async () => {
-    const pairing = {
-      expiresAt: Date.now() + 5 * 60 * 1_000,
-      pairingId: "00000000-0000-4000-8000-000000000040",
-      qrPayload: {
-        agentId: "00000000-0000-4000-8000-000000000041",
-        baseUrl: "https://agent.example.test",
-        expiresAt: Date.now() + 5 * 60 * 1_000,
-        pairingId: "00000000-0000-4000-8000-000000000040",
-        version: 1,
-      },
-    } as const;
-    const fetchMock = installFetchMock(
-      new Map<string, ResponseOverride>([
-        ["POST /admin/pairings", pairing],
-        [
-          `POST /admin/pairings/${pairing.pairingId}/approve`,
-          () =>
-            jsonResponse(
-              {
-                code: "PAIRING_VERIFICATION_CODE_MISMATCH",
-                message: "The pairing verification code does not match.",
-              },
-              409,
-            ),
-        ],
-      ]),
-    );
-    render(<App />);
-
-    await screen.findByDisplayValue("https://agent.example.test");
-    fireEvent.click(screen.getByRole("button", { name: "Generate QR" }));
-    expect(
-      await screen.findByAltText("PocketPilot device pairing QR code"),
-    ).toBeInTheDocument();
-    const mobileCode = screen.getByLabelText("Mobile code");
-    fireEvent.change(mobileCode, { target: { value: "123456" } });
-    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+  it("renders English chrome while preserving opaque server values", async () => {
+    installFetchMock();
+    renderApp("en");
 
     expect(
-      await screen.findByText("The pairing verification code does not match."),
+      screen.getByRole("heading", { name: "Overview" }),
     ).toBeInTheDocument();
+    expect(await screen.findByText("127.0.0.1:43183")).toBeInTheDocument();
+    expect(screen.getByText("task.created")).toBeInTheDocument();
+    expect(document.documentElement.lang).toBe("en");
+
+    fireEvent.click(screen.getByRole("button", { name: "Devices" }));
     expect(
-      screen.getByAltText("PocketPilot device pairing QR code"),
-    ).toBeInTheDocument();
-    expect(screen.getByDisplayValue("123456")).toBeInTheDocument();
-    expect(
-      fetchMock.mock.calls.filter(
-        (call) =>
-          requestPath(call[0]) ===
-          `/admin/pairings/${pairing.pairingId}/approve`,
+      screen.getByText(
+        "Pairing QR data is returned by the local Agent, expires after five minutes, and can register only one device. The browser does not construct or persist this data.",
       ),
-    ).toHaveLength(1);
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Maintenance" }));
+    expect(screen.getByText("agent rekey")).toBeInTheDocument();
+    expect(
+      screen.getByText("agent reset --confirm RESET_AGENT_DATA"),
+    ).toBeInTheDocument();
   });
 
-  it("clears the previous code when a new QR replaces it", async () => {
-    const pairings = [
-      {
-        expiresAt: Date.now() + 5 * 60 * 1_000,
-        pairingId: "00000000-0000-4000-8000-000000000050",
-        qrPayload: {
-          agentId: "00000000-0000-4000-8000-000000000051",
-          baseUrl: "https://agent.example.test",
-          expiresAt: Date.now() + 5 * 60 * 1_000,
-          pairingId: "00000000-0000-4000-8000-000000000050",
-          version: 1,
-        },
-      },
-      {
-        expiresAt: Date.now() + 5 * 60 * 1_000,
-        pairingId: "00000000-0000-4000-8000-000000000052",
-        qrPayload: {
-          agentId: "00000000-0000-4000-8000-000000000053",
-          baseUrl: "https://agent.example.test",
-          expiresAt: Date.now() + 5 * 60 * 1_000,
-          pairingId: "00000000-0000-4000-8000-000000000052",
-          version: 1,
-        },
-      },
-    ] as const;
-    let pairingCallCount = 0;
-    const fetchMock = installFetchMock(
-      new Map<string, ResponseOverride>([
-        ["POST /admin/pairings", () => pairings[pairingCallCount++]],
-      ]),
-    );
-    render(<App />);
+  it("formats timestamps with the active locale after switching", async () => {
+    const timestampSpy = vi.spyOn(Date.prototype, "toLocaleString");
+    installFetchMock();
+    renderApp();
 
-    await screen.findByDisplayValue("https://agent.example.test");
-    fireEvent.click(screen.getByRole("button", { name: "Generate QR" }));
-    await screen.findByLabelText("Mobile code");
-    await vi.waitFor(() =>
-      expect(screen.getByRole("button", { name: "Generate QR" })).toBeEnabled(),
+    await screen.findByText("127.0.0.1:43183");
+    expect(timestampSpy).toHaveBeenCalledWith("zh-CN");
+
+    timestampSpy.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
+    expect(timestampSpy).toHaveBeenCalledWith("en");
+  });
+
+  it("switches locale without losing the current configuration draft", async () => {
+    installFetchMock();
+    renderApp();
+
+    await screen.findByText("127.0.0.1:43183");
+    fireEvent.click(screen.getByRole("button", { name: "配置" }));
+    const mobileBaseUrl = await screen.findByDisplayValue(
+      "https://agent.example.test",
     );
-    fireEvent.change(screen.getByLabelText("Mobile code"), {
-      target: { value: "123456" },
+    fireEvent.change(mobileBaseUrl, {
+      target: { value: "https://draft.example.test" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Generate QR" }));
 
-    await vi.waitFor(() => expect(pairingCallCount).toBe(2));
-    await vi.waitFor(() =>
-      expect(screen.getByLabelText("Mobile code")).toHaveValue(""),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
+
     expect(
-      fetchMock.mock.calls.filter(
-        (call) => requestPath(call[0]) === "/admin/pairings/pending",
-      ),
-    ).toHaveLength(0);
+      screen.getByRole("heading", { name: "Configuration" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue("https://draft.example.test"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Unsaved configuration changes."),
+    ).toBeInTheDocument();
+    expect(document.documentElement.lang).toBe("en");
+    expect(localStorage.getItem(localeStorageKey)).toBe("en");
+    expect(
+      screen.getByRole("group", { name: "Interface language" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps directory authorization changes as a discardable draft", async () => {
+    installFetchMock(directoryOverrides());
+    renderApp();
+
+    await screen.findByText("127.0.0.1:43183");
+    fireEvent.click(screen.getByRole("button", { name: "配置" }));
+    fireEvent.click(screen.getByRole("tab", { name: "已授权目录" }));
+    expect(await screen.findByText("C:\\code")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "添加目录" }));
+    const address = await screen.findByLabelText("绝对路径");
+    fireEvent.change(address, { target: { value: "C:\\work" } });
+    fireEvent.click(screen.getByRole("button", { name: "前往" }));
+    expect(await screen.findByText("C:\\work")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "授权目录" }));
+
+    expect(await screen.findByText("已配置 2 个目录")).toBeInTheDocument();
+    expect(screen.getByText("存在尚未保存的配置更改。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "放弃更改" }));
+
+    expect(await screen.findByText("已配置 1 个目录")).toBeInTheDocument();
+    expect(screen.queryByText("C:\\work")).not.toBeInTheDocument();
+  });
+
+  it("requires confirmation before saving a filesystem root", async () => {
+    const fetchMock = installFetchMock(directoryOverrides());
+    renderApp("en");
+
+    await screen.findByText("127.0.0.1:43183");
+    fireEvent.click(screen.getByRole("button", { name: "Configuration" }));
+    fireEvent.click(
+      screen.getByRole("tab", { name: "Authorized directories" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add directory" }));
+    const address = await screen.findByLabelText("Absolute path");
+    fireEvent.change(address, { target: { value: "/" } });
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    await screen.findByText("No accessible subdirectories");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Authorize directory" }),
+    );
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Confirm high-risk directory",
+      }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm and authorize" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    await screen.findByText(
+      "Configuration saved. Listener changes take effect the next time the Agent starts.",
+    );
+
+    const taskWrite = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        requestPath(input) === "/admin/configuration/tasks" &&
+        init?.method === "PUT",
+    );
+    expect(JSON.parse(String(taskWrite?.[1]?.body))).toEqual({
+      concurrentTaskCapacity: 5,
+      confirmedHighRiskRoots: ["/"],
+      workspaceRoots: ["C:\\code", "/"],
+    });
+  });
+
+  it("preserves the authorization tab and browser state across locale changes", async () => {
+    installFetchMock(directoryOverrides());
+    renderApp();
+
+    await screen.findByText("127.0.0.1:43183");
+    fireEvent.click(screen.getByRole("button", { name: "配置" }));
+    fireEvent.click(screen.getByRole("tab", { name: "已授权目录" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "移除 C:\\code" }),
+    );
+    const addButton = screen.getByRole("button", { name: "添加目录" });
+    fireEvent.click(addButton);
+    const address = await screen.findByLabelText("绝对路径");
+    fireEvent.change(address, { target: { value: "/work" } });
+    fireEvent.click(screen.getByRole("button", { name: "前往" }));
+    expect(await screen.findByText("alpha")).toBeInTheDocument();
+    fireEvent.change(address, { target: { value: "/work/typed" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
+
+    expect(
+      screen.getByRole("tab", { name: "Authorized directories" }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByLabelText("Absolute path")).toHaveValue("/work/typed");
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+    expect(screen.queryByText("C:\\code")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Add directory" }),
+      ).toHaveFocus(),
+    );
   });
 
   it("rejects an invalid local API response before rendering its data", async () => {
     installFetchMock(
       new Map([["/admin/configuration", { runtime: "not-an-object" }]]),
     );
-    render(<App />);
+    renderApp();
 
     expect(
-      await screen.findByText("The local Agent returned an invalid response."),
+      await screen.findByText("本地 Agent 返回了无效响应。"),
     ).toBeInTheDocument();
     expect(screen.getByRole("alert")).toBeInTheDocument();
-    expect(screen.queryByText("Pair a mobile device")).not.toBeInTheDocument();
+    expect(screen.queryByText("Agent 状态")).not.toBeInTheDocument();
   });
 
-  it("adds a picker-selected directory without saving staged capacity", async () => {
-    const addedSnapshot = {
-      directories: [
-        ...snapshot.authorizedDirectories.directories,
-        {
-          nonTerminalRuntimeCount: 0,
-          path: "D:\\new-project",
-          status: "available",
-          volumeRoot: false,
-        },
-      ],
-      revision: 1,
-    } as const;
-    const fetchMock = installFetchMock(
-      new Map<string, unknown>([
-        [
-          "POST /admin/authorized-directories/pick",
-          {
-            expiresAt: 1_900_000_000_000,
-            path: "D:\\new-project",
-            selectionId: "00000000-0000-4000-8000-000000000020",
-            status: "selected",
-            volumeRoot: false,
-          },
-        ],
-        [
-          "POST /admin/authorized-directories",
-          {
-            removedRedundantPaths: [],
-            result: "added",
-            selectedPath: "D:\\new-project",
-            snapshot: addedSnapshot,
-          },
-        ],
-      ]),
-    );
-    render(<App />);
-
-    const capacity = await screen.findByLabelText("Concurrent task capacity");
-    fireEvent.change(capacity, { target: { value: "9" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add directory" }));
-
-    expect(await screen.findByText("D:\\new-project")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("9")).toBeInTheDocument();
-    expect(
-      fetchMock.mock.calls.some(
-        (call) =>
-          requestPath(call[0]) === "/admin/configuration/tasks" &&
-          call[1]?.method === "PUT",
-      ),
-    ).toBe(false);
-  });
-
-  it("removes a confirmed directory through its current revision", async () => {
+  it("localizes client-owned request failures after locale changes", async () => {
     vi.stubGlobal(
-      "confirm",
-      vi.fn(() => true),
+      "fetch",
+      vi.fn().mockRejectedValue(new TypeError("Failed to fetch")),
     );
-    const fetchMock = installFetchMock(
-      new Map<string, unknown>([
-        [
-          "POST /admin/authorized-directories/remove",
-          {
-            removedPath: "C:\\code",
-            snapshot: { directories: [], revision: 1 },
-            stoppedTaskCount: 0,
-          },
-        ],
-      ]),
-    );
-    render(<App />);
-
-    await screen.findByText("C:\\code");
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    renderApp();
 
     expect(
       await screen.findByText(
-        "Directory authorization removed. 0 open sessions were stopped.",
+        "\u672c\u5730\u7ba1\u7406\u8bf7\u6c42\u5931\u8d25\u3002",
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText("C:\\code")).not.toBeInTheDocument();
-    const removal = fetchMock.mock.calls.find(
-      (call) => requestPath(call[0]) === "/admin/authorized-directories/remove",
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
+    expect(
+      await screen.findByText("The local administration request failed."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Failed to fetch")).not.toBeInTheDocument();
+  });
+
+  it("keeps unknown backend error messages opaque", async () => {
+    installFetchMock(
+      new Map<string, unknown | Response>([
+        [
+          "/admin/configuration",
+          jsonResponse(
+            {
+              code: "CUSTOM_BACKEND_ERROR",
+              message: "Server-owned diagnostic.",
+            },
+            400,
+          ),
+        ],
+      ]),
     );
-    expect(JSON.parse(String(removal?.[1]?.body))).toEqual({
-      expectedNonTerminalRuntimeCount: 0,
-      path: "C:\\code",
-      revision: 0,
-      runtimeStopAccepted: true,
-    });
+    renderApp("en");
+
+    expect(
+      await screen.findByText("Server-owned diagnostic."),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps unrecognized audit results opaque", async () => {
+    installFetchMock(
+      new Map([
+        [
+          "/admin/audits",
+          [{ ...snapshot.audits[0], result: "successful-review" }],
+        ],
+      ]),
+    );
+    renderApp("en");
+
+    await screen.findByText("127.0.0.1:43183");
+    fireEvent.click(screen.getByRole("button", { name: "Audit records" }));
+    expect(screen.getAllByText("successful-review")).not.toHaveLength(0);
+    expect(screen.queryByText("Success")).not.toBeInTheDocument();
   });
 });
 
-type ResponseOverride =
+function renderApp(locale: "en" | "zh-CN" = "zh-CN") {
+  localStorage.setItem(localeStorageKey, locale);
+  return render(
+    <I18nProvider>
+      <App />
+    </I18nProvider>,
+  );
+}
+
+type FetchOverride =
   | unknown
   | Response
-  | (() => unknown | Response | Promise<unknown | Response>);
+  | ((init: RequestInit | undefined) => unknown | Response);
 
-function installFetchMock(overrides = new Map<string, ResponseOverride>()) {
+function installFetchMock(overrides = new Map<string, FetchOverride>()) {
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const path = requestPath(input);
       if (init?.method === "PUT") {
-        return jsonResponse(
-          path.endsWith("/runtime")
-            ? snapshot.configuration.runtime
-            : snapshot.configuration.tasks,
-        );
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        if (path.endsWith("/runtime")) return jsonResponse(body);
+        const { confirmedHighRiskRoots: _confirmed, ...taskSettings } = body;
+        return jsonResponse(taskSettings);
       }
-      const methodPath = `${init?.method ?? "GET"} ${path}`;
-      const selectedResponse = overrides.has(methodPath)
-        ? overrides.get(methodPath)
-        : overrides.has(path)
-          ? overrides.get(path)
-          : responses.get(path);
+      const override = overrides.has(path) ? overrides.get(path) : undefined;
       const response =
-        typeof selectedResponse === "function"
-          ? await selectedResponse()
-          : selectedResponse;
+        typeof override === "function"
+          ? override(init)
+          : (override ?? responses.get(path));
       if (response instanceof Response) return response;
       if (response === undefined) {
         return jsonResponse(
@@ -392,6 +484,63 @@ function installFetchMock(overrides = new Map<string, ResponseOverride>()) {
   );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+function directoryOverrides(): Map<string, FetchOverride> {
+  return new Map([
+    [
+      "/admin/directories/browse",
+      (init: RequestInit | undefined) => {
+        const requestedPath = (
+          JSON.parse(String(init?.body)) as { path?: string }
+        ).path;
+        if (requestedPath === "C:\\work") {
+          return {
+            currentPath: "C:\\work",
+            entries: [],
+            parentPath: "C:\\",
+            truncated: false,
+          };
+        }
+        if (requestedPath === "/") {
+          return {
+            currentPath: "/",
+            entries: [],
+            parentPath: null,
+            truncated: false,
+          };
+        }
+        if (requestedPath === "/work") {
+          return {
+            currentPath: "/work",
+            entries: [
+              {
+                accessible: true,
+                name: "alpha",
+                path: "/work/alpha",
+                root: false,
+              },
+            ],
+            parentPath: "/",
+            truncated: false,
+          };
+        }
+        return responses.get("/admin/directories/browse");
+      },
+    ],
+    [
+      "/admin/directories/inspect",
+      (init: RequestInit | undefined) => {
+        const { paths } = JSON.parse(String(init?.body)) as { paths: string[] };
+        return paths.map((path) => ({
+          canonicalPath: path,
+          configuredPath: path,
+          highRisk: path === "/",
+          status: "available",
+        }));
+      },
+    ],
+  ]);
 }
 
 function requestPath(input: RequestInfo | URL): string {
@@ -422,18 +571,7 @@ const snapshot = {
       mobileBaseUrl: "https://agent.example.test",
       remoteListener: { host: "127.0.0.1", port: 43_182 },
     },
-    tasks: { concurrentTaskCapacity: 5 },
-  },
-  authorizedDirectories: {
-    directories: [
-      {
-        nonTerminalRuntimeCount: 0,
-        path: "C:\\code",
-        status: "available",
-        volumeRoot: false,
-      },
-    ],
-    revision: 0,
+    tasks: { concurrentTaskCapacity: 5, workspaceRoots: ["C:\\code"] },
   },
   csrf: { token: "csrf-token" },
   devices: [
@@ -442,6 +580,14 @@ const snapshot = {
       displayName: "My phone",
       id: "00000000-0000-4000-8000-000000000003",
       revokedAt: null,
+    },
+  ],
+  pairings: [
+    {
+      deviceDisplayName: "Pixel 9",
+      expiresAt: 1_900_000_000_000,
+      pairingId: "00000000-0000-4000-8000-000000000002",
+      verificationCode: "321654",
     },
   ],
   status: {
@@ -456,7 +602,34 @@ const responses = new Map<string, unknown>([
   ["/admin/csrf", snapshot.csrf],
   ["/admin/configuration", snapshot.configuration],
   ["/admin/status", snapshot.status],
+  ["/admin/pairings/pending", snapshot.pairings],
   ["/admin/devices", snapshot.devices],
   ["/admin/audits", snapshot.audits],
-  ["/admin/authorized-directories", snapshot.authorizedDirectories],
+  [
+    "/admin/directories/inspect",
+    [
+      {
+        canonicalPath: "C:\\code",
+        configuredPath: "C:\\code",
+        highRisk: false,
+        status: "available",
+      },
+    ],
+  ],
+  [
+    "/admin/directories/browse",
+    {
+      currentPath: null,
+      entries: [
+        {
+          accessible: true,
+          name: "C:\\",
+          path: "C:\\",
+          root: true,
+        },
+      ],
+      parentPath: null,
+      truncated: false,
+    },
+  ],
 ]);
