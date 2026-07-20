@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/agent-provider-contracts.md", "reason": "Verify historyFilters closed shape, sanitizer, Claude true / Codex false, reject-true policy"}
+{"file": ".trellis/spec/backend/codex-app-server-contracts.md", "reason": "Verify Codex history remains native and includeSystemMessages=true is denied without native calls"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Verify HISTORY_FILTER_NOT_SUPPORTED is stable 409 without path/secret leakage"}
+{"file": ".trellis/spec/backend/api-documentation-contracts.md", "reason": "Verify OpenAPI and mobile docs advertise historyFilters and Codex reject semantics"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify fixture completeness, no unrelated churn, tests cover reject and allow paths"}
