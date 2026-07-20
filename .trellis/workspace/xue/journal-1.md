@@ -684,3 +684,42 @@ Updated the parent Claude/Codex parity audit findings to mark children 1–4 don
 
 - Optional next implementation: P2 history options contracts, or P3 Codex replay checkpoint.
 - Attachments remain deferred.
+
+
+## Session 21: Codex history options contracts
+
+**Date**: 2026-07-21
+**Task**: Codex history options contracts
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Made the common includeSystemMessages history filter provider-honest: closed historyFilters capability (Claude true / Codex false), reject Codex true with HISTORY_FILTER_NOT_SUPPORTED, keep native Codex rows unchanged, update docs/tests/contracts.
+
+### Main Changes
+
+- Added required closed `historyFilters: { includeSystemMessages: boolean }`.
+- Registry sanitizer + null-safe default false closed object.
+- Codex readConversation rejects includeSystemMessages=true before native list.
+- OpenAPI, mobile guides, and backend contracts updated.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a4c23b7` | feat(providers): advertise historyFilters and reject Codex includeSystemMessages=true |
+| `3ebb04f` | docs(spec): record historyFilters capability and HISTORY_FILTER_NOT_SUPPORTED |
+| `5052816` | chore(task): archive 07-21-codex-history-options |
+
+### Testing
+
+- Targeted provider/registry/route/OpenAPI tests passed; typecheck/lint clean.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Optional: P3 Codex replay checkpoint.
+- Attachments remain deferred.
