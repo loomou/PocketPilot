@@ -88,6 +88,16 @@ const agentNativeActionsSchema = z
   })
   .strict();
 
+const agentStatusCatalogsSchema = z
+  .object({
+    account: z.literal(true).optional(),
+    hooks: z.literal(true).optional(),
+    mcpServers: z.literal(true).optional(),
+    rateLimits: z.literal(true).optional(),
+    skills: z.literal(true).optional(),
+  })
+  .strict();
+
 const capabilitySchema = z.object({
   activeTurnSteering: z.boolean(),
   approvals: z.boolean(),
@@ -100,6 +110,7 @@ const capabilitySchema = z.object({
   nativeActions: agentNativeActionsSchema,
   newConversation: z.boolean(),
   resumeConversation: z.boolean(),
+  statusCatalogs: agentStatusCatalogsSchema,
   streamProtocol: z.string(),
 });
 

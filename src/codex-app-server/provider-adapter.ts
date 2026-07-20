@@ -33,6 +33,8 @@ import {
   isCodexBoundedText,
   isCodexClientRequestFrame,
   isCodexReadClientRequestMethod,
+  isCodexStatusCatalogMethod,
+  isCodexStatusCatalogNotification,
   isCodexTurnStartingMethod,
   isForwardedCodexNotification,
   isForwardedCodexServerRequest,
@@ -57,6 +59,11 @@ type PendingTurnStart = {
   kind: CodexTurnStartKind;
 };
 
+type PendingStatusCatalogRequest = {
+  connectionGeneration: number;
+  method: string;
+};
+
 type CodexRuntime = {
   activeDeviceId: string | undefined;
   activeTurnKind: CodexTurnStartKind | undefined;
@@ -65,6 +72,7 @@ type CodexRuntime = {
   connectionGeneration: number;
   pendingInterruptRequests: Set<string>;
   pendingServerRequests: Map<string, PendingServerRequest>;
+  pendingStatusCatalogRequests: Map<string, PendingStatusCatalogRequest>;
   pendingTurnStarts: Map<string, PendingTurnStart>;
   taskId: string;
   threadId: string;
@@ -160,6 +168,13 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
               },
               newConversation: true,
               resumeConversation: true,
+              statusCatalogs: {
+                account: true as const,
+                hooks: true as const,
+                mcpServers: true as const,
+                rateLimits: true as const,
+                skills: true as const,
+              },
               streamProtocol: "codex-app-server-json-rpc" as const,
             },
             protocolVersion: codexAppServerProtocolVersion,
@@ -276,6 +291,7 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
           connectionGeneration: this.#bridge.connectionGeneration,
           pendingInterruptRequests: new Set(),
           pendingServerRequests: new Map(),
+          pendingStatusCatalogRequests: new Map(),
           pendingTurnStarts: new Map(),
           taskId: task.id,
           threadId: thread.id,
@@ -343,6 +359,7 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     // be replayed into a newly initialized process after a bridge failure.
     runtime.pendingServerRequests.clear();
     runtime.pendingInterruptRequests.clear();
+    runtime.pendingStatusCatalogRequests.clear();
     runtime.pendingTurnStarts.clear();
     runtime.activeDeviceId = undefined;
     runtime.activeTurnKind = undefined;
@@ -485,8 +502,20 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     await this.#taskRuntime.assertReadable(runtime.taskId);
     await this.validateRemotePaths(runtime.workspace, frame);
     await this.#taskRuntime.assertReadable(runtime.taskId);
+    this.validateStatusCatalogParams(frame);
     const forwarded = this.prepareTaskRequest(runtime, frame);
-    await this.#bridge.forward(runtime.taskId, forwarded);
+    if (isCodexStatusCatalogMethod(frame.method)) {
+      runtime.pendingStatusCatalogRequests.set(codexRequestKey(frame.id), {
+        connectionGeneration: runtime.connectionGeneration,
+        method: frame.method,
+      });
+    }
+    try {
+      await this.#bridge.forward(runtime.taskId, forwarded);
+    } catch (error) {
+      runtime.pendingStatusCatalogRequests.delete(codexRequestKey(frame.id));
+      throw error;
+    }
     const task = await this.#taskRuntime.assertReadable(runtime.taskId);
     this.#repository.recordAudit({
       deviceId,
@@ -511,6 +540,7 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     runtime.activeDeviceId = undefined;
     runtime.activeTurnKind = undefined;
     runtime.pendingServerRequests.clear();
+    runtime.pendingStatusCatalogRequests.clear();
     runtime.pendingTurnStarts.clear();
     runtime.pendingInterruptRequests.add(requestKey);
     try {
@@ -549,10 +579,29 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
         "The Codex request does not belong to this task thread.",
       );
     }
-    if (frame.method !== "model/list") {
+    if (
+      frame.method !== "model/list" &&
+      !isCodexStatusCatalogMethod(frame.method)
+    ) {
       params.threadId = runtime.threadId;
     }
     const task = this.#repository.require(runtime.taskId);
+    if (frame.method === "skills/list" || frame.method === "hooks/list") {
+      const hasCwds =
+        Array.isArray(params.cwds) &&
+        params.cwds.some((value) => typeof value === "string");
+      const hasCwd = typeof params.cwd === "string" && params.cwd.length > 0;
+      if (!hasCwds) {
+        if (hasCwd) {
+          // Official skills/hooks list params use cwds; accept legacy cwd and rewrite.
+          params.cwds = [params.cwd];
+        } else {
+          // Prefer the runtime workspace over task.workspace (TaskSnapshot uses initialCwd).
+          params.cwds = [runtime.workspace];
+        }
+      }
+      delete params.cwd;
+    }
     if (frame.method === "turn/steer") {
       if (
         runtime.activeTurnKind === "review" ||
@@ -628,6 +677,49 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
     }
   }
 
+  private validateStatusCatalogParams(frame: CodexClientRequestFrame): void {
+    if (!isCodexStatusCatalogMethod(frame.method)) {
+      return;
+    }
+    if (frame.method === "account/read") {
+      if (frame.params.refreshToken === true) {
+        throw new TaskError(
+          "CODEX_REQUEST_NOT_ALLOWED",
+          403,
+          "Codex account refresh is not allowed on remote tasks.",
+        );
+      }
+      return;
+    }
+    if (
+      frame.method === "skills/list" ||
+      frame.method === "hooks/list" ||
+      frame.method === "mcpServerStatus/list"
+    ) {
+      const cwd = frame.params.cwd;
+      if (cwd !== undefined && typeof cwd !== "string") {
+        throw new TaskError(
+          "CODEX_REQUEST_NOT_ALLOWED",
+          403,
+          "Codex status catalog cwd must be a string path.",
+        );
+      }
+      const cwds = frame.params.cwds;
+      if (cwds !== undefined) {
+        if (
+          !Array.isArray(cwds) ||
+          cwds.some((value) => typeof value !== "string")
+        ) {
+          throw new TaskError(
+            "CODEX_REQUEST_NOT_ALLOWED",
+            403,
+            "Codex status catalog cwds must be an array of string paths.",
+          );
+        }
+      }
+    }
+  }
+
   private onBridgeDelivery(delivery: CodexBridgeDelivery): void {
     if (delivery.taskId !== undefined) {
       const runtime = this.#runtimes.get(delivery.taskId);
@@ -639,14 +731,24 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
           const requestKey = codexRequestKey(delivery.frame.id);
           if ("error" in delivery.frame) {
             this.rollbackPendingTurnStart(runtime, requestKey);
+            runtime.pendingStatusCatalogRequests.delete(requestKey);
+            this.#journal.publish(delivery.taskId, delivery.frame);
+          } else {
+            const projected = this.projectStatusCatalogResponse(
+              runtime,
+              requestKey,
+              delivery.frame,
+            );
+            this.#journal.publish(delivery.taskId, projected);
           }
           if (runtime.pendingInterruptRequests.delete(requestKey)) {
             runtime.pendingTurnStarts.clear();
             runtime.activeTurnKind = undefined;
             this.#taskRuntime.completeInterrupt(delivery.taskId);
           }
+        } else {
+          this.#journal.publish(delivery.taskId, delivery.frame);
         }
-        this.#journal.publish(delivery.taskId, delivery.frame);
       }
       return;
     }
@@ -659,13 +761,13 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
       isCodexJsonObject(params) && typeof params.threadId === "string"
         ? params.threadId
         : undefined;
-    const runtime =
-      threadId === undefined
-        ? undefined
-        : [...this.#runtimes.values()].find(
-            (candidate) => candidate.threadId === threadId,
-          );
     if ("id" in delivery.frame && isCodexRequestId(delivery.frame.id)) {
+      const runtime =
+        threadId === undefined
+          ? undefined
+          : [...this.#runtimes.values()].find(
+              (candidate) => candidate.threadId === threadId,
+            );
       if (!isForwardedCodexServerRequest(method) || runtime === undefined) {
         void this.#bridge.rejectServerRequest(
           delivery.frame.id,
@@ -679,11 +781,59 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
       });
       return;
     }
-    if (!isForwardedCodexNotification(method) || runtime === undefined) {
+    if (!isForwardedCodexNotification(method)) {
+      return;
+    }
+    if (threadId === undefined) {
+      if (!isCodexStatusCatalogNotification(method)) {
+        return;
+      }
+      const projectedParams = projectCodexStatusCatalogPayload(method, params);
+      const projectedFrame = {
+        ...delivery.frame,
+        params: projectedParams,
+      };
+      for (const runtime of this.#runtimes.values()) {
+        this.#journal.publish(runtime.taskId, projectedFrame);
+      }
+      return;
+    }
+    const runtime = [...this.#runtimes.values()].find(
+      (candidate) => candidate.threadId === threadId,
+    );
+    if (runtime === undefined) {
       return;
     }
     this.applyNotification(runtime, method, params);
-    this.#journal.publish(runtime.taskId, delivery.frame);
+    const projectedFrame = isCodexStatusCatalogNotification(method)
+      ? {
+          ...delivery.frame,
+          params: projectCodexStatusCatalogPayload(method, params),
+        }
+      : delivery.frame;
+    this.#journal.publish(runtime.taskId, projectedFrame);
+  }
+
+  private projectStatusCatalogResponse(
+    runtime: CodexRuntime,
+    requestKey: string,
+    frame: CodexJsonObject,
+  ): CodexJsonObject {
+    const pending = runtime.pendingStatusCatalogRequests.get(requestKey);
+    if (pending === undefined) {
+      return frame;
+    }
+    runtime.pendingStatusCatalogRequests.delete(requestKey);
+    if (
+      pending.connectionGeneration !== runtime.connectionGeneration ||
+      !("result" in frame)
+    ) {
+      return frame;
+    }
+    return {
+      ...frame,
+      result: projectCodexStatusCatalogPayload(pending.method, frame.result),
+    };
   }
 
   private applyNotification(
@@ -712,6 +862,7 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
       runtime.activeDeviceId = undefined;
       runtime.activeTurnKind = undefined;
       runtime.pendingServerRequests.clear();
+      runtime.pendingStatusCatalogRequests.clear();
       runtime.pendingTurnStarts.clear();
       runtime.pendingInterruptRequests.clear();
       this.#taskRuntime.turnCompleted(runtime.taskId);
@@ -808,6 +959,7 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
       });
     } finally {
       runtime.pendingInterruptRequests.clear();
+      runtime.pendingStatusCatalogRequests.clear();
       runtime.pendingTurnStarts.clear();
       this.#journal.clear(taskId);
       this.#runtimes.delete(taskId);
@@ -825,6 +977,7 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
       runtime.activeTurnKind = undefined;
       runtime.pendingServerRequests.clear();
       runtime.pendingInterruptRequests.clear();
+      runtime.pendingStatusCatalogRequests.clear();
       runtime.pendingTurnStarts.clear();
     }
     await this.#bridge.request("turn/interrupt", {
@@ -865,6 +1018,7 @@ export class CodexProviderAdapter implements AgentProviderAdapter {
       connectionGeneration: 0,
       pendingInterruptRequests: new Set(),
       pendingServerRequests: new Map(),
+      pendingStatusCatalogRequests: new Map(),
       pendingTurnStarts: new Map(),
       taskId: task.id,
       threadId: task.nativeConversationId,
@@ -1098,11 +1252,16 @@ function collectAbsolutePaths(frame: CodexClientFrame): string[] {
     paths.push(...collectNamedAbsolutePaths(frame.result));
     return paths;
   }
+  const params = frame.params;
+  if (isCodexStatusCatalogMethod(frame.method)) {
+    addPath(params.cwd);
+    addPath(params.cwds);
+    return paths;
+  }
   if (frame.method !== "turn/start" && frame.method !== "turn/steer") {
     return paths;
   }
 
-  const params = frame.params;
   addPath(params.cwd);
   addPath(params.runtimeWorkspaceRoots);
   paths.push(...collectNamedAbsolutePaths(params.environments));
@@ -1154,5 +1313,378 @@ function collectNamedAbsolutePaths(value: unknown): string[] {
 }
 
 function isPathKey(key: string): boolean {
-  return /(?:cwd|directory|root|roots|path)$/iu.test(key);
+  return /(?:cwds?|directory|root|roots|path)$/iu.test(key);
+}
+
+function projectCodexStatusCatalogPayload(
+  method: string,
+  value: unknown,
+): unknown {
+  switch (method) {
+    case "account/read":
+    case "account/updated":
+      return projectAccountPayload(value);
+    case "account/rateLimits/read":
+    case "account/rateLimits/updated":
+      return projectRateLimitsPayload(value);
+    case "skills/list":
+      return projectSkillsPayload(value);
+    case "skills/changed":
+      // Official skills/changed only carries cwd; drop the path entirely.
+      return {};
+    case "hooks/list":
+      return projectHooksListPayload(value);
+    case "hook/started":
+    case "hook/completed":
+      return projectHookRunPayload(value);
+    case "mcpServerStatus/list":
+      return projectMcpServerStatusListPayload(value);
+    case "mcpServer/startupStatus/updated":
+      return projectMcpStartupStatusPayload(value);
+    default:
+      return {};
+  }
+}
+
+function projectAccountPayload(value: unknown): CodexJsonObject {
+  if (!isCodexJsonObject(value)) {
+    return { account: null };
+  }
+  const projected: CodexJsonObject = {};
+  if (typeof value.requiresOpenaiAuth === "boolean") {
+    projected.requiresOpenaiAuth = value.requiresOpenaiAuth;
+  }
+  // Official account/updated is { authMode, planType } without nested account.
+  if (typeof value.authMode === "string") {
+    projected.authMode = value.authMode;
+  } else if (value.authMode === null) {
+    projected.authMode = null;
+  }
+  if (typeof value.planType === "string") {
+    projected.planType = value.planType;
+  } else if (value.planType === null) {
+    projected.planType = null;
+  }
+  if (!("account" in value)) {
+    return projected;
+  }
+  const account = value.account;
+  if (account === null) {
+    projected.account = null;
+    return projected;
+  }
+  if (!isCodexJsonObject(account)) {
+    projected.account = null;
+    return projected;
+  }
+  const projectedAccount: CodexJsonObject = {
+    type:
+      account.type === "apiKey" ||
+      account.type === "chatgpt" ||
+      account.type === "amazonBedrock" ||
+      account.type === "offline"
+        ? account.type
+        : typeof account.type === "string"
+          ? account.type
+          : "offline",
+  };
+  if (typeof account.planType === "string") {
+    projectedAccount.planType = account.planType;
+  }
+  if (typeof account.authMode === "string") {
+    projectedAccount.authMode = account.authMode;
+  }
+  // Drop email, refresh tokens, and credential material from remote account rows.
+  projected.account = projectedAccount;
+  return projected;
+}
+
+function projectRateLimitsPayload(value: unknown): CodexJsonObject {
+  if (!isCodexJsonObject(value)) {
+    return { rateLimits: null };
+  }
+  if (value.rateLimits === null) {
+    return { rateLimits: null };
+  }
+  if (!isCodexJsonObject(value.rateLimits)) {
+    return { rateLimits: null };
+  }
+  return {
+    rateLimits: projectClosedObject(value.rateLimits, [
+      "limit_id",
+      "limit_name",
+      "primary",
+      "secondary",
+      "credits",
+      "plan_type",
+    ]),
+  };
+}
+
+function projectSkillsPayload(value: unknown): CodexJsonObject {
+  if (!isCodexJsonObject(value)) {
+    return { data: [] };
+  }
+  const data = Array.isArray(value.data)
+    ? value.data
+        .filter(isCodexJsonObject)
+        .map((entry) => projectSkillEntry(entry))
+    : [];
+  const projected: CodexJsonObject = { data };
+  if (Array.isArray(value.errors)) {
+    projected.errors = value.errors
+      .filter(isCodexJsonObject)
+      .map((error) => projectSkillOrHookError(error));
+  }
+  return projected;
+}
+
+function projectSkillEntry(entry: CodexJsonObject): CodexJsonObject {
+  const projected: CodexJsonObject = {
+    enabled: entry.enabled === true,
+    name: typeof entry.name === "string" ? entry.name : "",
+  };
+  if (typeof entry.description === "string") {
+    projected.description = entry.description;
+  }
+  if (typeof entry.scope === "string") {
+    projected.scope = entry.scope;
+  }
+  if (isCodexJsonObject(entry.metadata)) {
+    projected.metadata = projectClosedObject(entry.metadata, [
+      "name",
+      "description",
+      "short_description",
+      "dependencies",
+      "interfaces",
+    ]);
+  }
+  if (Array.isArray(entry.errors)) {
+    projected.errors = entry.errors
+      .filter(isCodexJsonObject)
+      .map((error) => projectSkillOrHookError(error));
+  }
+  return projected;
+}
+
+function projectHooksListPayload(value: unknown): CodexJsonObject {
+  if (!isCodexJsonObject(value)) {
+    return { data: [] };
+  }
+  const data = Array.isArray(value.data)
+    ? value.data
+        .filter(isCodexJsonObject)
+        .map((entry) => projectHookEntry(entry))
+    : [];
+  const projected: CodexJsonObject = { data };
+  if (Array.isArray(value.errors)) {
+    projected.errors = value.errors
+      .filter(isCodexJsonObject)
+      .map((error) => projectSkillOrHookError(error));
+  }
+  return projected;
+}
+
+function projectHookEntry(entry: CodexJsonObject): CodexJsonObject {
+  const projected: CodexJsonObject = {
+    enabled: entry.enabled === true,
+    hooks: Array.isArray(entry.hooks)
+      ? entry.hooks.filter((hook): hook is string => typeof hook === "string")
+      : [],
+    name: typeof entry.name === "string" ? entry.name : "",
+  };
+  if (typeof entry.description === "string") {
+    projected.description = entry.description;
+  }
+  if (typeof entry.scope === "string") {
+    projected.scope = entry.scope;
+  }
+  if (isCodexJsonObject(entry.metadata)) {
+    projected.metadata = projectClosedObject(entry.metadata, [
+      "name",
+      "description",
+      "hooks",
+      "capabilities",
+      "timeout_ms",
+    ]);
+  }
+  if (Array.isArray(entry.errors)) {
+    projected.errors = entry.errors
+      .filter(isCodexJsonObject)
+      .map((error) => projectSkillOrHookError(error));
+  }
+  return projected;
+}
+
+function projectHookRunPayload(value: unknown): CodexJsonObject {
+  if (!isCodexJsonObject(value)) {
+    return {};
+  }
+  const projected: CodexJsonObject = {};
+  if (typeof value.threadId === "string") {
+    projected.threadId = value.threadId;
+  }
+  if (typeof value.turnId === "string") {
+    projected.turnId = value.turnId;
+  }
+  // Official notifications nest the summary under `run`; accept a flat payload
+  // only as a defensive fallback for older fixtures.
+  const run = isCodexJsonObject(value.run) ? value.run : value;
+  const projectedRun: CodexJsonObject = {
+    eventName:
+      typeof run.eventName === "string"
+        ? run.eventName
+        : typeof run.hookEvent === "string"
+          ? run.hookEvent
+          : typeof run.event === "string"
+            ? run.event
+            : "",
+    id:
+      typeof run.id === "string"
+        ? run.id
+        : typeof run.runId === "string"
+          ? run.runId
+          : typeof run.name === "string"
+            ? run.name
+            : "",
+    status: typeof run.status === "string" ? run.status : "running",
+  };
+  if (typeof run.durationMs === "number") {
+    projectedRun.durationMs = run.durationMs;
+  }
+  if (typeof run.scope === "string") {
+    projectedRun.scope = run.scope;
+  }
+  if (typeof run.handlerType === "string") {
+    projectedRun.handlerType = run.handlerType;
+  }
+  if (typeof run.executionMode === "string") {
+    projectedRun.executionMode = run.executionMode;
+  }
+  if (typeof run.startedAt === "number") {
+    projectedRun.startedAt = run.startedAt;
+  }
+  if (typeof run.completedAt === "number") {
+    projectedRun.completedAt = run.completedAt;
+  }
+  if (typeof run.statusMessage === "string") {
+    projectedRun.statusMessage = run.statusMessage;
+  }
+  if (typeof run.failedReason === "string") {
+    projectedRun.failedReason = run.failedReason;
+  }
+  // Always drop sourcePath/path/command from hook run summaries.
+  projected.run = projectedRun;
+  return projected;
+}
+
+function projectSkillOrHookError(error: CodexJsonObject): CodexJsonObject {
+  const projected: CodexJsonObject = {
+    message: typeof error.message === "string" ? error.message : "",
+  };
+  if (typeof error.scope === "string") {
+    projected.scope = error.scope;
+  }
+  return projected;
+}
+
+function projectMcpServerStatusListPayload(value: unknown): CodexJsonObject {
+  if (!isCodexJsonObject(value)) {
+    return { data: [] };
+  }
+  return {
+    data: Array.isArray(value.data)
+      ? value.data
+          .filter(isCodexJsonObject)
+          .map((entry) => projectMcpServerStatus(entry))
+      : [],
+  };
+}
+
+function projectMcpServerStatus(entry: CodexJsonObject): CodexJsonObject {
+  const projected: CodexJsonObject = {
+    name: typeof entry.name === "string" ? entry.name : "",
+    tools: Array.isArray(entry.tools)
+      ? entry.tools
+          .filter(isCodexJsonObject)
+          .map((tool) =>
+            projectClosedObject(tool, [
+              "name",
+              "title",
+              "description",
+              "inputSchema",
+              "annotations",
+            ]),
+          )
+      : [],
+  };
+  if (typeof entry.authStatus === "string") {
+    projected.authStatus = entry.authStatus;
+  } else if (isCodexJsonObject(entry.authStatus)) {
+    projected.authStatus = projectClosedObject(entry.authStatus, [
+      "status",
+      "kind",
+      "type",
+    ]);
+  } else if (entry.authStatus === null) {
+    projected.authStatus = null;
+  }
+  if (typeof entry.toolsError === "string") {
+    projected.toolsError = entry.toolsError;
+  } else if (entry.toolsError === null) {
+    projected.toolsError = null;
+  }
+  if (Array.isArray(entry.resources)) {
+    projected.resources = entry.resources
+      .filter(isCodexJsonObject)
+      .map((resource) =>
+        projectClosedObject(resource, [
+          "name",
+          "title",
+          "uri",
+          "description",
+          "mimeType",
+        ]),
+      );
+  }
+  if (Array.isArray(entry.resourceTemplates)) {
+    projected.resourceTemplates = entry.resourceTemplates
+      .filter(isCodexJsonObject)
+      .map((resourceTemplate) =>
+        projectClosedObject(resourceTemplate, [
+          "name",
+          "title",
+          "uriTemplate",
+          "description",
+        ]),
+      );
+  }
+  return projected;
+}
+
+function projectMcpStartupStatusPayload(value: unknown): CodexJsonObject {
+  if (!isCodexJsonObject(value)) {
+    return {};
+  }
+  return projectClosedObject(value, [
+    "name",
+    "status",
+    "error",
+    "failureReason",
+    "threadId",
+    "turnId",
+  ]);
+}
+
+function projectClosedObject(
+  value: CodexJsonObject,
+  keys: readonly string[],
+): CodexJsonObject {
+  const projected: CodexJsonObject = {};
+  for (const key of keys) {
+    if (value[key] !== undefined) {
+      projected[key] = value[key];
+    }
+  }
+  return projected;
 }

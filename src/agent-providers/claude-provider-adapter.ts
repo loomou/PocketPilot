@@ -46,6 +46,7 @@ export class ClaudeProviderAdapter implements AgentProviderAdapter {
       nativeActions: {},
       newConversation: true,
       resumeConversation: true,
+      statusCatalogs: {},
       streamProtocol: "claude-agent-sdk" as const,
     },
     displayName: "Claude Code",

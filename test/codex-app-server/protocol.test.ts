@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   isCodexClientRequestFrame,
   isCodexReadClientRequestMethod,
+  isCodexStatusCatalogMethod,
+  isCodexStatusCatalogNotification,
   isCodexTurnStartingMethod,
   isSupportedCodexReviewTarget,
   parseCodexClientFrame,
@@ -82,9 +84,14 @@ describe("Codex native transport guard", () => {
 
   it("classifies native catalogs and history as P3 reads", () => {
     for (const method of [
+      "account/rateLimits/read",
+      "account/read",
+      "hooks/list",
+      "mcpServerStatus/list",
       "model/list",
       "collaborationMode/list",
       "permissionProfile/list",
+      "skills/list",
       "thread/read",
       "thread/turns/list",
       "thread/items/list",
@@ -101,6 +108,43 @@ describe("Codex native transport guard", () => {
     ]) {
       expect(isCodexReadClientRequestMethod(method)).toBe(false);
     }
+  });
+
+  it("accepts readonly status-catalog requests as native P3 methods", () => {
+    for (const method of [
+      "account/read",
+      "account/rateLimits/read",
+      "skills/list",
+      "hooks/list",
+      "mcpServerStatus/list",
+    ]) {
+      expect(
+        parseCodexClientFrame(
+          JSON.stringify({ id: method, method, params: {} }),
+        ),
+      ).toMatchObject({ id: method, method, params: {} });
+      expect(isCodexStatusCatalogMethod(method)).toBe(true);
+      expect(isCodexReadClientRequestMethod(method)).toBe(true);
+    }
+    expect(isCodexStatusCatalogMethod("model/list")).toBe(false);
+    expect(isCodexStatusCatalogMethod("account/login/start")).toBe(false);
+    expect(isCodexStatusCatalogMethod("account/logout")).toBe(false);
+  });
+
+  it("forwards only the reviewed status-catalog notifications", () => {
+    for (const method of [
+      "account/updated",
+      "account/rateLimits/updated",
+      "skills/changed",
+      "hook/started",
+      "hook/completed",
+      "mcpServer/startupStatus/updated",
+    ]) {
+      expect(isCodexStatusCatalogNotification(method)).toBe(true);
+    }
+    expect(isCodexStatusCatalogNotification("account/login/completed")).toBe(
+      false,
+    );
   });
 
   it("classifies review and compact as turn-starting methods", () => {

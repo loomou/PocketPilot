@@ -152,11 +152,13 @@ It currently accepts these client request methods:
 - `review/start`, `thread/name/set`, and `thread/compact/start`
 - `thread/read`, `thread/turns/list`, and `thread/items/list`
 - `model/list`, `collaborationMode/list`, and `permissionProfile/list`
+- `account/read`, `account/rateLimits/read`, `skills/list`, `hooks/list`, and
+  `mcpServerStatus/list`
 
 Conversation creation, attachment, and task close remain common REST actions;
-clients do not send `thread/start`, `thread/resume`, archive, delete, account,
-configuration-write, filesystem, process, plugin, or arbitrary MCP methods over
-the task socket.
+clients do not send `thread/start`, `thread/resume`, archive, delete, account
+login/logout, configuration-write, filesystem, process, plugin, or arbitrary MCP
+methods over the task socket.
 
 Turn start, review, compact, steer, and native server-request responses use the
 shared P2 task lane. Native interrupt is P1 and invalidates older P2 work before
@@ -171,6 +173,16 @@ attachment-bearing `turn/start` input for Codex. Native review, rename, and
 compact appear under `capabilities.nativeActions` with exact methods and
 availability. Detached review is not supported; only inline review delivery is
 forwarded.
+
+Readonly status catalogs appear under `capabilities.statusCatalogs`. Codex
+advertises `account`, `rateLimits`, `skills`, `hooks`, and `mcpServers`. Those
+methods stay on the native Agent WebSocket, remain P3 reads, reject
+`account/read` with `refreshToken: true`, authorize optional `cwd`/`cwds`,
+inject the task workspace into `skills/list` and `hooks/list` when neither path
+is provided, and project path/token/command-safe payloads before delivery.
+Matching notifications (`account/updated`, `account/rateLimits/updated`,
+`skills/changed`, `hook/started`, `hook/completed`, and
+`mcpServer/startupStatus/updated`) are forwarded with the same projection rules.
 
 ## Turn lifecycle
 

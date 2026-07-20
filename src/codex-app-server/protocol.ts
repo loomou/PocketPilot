@@ -8,12 +8,34 @@ import type {
 import { isCodexJsonObject, isCodexRequestId } from "./types.js";
 
 export const codexReadClientRequestMethods = [
+  "account/rateLimits/read",
+  "account/read",
   "collaborationMode/list",
+  "hooks/list",
+  "mcpServerStatus/list",
   "model/list",
   "permissionProfile/list",
+  "skills/list",
   "thread/items/list",
   "thread/read",
   "thread/turns/list",
+] as const;
+
+export const codexStatusCatalogClientRequestMethods = [
+  "account/rateLimits/read",
+  "account/read",
+  "hooks/list",
+  "mcpServerStatus/list",
+  "skills/list",
+] as const;
+
+export const codexStatusCatalogNotificationMethods = [
+  "account/rateLimits/updated",
+  "account/updated",
+  "hook/completed",
+  "hook/started",
+  "mcpServer/startupStatus/updated",
+  "skills/changed",
 ] as const;
 
 export const codexTurnStartingClientRequestMethods = [
@@ -108,9 +130,13 @@ export const codexForwardedServerRequestMethods = [
 ] as const;
 
 export const codexForwardedNotificationMethods = [
+  "account/rateLimits/updated",
+  "account/updated",
   "configWarning",
   "deprecationNotice",
   "error",
+  "hook/completed",
+  "hook/started",
   "item/agentMessage/delta",
   "item/commandExecution/outputDelta",
   "item/commandExecution/terminalInteraction",
@@ -122,9 +148,11 @@ export const codexForwardedNotificationMethods = [
   "item/reasoning/summaryTextDelta",
   "item/reasoning/textDelta",
   "item/started",
+  "mcpServer/startupStatus/updated",
   "model/rerouted",
   "model/verification",
   "serverRequest/resolved",
+  "skills/changed",
   "thread/closed",
   "thread/compacted",
   "thread/name/updated",
@@ -204,6 +232,18 @@ export function isCodexClientRequestFrame(
 
 export function isCodexReadClientRequestMethod(method: string): boolean {
   return (codexReadClientRequestMethods as readonly string[]).includes(method);
+}
+
+export function isCodexStatusCatalogMethod(method: string): boolean {
+  return (codexStatusCatalogClientRequestMethods as readonly string[]).includes(
+    method,
+  );
+}
+
+export function isCodexStatusCatalogNotification(method: string): boolean {
+  return (codexStatusCatalogNotificationMethods as readonly string[]).includes(
+    method,
+  );
 }
 
 export function isForwardedCodexServerRequest(method: string): boolean {

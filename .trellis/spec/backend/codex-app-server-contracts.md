@@ -112,8 +112,9 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
 - The task stream may forward only `turn/start`, `turn/steer`,
   `turn/interrupt`, `review/start`, `thread/name/set`,
   `thread/compact/start`, `thread/read`, `thread/turns/list`,
-  `thread/items/list`, `model/list`, `collaborationMode/list`, and
-  `permissionProfile/list`.
+  `thread/items/list`, `model/list`, `collaborationMode/list`,
+  `permissionProfile/list`, `account/read`, `account/rateLimits/read`,
+  `skills/list`, `hooks/list`, and `mcpServerStatus/list`.
 - Validate action params before forward:
   - `review/start`: only `delivery` omitted/`null`/`"inline"`; reject
     `"detached"` and unknown deliveries. Require a supported native
@@ -123,14 +124,41 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
   - `thread/compact/start`: bind only to the current task thread; no extra
     remote fields are required.
 - `model/list`, `collaborationMode/list`, `permissionProfile/list`,
-  `thread/read`, `thread/turns/list`, and `thread/items/list` are P3 reads. They
-  do not wait behind P2 input, and they recheck task availability plus current
-  workspace authorization around activation/path validation and after forward.
+  `thread/read`, `thread/turns/list`, `thread/items/list`, `account/read`,
+  `account/rateLimits/read`, `skills/list`, `hooks/list`, and
+  `mcpServerStatus/list` are P3 reads. They do not wait behind P2 input, and
+  they recheck task availability plus current workspace authorization around
+  activation/path validation and after forward.
+- Status-catalog reads stay native and path-safe:
+  - Reject `account/read` with `refreshToken: true`.
+  - Skills/hooks official params use `cwds[]`. Accept legacy single `cwd` by
+    rewriting it to `cwds`. When no path root is provided, inject the current
+    authorized task workspace. Authorize every requested root under that
+    workspace before forward.
+  - Project responses and matching notifications to closed path-safe payloads
+    before journal publish. Drop absolute paths (`cwd`/`path`/`sourcePath`/
+    absolute icons), email, refresh tokens, hook `command`, raw env/command
+    material, and other host-local secrets. Preserve stable UI fields such as
+    names, enabled flags, status enums, planType/authMode, quota numbers, and
+    tool names.
+  - Project `account/read` through a closed readiness shape
+    (`requiresOpenaiAuth` plus nested account `type`/`planType`/`authMode`
+    only). Never passthrough native email or credential fields.
+  - Forward only reviewed status notifications:
+    `account/updated`, `account/rateLimits/updated`, `skills/changed`,
+    `hook/started`, `hook/completed`, and the native
+    `mcpServer/startupStatus/updated` event. Apply the same projection rules.
+  - Process-level notifications without a task-bound `threadId`
+    (`skills/changed`, `account/updated`, `account/rateLimits/updated`, and
+    process-level MCP startup updates) fan out to non-terminal Codex task
+    journals after projection. Thread-bound hook notifications remain
+    thread-scoped only.
 - Conversation REST methods own `thread/list`, `thread/read`, `thread/start`,
   `thread/resume`, and detach. Do not invent REST mutation routes for review,
-  rename, or compact. Account/configuration writes, filesystem/process RPCs,
-  plugin installation, arbitrary MCP calls, archive/delete, detached review,
-  and unknown privileged methods are denied from the remote stream.
+  rename, compact, or status catalogs. Account/configuration writes,
+  filesystem/process RPCs, plugin installation, arbitrary MCP calls,
+  archive/delete, detached review, and unknown privileged methods are denied
+  from the remote stream.
 - List CLI, VS Code, and App Server thread sources. Prefer negotiated
   `thread/turns/list` pagination and preserve native rows; use only an explicitly
   bounded `thread/read(includeTurns=true)` fallback.
@@ -181,7 +209,12 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
 - Good: two devices can observe task control events, but only the device that
   started the turn can answer its native Codex approval request.
 - Base: an active P2 turn is blocked waiting on native work while `model/list`
-  proceeds independently as a P3 read after workspace reauthorization.
+  or a status-catalog P3 read proceeds independently after workspace
+  reauthorization.
+- Base: `account/read`, `skills/list`, `hooks/list`, `mcpServerStatus/list`,
+  and `account/rateLimits/read` project path-safe native payloads; matching
+  notifications are forwarded with the same projection and never invent REST
+  mutation routes.
 - Base: `thread/list` returns mixed roots and sources; PocketPilot includes
   `cli`, `vscode`, and `appServer`, then removes rows outside the authorized
   workspace without changing retained rows.
@@ -189,6 +222,8 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
   action envelopes, using `taskId` as a thread or turn ID, advertising
   detached review or attachments, parsing absolute paths from prompt text, or
   allowing an old child's close event to kill its replacement.
+- Bad: forwarding `account/read` with `refreshToken: true`, leaking skill/hook
+  absolute paths, or inventing REST routes for status catalogs.
 
 ## 6. Tests Required
 
@@ -200,7 +235,9 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
   changes and device mismatch, start/steer/interrupt state, review/compact
   non-steerable turns, rename without capacity, shared capacity/P2
   invalidation, pending-start rollback only before authoritative
-  `turn/started`, P3 reads, workspace revocation, and cleanup.
+  `turn/started`, P3 reads including status catalogs, response/notification
+  projection for account/skills/hooks/mcpServers/rateLimits, workspace
+  revocation, and cleanup.
 - Journal tests cover task isolation, entry/byte eviction, known cursor replay,
   absent/unknown/stale cursor fallback, active-turn reset, and end-turn cleanup
   without dropping live subscribers.

@@ -120,6 +120,7 @@ describe("mobile OpenAPI generation", () => {
     for (const field of [
       "attachments",
       "nativeActions",
+      "statusCatalogs",
       "review",
       "rename",
       "compact",
@@ -127,6 +128,11 @@ describe("mobile OpenAPI generation", () => {
       "targetTypes",
       "startsTurn",
       "availability",
+      "account",
+      "skills",
+      "hooks",
+      "mcpServers",
+      "rateLimits",
     ]) {
       expect(capabilitySerialized).toContain(field);
     }

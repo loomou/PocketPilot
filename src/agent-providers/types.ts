@@ -41,6 +41,14 @@ export type AgentNativeActions = {
   review?: AgentNativeReviewAction;
 };
 
+export type AgentStatusCatalogs = {
+  account?: true;
+  hooks?: true;
+  mcpServers?: true;
+  rateLimits?: true;
+  skills?: true;
+};
+
 export type AgentCapabilitySnapshot = {
   activeTurnSteering: boolean;
   approvals: boolean;
@@ -53,6 +61,7 @@ export type AgentCapabilitySnapshot = {
   nativeActions: AgentNativeActions;
   newConversation: boolean;
   resumeConversation: boolean;
+  statusCatalogs: AgentStatusCatalogs;
   streamProtocol: string;
 };
 

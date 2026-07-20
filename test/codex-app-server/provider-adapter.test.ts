@@ -65,6 +65,103 @@ class FakeCodexProcess extends EventEmitter {
           result: { backwardsCursor: null, data: [thread()], nextCursor: null },
         });
       }
+      if (frame.method === "account/read") {
+        this.emitFrame({
+          id: frame.id,
+          result: {
+            account: {
+              email: "user@example.com",
+              planType: "pro",
+              refreshToken: "secret-token",
+              type: "chatgpt",
+            },
+            requiresOpenaiAuth: true,
+          },
+        });
+      }
+      if (frame.method === "account/rateLimits/read") {
+        this.emitFrame({
+          id: frame.id,
+          result: {
+            rateLimits: {
+              limit_id: "primary",
+              plan_type: "pro",
+              primary: { used_percent: 12 },
+              secretQuotaToken: "quota-secret",
+            },
+          },
+        });
+      }
+      if (frame.method === "skills/list") {
+        this.emitFrame({
+          id: frame.id,
+          result: {
+            data: [
+              {
+                description: "Review helper",
+                enabled: true,
+                metadata: {
+                  description: "Review helper",
+                  name: "review",
+                  path: "C:\\skills\\review",
+                },
+                name: "review",
+                path: "C:\\skills\\review",
+                scope: "repo",
+              },
+            ],
+            errors: [
+              {
+                message: "bad skill",
+                path: "C:\\skills\\broken",
+                scope: "user",
+              },
+            ],
+          },
+        });
+      }
+      if (frame.method === "hooks/list") {
+        this.emitFrame({
+          id: frame.id,
+          result: {
+            data: [
+              {
+                description: "pre tool",
+                enabled: true,
+                hooks: ["PreToolUse"],
+                metadata: {
+                  hooks: ["PreToolUse"],
+                  name: "guard",
+                  path: "C:\\hooks\\guard",
+                },
+                name: "guard",
+                path: "C:\\hooks\\guard",
+                scope: "user",
+              },
+            ],
+          },
+        });
+      }
+      if (frame.method === "mcpServerStatus/list") {
+        this.emitFrame({
+          id: frame.id,
+          result: {
+            data: [
+              {
+                authStatus: "unsupported",
+                command: "npx",
+                name: "demo",
+                tools: [
+                  {
+                    description: "demo tool",
+                    name: "echo",
+                  },
+                ],
+              },
+            ],
+          },
+        });
+      }
       if (frame.method === "thread/turns/list") {
         this.emitFrame({
           id: frame.id,
@@ -1094,8 +1191,324 @@ describe("CodexProviderAdapter", () => {
       },
       newConversation: true,
       resumeConversation: true,
+      statusCatalogs: {
+        account: true,
+        hooks: true,
+        mcpServers: true,
+        rateLimits: true,
+        skills: true,
+      },
       streamProtocol: "codex-app-server-json-rpc",
     });
+    await adapter.shutdown();
+  });
+
+  it("forwards readonly status catalogs as P3 reads and projects path-safe payloads", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    const manager = createTaskManager(connection);
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository: new TaskRepository(connection.database),
+      taskRuntime: manager.providerTaskRuntime(),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+    manager.setProviderTaskController(adapter.taskLifecycle);
+    const created = await adapter.createConversation({
+      deviceId,
+      operationId: "00000000-0000-4000-8000-000000000041",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    const received: unknown[] = [];
+    adapter.taskStream.subscribe(created.task.id, undefined, {
+      send(frame) {
+        received.push(frame);
+      },
+    });
+    await adapter.taskStream.activate(created.task.id);
+
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "account-1",
+        method: "account/read",
+        params: {},
+      }),
+      taskId: created.task.id,
+    });
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "skills-1",
+        method: "skills/list",
+        params: { cwd: workspace },
+      }),
+      taskId: created.task.id,
+    });
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "hooks-1",
+        method: "hooks/list",
+        params: {},
+      }),
+      taskId: created.task.id,
+    });
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "mcp-1",
+        method: "mcpServerStatus/list",
+        params: {},
+      }),
+      taskId: created.task.id,
+    });
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "limits-1",
+        method: "account/rateLimits/read",
+        params: {},
+      }),
+      taskId: created.task.id,
+    });
+
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "account/read",
+        params: {},
+      }),
+    );
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "skills/list",
+        params: { cwds: [workspace] },
+      }),
+    );
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "hooks/list",
+        params: { cwds: [workspace] },
+      }),
+    );
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "mcpServerStatus/list",
+        params: {},
+      }),
+    );
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "account/rateLimits/read",
+        params: {},
+      }),
+    );
+
+    await waitFor(() =>
+      received.some(
+        (frame) =>
+          isObject(frame) && frame.id === "account-1" && isObject(frame.result),
+      ),
+    );
+
+    expect(received).toContainEqual({
+      id: "account-1",
+      result: {
+        account: {
+          planType: "pro",
+          type: "chatgpt",
+        },
+        requiresOpenaiAuth: true,
+      },
+    });
+    expect(JSON.stringify(received)).not.toContain("user@example.com");
+    expect(received).toContainEqual({
+      id: "skills-1",
+      result: {
+        data: [
+          {
+            description: "Review helper",
+            enabled: true,
+            metadata: {
+              description: "Review helper",
+              name: "review",
+            },
+            name: "review",
+            scope: "repo",
+          },
+        ],
+        errors: [
+          {
+            message: "bad skill",
+            scope: "user",
+          },
+        ],
+      },
+    });
+    expect(received).toContainEqual({
+      id: "hooks-1",
+      result: {
+        data: [
+          {
+            description: "pre tool",
+            enabled: true,
+            hooks: ["PreToolUse"],
+            metadata: {
+              hooks: ["PreToolUse"],
+              name: "guard",
+            },
+            name: "guard",
+            scope: "user",
+          },
+        ],
+      },
+    });
+    expect(received).toContainEqual({
+      id: "mcp-1",
+      result: {
+        data: [
+          {
+            authStatus: "unsupported",
+            name: "demo",
+            tools: [
+              {
+                description: "demo tool",
+                name: "echo",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(received).toContainEqual({
+      id: "limits-1",
+      result: {
+        rateLimits: {
+          limit_id: "primary",
+          plan_type: "pro",
+          primary: { used_percent: 12 },
+        },
+      },
+    });
+    expect(JSON.stringify(received)).not.toContain("secret-token");
+    expect(JSON.stringify(received)).not.toContain("quota-secret");
+    expect(JSON.stringify(received)).not.toContain("C:\\skills");
+    expect(JSON.stringify(received)).not.toContain("C:\\hooks");
+    expect(JSON.stringify(received)).not.toContain('"command"');
+
+    process.emitFrame({
+      method: "account/updated",
+      params: {
+        authMode: "chatgpt",
+        planType: "pro",
+      },
+    });
+    process.emitFrame({
+      method: "skills/changed",
+      params: {
+        cwd: "C:\\skills",
+      },
+    });
+    process.emitFrame({
+      method: "hook/started",
+      params: {
+        run: {
+          eventName: "PreToolUse",
+          id: "run-1",
+          sourcePath: "C:\\hooks\\guard",
+          status: "running",
+        },
+        threadId: "thread-1",
+      },
+    });
+    process.emitFrame({
+      method: "mcpServer/startupStatus/updated",
+      params: {
+        command: "npx",
+        name: "demo",
+        status: "ready",
+      },
+    });
+
+    await waitFor(() =>
+      received.some(
+        (frame) =>
+          isObject(frame) && frame.method === "mcpServer/startupStatus/updated",
+      ),
+    );
+
+    expect(received).toContainEqual({
+      method: "account/updated",
+      params: {
+        authMode: "chatgpt",
+        planType: "pro",
+      },
+    });
+    expect(received).toContainEqual({
+      method: "skills/changed",
+      params: {},
+    });
+    expect(received).toContainEqual({
+      method: "hook/started",
+      params: {
+        run: {
+          eventName: "PreToolUse",
+          id: "run-1",
+          status: "running",
+        },
+        threadId: "thread-1",
+      },
+    });
+    expect(received).toContainEqual({
+      method: "mcpServer/startupStatus/updated",
+      params: {
+        name: "demo",
+        status: "ready",
+      },
+    });
+
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "refresh-forbidden",
+          method: "account/read",
+          params: { refreshToken: true },
+        }),
+        taskId: created.task.id,
+      }),
+    ).rejects.toMatchObject({ code: "CODEX_REQUEST_NOT_ALLOWED" });
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "skills-escape",
+          method: "skills/list",
+          params: { cwds: ["C:\\outside"] },
+        }),
+        taskId: created.task.id,
+      }),
+    ).rejects.toMatchObject({ code: "WORKSPACE_NOT_AUTHORIZED" });
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "skills-cwd-escape",
+          method: "skills/list",
+          params: { cwd: "C:\\outside" },
+        }),
+        taskId: created.task.id,
+      }),
+    ).rejects.toMatchObject({ code: "WORKSPACE_NOT_AUTHORIZED" });
+
     await adapter.shutdown();
   });
 
@@ -1487,6 +1900,20 @@ function parseClientFrame(
     throw new Error("The test Codex frame is invalid.");
   }
   return parsed;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > 2_000) {
+      throw new Error("Timed out waiting for Codex adapter condition.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 }
 
 function createTaskManager(

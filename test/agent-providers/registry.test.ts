@@ -115,6 +115,13 @@ describe("AgentProviderRegistry", () => {
       },
       newConversation: true,
       resumeConversation: true,
+      statusCatalogs: {
+        account: true,
+        skills: true,
+        experimentalCatalog: true,
+      } as NonNullable<
+        AgentProviderAdapter["descriptor"]["capabilities"]
+      >["statusCatalogs"],
       streamProtocol: "claude-agent-sdk",
       executablePath: "C:\\secret\\claude.exe",
       secretNativeFlag: true,
@@ -151,6 +158,10 @@ describe("AgentProviderRegistry", () => {
       },
       newConversation: true,
       resumeConversation: true,
+      statusCatalogs: {
+        account: true,
+        skills: true,
+      },
       streamProtocol: "claude-agent-sdk",
     });
   });

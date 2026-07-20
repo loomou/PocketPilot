@@ -91,8 +91,34 @@ function sanitizeCapabilities(
     nativeActions: sanitizeNativeActions(capabilities.nativeActions),
     newConversation: capabilities.newConversation,
     resumeConversation: capabilities.resumeConversation,
+    statusCatalogs: sanitizeStatusCatalogs(capabilities.statusCatalogs),
     streamProtocol: capabilities.streamProtocol,
   };
+}
+
+function sanitizeStatusCatalogs(
+  statusCatalogs: AgentCapabilitySnapshot["statusCatalogs"] | undefined,
+): AgentCapabilitySnapshot["statusCatalogs"] {
+  if (statusCatalogs === undefined || typeof statusCatalogs !== "object") {
+    return {};
+  }
+  const sanitized: AgentCapabilitySnapshot["statusCatalogs"] = {};
+  if (statusCatalogs.account === true) {
+    sanitized.account = true;
+  }
+  if (statusCatalogs.hooks === true) {
+    sanitized.hooks = true;
+  }
+  if (statusCatalogs.mcpServers === true) {
+    sanitized.mcpServers = true;
+  }
+  if (statusCatalogs.rateLimits === true) {
+    sanitized.rateLimits = true;
+  }
+  if (statusCatalogs.skills === true) {
+    sanitized.skills = true;
+  }
+  return sanitized;
 }
 
 function sanitizeNativeActions(

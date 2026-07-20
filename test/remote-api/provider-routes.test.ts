@@ -176,6 +176,7 @@ function fakeProvider(
         nativeActions: {},
         newConversation: true,
         resumeConversation: true,
+        statusCatalogs: {},
         streamProtocol: "fake-native",
       },
       displayName: "Fake Agent",

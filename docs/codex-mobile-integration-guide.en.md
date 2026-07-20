@@ -98,6 +98,13 @@ Show Codex only when `status` is `available`. A capability snapshot has this sha
     },
     "newConversation": true,
     "resumeConversation": true,
+    "statusCatalogs": {
+      "account": true,
+      "hooks": true,
+      "mcpServers": true,
+      "rateLimits": true,
+      "skills": true
+    },
     "streamProtocol": "codex-app-server-json-rpc"
   }
 }
@@ -295,6 +302,8 @@ PocketPilot injects the task's bound `threadId` into most requests. If the clien
 `turn/start`, `review/start`, `thread/compact/start`, `turn/steer`, and native server-request responses use the shared per-task P2 ordering rules. `turn/interrupt` is P1 and invalidates older active or queued P2 work before it is forwarded. Catalog and history methods are P3 reads: they do not wait behind the turn lane or consume turn capacity, but PocketPilot rechecks task availability and current workspace authorization before and after forwarding. An idle `turn/start`, review, or compact reserves the same configured active-task capacity used by Claude tasks. `thread/name/set` is always available, does not start a turn, and does not reserve capacity.
 
 Codex remote capabilities advertise `attachments: false`. Do not invent Codex attachment input for remote tasks. Read `capabilities.nativeActions` for exact review, rename, and compact methods. Detached review is rejected; only inline review delivery is allowed.
+
+Read `capabilities.statusCatalogs` for the closed readonly status-catalog surface. Codex currently advertises `account`, `rateLimits`, `skills`, `hooks`, and `mcpServers`. Those catalogs stay on the native Agent WebSocket as P3 reads. PocketPilot authorizes optional `cwd`/`cwds`, injects the task workspace into `skills/list` and `hooks/list` when neither path is provided, rejects `account/read` with `refreshToken: true`, and redacts email/token/path/command fields before delivery. Do not invent REST mutation routes, `account/login`, `account/logout`, plugin management, MCP install, or arbitrary path-bearing catalog writes.
 
 ### 4.3 Frame format
 
