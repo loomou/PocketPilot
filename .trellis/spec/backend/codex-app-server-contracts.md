@@ -170,6 +170,12 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
 - List supports optional `includeArchived` / `searchTerm` filters by forwarding
   native `thread/list` params `archived` and `searchTerm` after workspace
   authorization.
+- Codex capabilities publish
+  `historyFilters: { includeSystemMessages: false }`. History
+  `readConversation` rejects `includeSystemMessages === true` with
+  `409 HISTORY_FILTER_NOT_SUPPORTED` before any native `thread/turns/list`
+  or fallback history request. Omit or `false` returns native turn/item rows
+  unchanged; do not invent Claude-like system-message filtering.
 - Fork uses native `thread/fork` with `{ threadId }` only. After fork, authorize
   the new thread and create/reuse a PocketPilot task for it.
 - Archive/unarchive/delete use native `thread/archive`, `thread/unarchive`, and

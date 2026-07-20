@@ -84,10 +84,11 @@ unarchive, or delete.
   capability fields. Never return executable/config paths, credentials, raw
   process errors, environment values, or unrecognized adapter fields.
 - Capability snapshots always include boolean `attachments`, a closed
-  `nativeActions` object, a closed `statusCatalogs` object, and a closed
-  `threadManagement` object. The sanitizer admits only the reviewed
-  native-action keys `review`, `rename`, and `compact` and rewrites each
-  descriptor to a closed shape before publication:
+  `historyFilters` object, a closed `nativeActions` object, a closed
+  `statusCatalogs` object, and a closed `threadManagement` object. The
+  sanitizer admits only the reviewed native-action keys `review`, `rename`,
+  and `compact` and rewrites each descriptor to a closed shape before
+  publication:
   - `review`: `{ availability: "idle", deliveries: ["inline"], method,
     startsTurn: true, targetTypes: ["uncommittedChanges", "baseBranch",
     "commit", "custom"] }`
@@ -97,11 +98,24 @@ unarchive, or delete.
   `rateLimits`, `skills`, `hooks`, and `mcpServers`, each rewritten as
   `true` when present. The sanitizer admits only the reviewed
   thread-management keys `archive`, `delete`, `fork`, `includeArchived`,
-  `search`, and `unarchive`, each rewritten as a boolean. Unknown action keys,
-  unknown status-catalog keys, unknown thread-management keys, extra descriptor
-  fields, and open-ended catalogs are dropped. Capability metadata is
-  descriptive only; execution remains on the reviewed REST or native Agent
-  WebSocket surface and never invents unreviewed mutation routes.
+  `search`, and `unarchive`, each rewritten as a boolean. The sanitizer
+  admits only the reviewed history-filter key `includeSystemMessages` as a
+  boolean; missing/null/non-object values and non-boolean members rewrite to
+  `{ includeSystemMessages: false }`. Claude publishes
+  `{ includeSystemMessages: true }`; Codex publishes
+  `{ includeSystemMessages: false }`. Unknown action keys, unknown
+  status-catalog keys, unknown thread-management keys, unknown history-filter
+  keys, extra descriptor fields, and open-ended catalogs are dropped.
+  Capability metadata is descriptive only; execution remains on the reviewed
+  REST or native Agent WebSocket surface and never invents unreviewed
+  mutation routes.
+- Conversation history (`GET .../conversations/{conversationId}`) may pass
+  optional `includeSystemMessages`. Providers that advertise
+  `historyFilters.includeSystemMessages: false` must reject
+  `includeSystemMessages === true` with `409 HISTORY_FILTER_NOT_SUPPORTED`
+  before any native history request. Omit or `false` continues to return
+  native rows unchanged. Do not silently ignore unsupported non-default
+  filters.
 - Provider installation, enablement, and configuration are local-admin-only.
   The remote provider API is read-only for status and capabilities.
 - `AgentRuntimeManager` resolves provider availability and canonicalizes the
@@ -146,6 +160,7 @@ unarchive, or delete.
 | Registered but unavailable provider | `409 AGENT_PROVIDER_UNAVAILABLE`; discovery still returns its safe descriptor. |
 | Workspace is missing or outside authorized roots | Existing `403 WORKSPACE_NOT_AUTHORIZED`; adapter is not called. |
 | A P3 read targets an interrupted, terminal, or revoked task | Reject with the existing task/workspace error; forward no provider request. |
+| History request sets `includeSystemMessages=true` on a provider that advertises `historyFilters.includeSystemMessages: false` | `409 HISTORY_FILTER_NOT_SUPPORTED`; forward no native history request. |
 | A queued P2 operation is invalidated by P0/P1 | `409 TASK_OPERATION_SUPERSEDED`; perform no later provider write or task-state update. |
 | Agent WebSocket authentication fails | Close `4003 / AUTHENTICATION_FAILED`; register no socket. |
 | Native client frame is invalid | Close `4000 / SDK_MESSAGE_INVALID`; submit nothing. |
@@ -175,9 +190,11 @@ unarchive, or delete.
   native delete succeeds.
 - Codex publishes `attachments: false`, closed `nativeActions` for
   review/rename/compact, closed `statusCatalogs` for
-  account/rateLimits/skills/hooks/mcpServers, and closed `threadManagement`
-  for archive/delete/fork/includeArchived/search/unarchive. Claude publishes
-  empty/false equivalents until a reviewed surface lands.
+  account/rateLimits/skills/hooks/mcpServers, closed `threadManagement`
+  for archive/delete/fork/includeArchived/search/unarchive, and
+  `historyFilters: { includeSystemMessages: false }`. Claude publishes
+  empty/false action/catalog/thread-management equivalents until a reviewed
+  surface lands, and `historyFilters: { includeSystemMessages: true }`.
 - Base: Claude list/history rows retain object identity while their native
   offset/UUID cursors appear only in the common page envelope.
 - Bad: a route switches on `providerId === "claude"`, wraps native frames, lets
@@ -189,18 +206,21 @@ unarchive, or delete.
 
 - Registry tests cover every availability status, duplicate IDs, safe
   descriptor projection, closed `nativeActions` sanitization, closed
-  `statusCatalogs` sanitization, unknown providers, and unavailable execution.
+  `statusCatalogs` sanitization, closed `historyFilters` sanitization,
+  unknown providers, and unavailable execution.
 - Readiness tests cover TTL caching, single-flight concurrent refresh,
   provisional install-presence snapshots that still probe, disabled skip
   behavior, stable reason codes without path/secret leakage, discovery route
   refresh before descriptor/capability responses, and probe-child cleanup.
 - Fake-provider route tests cover authentication, common workspace rejection,
   list/read/create/attach delegation, native row passthrough, capability
-  schema fields (`attachments`, `nativeActions`, `statusCatalogs`), and
-  operation metadata.
-- OpenAPI tests assert capability schemas include `attachments`, the closed
-  `nativeActions` action descriptors, and the closed `statusCatalogs`
-  descriptors.
+  schema fields (`attachments`, `historyFilters`, `nativeActions`,
+  `statusCatalogs`), history-filter reject mapping, and operation metadata.
+- OpenAPI tests assert capability schemas include `attachments`, closed
+  `historyFilters`, the closed `nativeActions` action descriptors, and the
+  closed `statusCatalogs` descriptors.
+- Codex adapter tests cover reject of `includeSystemMessages=true` before
+  native list methods and allow omit/`false` native history passthrough.
 - Agent WebSocket tests cover task/provider selection, subscribe-before-
   activation, bidirectional native equality, invalid/binary input, replay
   cursor forwarding, stable close codes, device revocation, and task-only close.

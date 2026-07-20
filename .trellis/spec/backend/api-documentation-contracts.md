@@ -134,6 +134,8 @@ emits `dist/openapi/mobile-v1.json`.
   provider-scoped conversation list/create/history/attach, composer options,
   and effort; descriptions include the SDK version, 50-row cursor
   behavior, history/live separation, and subscribe-before-activation.
+- Assert capability schemas include closed `historyFilters` with boolean
+  `includeSystemMessages` (Claude true / Codex false in product docs).
 - Assert control docs contain no SDK server message, raw SDK docs contain no
   PocketPilot wrapper, and all approval fields and stable close codes appear.
 - Local-app injection must return Swagger UI and the exact raw document while
