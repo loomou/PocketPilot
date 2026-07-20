@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 14
+- **Total Sessions**: 15
 - **Last Active**: 2026-07-20
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~475 | Active |
+| `journal-1.md` | ~508 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 15 | 2026-07-20 | Codex provider runtime parity | `1ec6f87` | `main` |
 | 14 | 2026-07-20 | Complete provider-extensible Agent API and Claude migration | `5e3745c`, `8b11a42` | `feat/remote-cli-integration` |
 | 13 | 2026-07-19 | Simplify QR pairing approval | `540af86` | `fix/pairing-code-approval-flow` |
 | 12 | 2026-07-19 | Refresh pairing approval input after QR scan | `d02ea37` | `fix/pairing-verification-input-refresh` |

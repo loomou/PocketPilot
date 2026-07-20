@@ -473,3 +473,36 @@ Migrated Claude behind the provider-extensible Agent API, added provider-aware p
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: Codex provider runtime parity
+
+**Date**: 2026-07-20
+**Task**: Codex provider runtime parity
+**Branch**: `main`
+
+### Summary
+
+Aligned Codex App Server with the shared provider task runtime: P2 capacity and generation ordering, P3 reads, native approval ownership and control projection, active-turn replay, reconnect cleanup, API documentation, tests, and live Codex verification.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1ec6f87` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
