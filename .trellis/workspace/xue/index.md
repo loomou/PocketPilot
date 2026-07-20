@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 16
+- **Total Sessions**: 17
 - **Last Active**: 2026-07-21
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~541 | Active |
+| `journal-1.md` | ~574 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 17 | 2026-07-21 | Codex read-only status catalogs | `af11bb6` | `audit/claude-code-parity` |
 | 16 | 2026-07-21 | Codex native action capabilities | `effa056` | `audit/claude-code-parity` |
 | 15 | 2026-07-20 | Codex provider runtime parity | `1ec6f87` | `main` |
 | 14 | 2026-07-20 | Complete provider-extensible Agent API and Claude migration | `5e3745c`, `8b11a42` | `feat/remote-cli-integration` |

@@ -539,3 +539,36 @@ Implemented Codex nativeActions for review/rename/compact, set attachments false
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: Codex read-only status catalogs
+
+**Date**: 2026-07-21
+**Task**: Codex read-only status catalogs
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Implemented Codex P3 status catalogs (account/quota/skills/hooks/MCP), closed statusCatalogs discovery, path-safe projections, reviewed readiness notifications, docs/tests/contracts, and committed the feature.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `af11bb6` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
