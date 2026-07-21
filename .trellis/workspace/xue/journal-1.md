@@ -762,3 +762,42 @@ Exposed a subscribe-time out-of-band agent.checkpoint on the Codex Agent WebSock
 
 - Attachments remain deferred.
 - Optional follow-up: per-publish checkpoints for long-turn weak-network efficiency.
+
+
+## Session 23: Polish mobile integration docs
+
+**Date**: 2026-07-21
+**Task**: Polish mobile integration docs for parity
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Rewrote Codex mobile integration guides (en/zh) and expanded the shared mobile guides for multi-provider parity: closed capabilities, full conversation REST lifecycle, historyFilters honesty, agent.checkpoint reconnect, capability-driven checklist, and error recovery. Light app-server guide cross-link polish only.
+
+### Main Changes
+
+- Full client-path rewrite of Codex mobile guides.
+- Multi-provider expansion of general mobile guides (REST inventory + checklist).
+- Fixed delete wording terminals → terminates during check.
+- Archived docs polish task.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `27c182b` | docs(mobile): rewrite Claude/Codex parity integration guides |
+| `2ccb433` | chore(task): archive 07-21-polish-mobile-integration-docs |
+
+### Testing
+
+- `pnpm test -- test/api-docs/mobile-openapi.test.ts` passed during check.
+- Keyword/structure parity greps for en/zh guides.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Optional: open PR for `audit/claude-code-parity`.
+- Attachments remain deferred; optional per-publish checkpoint / safety notifications.
