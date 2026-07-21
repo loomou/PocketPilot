@@ -61,6 +61,13 @@ Then read `GET /v1/providers/codex/capabilities` and select the codec identified
     },
     "newConversation": true,
     "resumeConversation": true,
+    "statusCatalogs": {
+      "account": true,
+      "hooks": true,
+      "mcpServers": true,
+      "rateLimits": true,
+      "skills": true
+    },
     "streamProtocol": "codex-app-server-json-rpc",
     "threadManagement": {
       "archive": true,
@@ -74,7 +81,10 @@ Then read `GET /v1/providers/codex/capabilities` and select the codec identified
 }
 ```
 
-Do not infer provider availability from local paths or from a previous run.
+Treat `statusCatalogs`, `nativeActions`, `historyFilters`, and
+`threadManagement` as closed capability objects. Do not invent open-ended action
+or catalog keys. Do not infer provider availability from local paths or from a
+previous run.
 
 ## Identity model
 
@@ -136,7 +146,7 @@ action; clients must not replay historical messages as a new prompt.
 Fork returns a new task bound to the forked native thread. Archive, unarchive,
 and delete return `{ action, task: null }`. Archive and delete require
 `confirm: true`; missing/false confirm returns `CONFIRMATION_REQUIRED`.
-Archive does **not** auto-close bound PocketPilot tasks. Delete terminals any
+Archive does **not** auto-close bound PocketPilot tasks. Delete terminates any
 local non-terminal PocketPilot task for that native conversation after native
 delete succeeds and publishes a `task.state` control event.
 

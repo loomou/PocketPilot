@@ -2,35 +2,53 @@
 
 > **Verified contract:** PocketPilot remote API `/v1`, OpenAPI `3.1.0`
 > (`info.version: 1.0.0`), protocol version `1`, and
-> `@anthropic-ai/claude-agent-sdk@0.3.210`, verified 2026-07-18.
+> `@anthropic-ai/claude-agent-sdk@0.3.210`, verified 2026-07-21.
 >
 > **Schema sources:** the running Agent's local Swagger UI at
 > `/documentation/`, raw OpenAPI at `/documentation/json`, the packaged
-> [`dist/openapi/mobile-v1.json`](../dist/openapi/mobile-v1.json), and the
-> installed Claude Agent SDK declarations. This guide explains workflow and
-> ownership; OpenAPI and SDK types remain authoritative for fields.
+> [`dist/openapi/mobile-v1.json`](../dist/openapi/mobile-v1.json), the installed
+> Claude Agent SDK declarations, and provider capability snapshots. This guide
+> explains multi-provider workflow and ownership; OpenAPI and provider-native
+> types remain authoritative for fields.
+
+## Guide map
+
+1. [Shared auth, workspace, and task model](#1-purpose-audience-versions-and-sources-of-truth)
+2. [Multi-provider discovery and readiness](#3-transport-overview-and-end-to-end-flow)
+3. [Shared REST inventory](#33-rest-operation-inventory)
+4. [Agent WebSocket vs control-events WebSocket](#2-non-negotiable-boundaries-and-identity)
+5. [Provider differences matrix](#18-provider-differences-matrix)
+6. [Capability-driven client checklist](#19-capability-driven-client-checklist)
+7. [Error recovery](#14-error-and-close-code-recovery)
+8. [Provider-specific guides](#20-provider-specific-guides)
 
 ## 1. Purpose, Audience, Versions, and Sources of Truth
 
 This guide is for any mobile client that connects to a user-operated
-PocketPilot Agent. It specifies pairing, authentication, provider/workspace
-and conversation discovery, history, live conversation transport, task controls,
-approvals, reconnection, the fixed Command panel, and same-workspace New
-conversation behavior. It is intentionally platform-neutral.
+PocketPilot Agent. It specifies pairing, authentication, multi-provider
+discovery/readiness, workspace and conversation discovery, history, live
+conversation transport, shared task controls, approvals, reconnection, the
+fixed Claude Command panel, and same-workspace New conversation behavior. It is
+intentionally platform-neutral and multi-provider: Claude and Codex share auth,
+workspaces, tasks, and control events, while each provider owns its native Agent
+frames and conversation rows.
 
 Use this authority order when sources differ:
 
 1. Current runtime Zod schemas and generated OpenAPI for REST and PocketPilot
    control messages.
-2. `@anthropic-ai/claude-agent-sdk@0.3.210` declarations for raw
+2. Provider capability snapshots for closed `historyFilters`, `nativeActions`,
+   `statusCatalogs`, and `threadManagement`.
+3. `@anthropic-ai/claude-agent-sdk@0.3.210` declarations for raw Claude
    `SDKUserMessage`, `SDKMessage`, `SessionMessage`, and `PermissionResult`.
-3. This guide for cross-operation sequencing and client state ownership.
+4. Provider-specific guides for Codex App Server methods and reconnect rules.
+5. This guide for cross-operation sequencing and client state ownership.
 
 The English file is canonical. The
 [`Simplified Chinese guide`](./mobile-integration-guide.zh-CN.md) is a strict
 translation. A backend or SDK upgrade is not compatible merely because JSON
-still parses: regenerate REST bindings from OpenAPI, recheck the pinned SDK
-types, and rerun the flows in section 16 before releasing the mobile client.
+still parses: regenerate REST bindings from OpenAPI, recheck pinned provider
+contracts, and rerun the flows in section 16 before releasing the mobile client.
 
 ## 2. Non-Negotiable Boundaries and Identity
 
@@ -92,15 +110,18 @@ wrap SDK messages in a second protocol.
 
 | Identifier | Owner and purpose | Lifetime and client rule |
 | --- | --- | --- |
-| `providerId` | Stable provider path identity, such as `claude` | Discover it from `/v1/providers`; never infer support from installed files or hard-code availability. |
-| `conversationId` | Provider-native conversation identity used in provider-scoped REST paths | For Claude this is the SDK session ID selected from an unchanged `SDKSessionInfo` row. |
-| `taskId` | PocketPilot runtime/control handle for routing, state, approvals, replay, scheduling, and one live Query | Stable across turns and `conversation_reset`. Keep it out of user-facing conversation identity. |
+| `providerId` | Stable provider path identity, such as `claude` or `codex` | Discover it from `/v1/providers`; never infer support from installed files or hard-code availability. |
+| `conversationId` | Provider-native conversation identity used in provider-scoped REST paths | Claude: SDK session ID from an unchanged `SDKSessionInfo` row. Codex: native `threadId`. |
+| `taskId` | PocketPilot runtime/control handle for routing, state, approvals, replay, scheduling, and one live provider stream | Stable across turns and Claude `conversation_reset`. Keep it out of user-facing conversation identity. |
 | `sdkSessionId` / raw `session_id` | Claude persistence and resume identity | Observe SDK-owned values. Never derive it from `taskId` or replay history as a substitute. |
-| SDK `uuid` | Identity for an SDK history/live message and SDK replay anchor | Use for history/live deduplication and the provider-native value carried by `afterCursor` when present. A valid live message can omit it. |
-| `new_conversation_id` | New transcript boundary emitted by raw `conversation_reset` | Mount a fresh transcript and clear cached title state. Do not rotate `taskId`. Do not assume it equals `session_id`. |
-| `operationId` | Client-generated UUID for idempotent HTTP mutations | Generate once per distinct mutation; reuse only when retrying that same mutation. Never put it in raw SDK frames. |
-| approval `requestId` | SDK permission callback identity | Resolve only the currently pending request. It is unrelated to HTTP `operationId`. |
-| control `cursor` | PocketPilot control replay position | Store per `taskId`; send as `afterCursor`. It is unrelated to SDK `uuid`. |
+| `nativeConversationId` / Codex `threadId` | Codex conversation branch | Distinct from `taskId`. REST `conversationId` for Codex is this value. |
+| `nativeSessionId` | Codex session-tree root | Forks may share it; do not treat it as `taskId`. |
+| SDK `uuid` | Identity for a Claude history/live message and Claude replay anchor | Use for history/live deduplication and the provider-native value carried by Claude `afterCursor` when present. A valid live message can omit it. |
+| Codex transport `afterCursor` | PocketPilot Agent-stream replay position for Codex | Opaque; not a thread/turn/item ID. Codex also emits subscribe-time `agent.checkpoint`. |
+| `new_conversation_id` | New transcript boundary emitted by raw Claude `conversation_reset` | Mount a fresh transcript and clear cached title state. Do not rotate `taskId`. Do not assume it equals `session_id`. |
+| `operationId` | Client-generated UUID for idempotent HTTP mutations | Generate once per distinct mutation; reuse only when retrying that same mutation. Never put it in provider-native frames. |
+| approval `requestId` | Provider-native permission callback identity | Claude: SDK callback ID resolved over REST. Codex: native JSON-RPC request ID answered on the Agent socket. Unrelated to HTTP `operationId`. |
+| control `cursor` | PocketPilot control replay position | Store per `taskId`; send as `afterCursor` on `/v1/events`. Unrelated to SDK `uuid` or Codex transport cursors. |
 
 ## 3. Transport Overview and End-to-End Flow
 
@@ -116,33 +137,38 @@ Convert the QR `baseUrl` scheme when opening WebSockets: `https` becomes
 `wss`, and `http` becomes `ws`. Never place the access credential in the URL,
 query string, logs, analytics, crash reports, or screenshots.
 
-### 3.2 Canonical user flow
+### 3.2 Canonical multi-provider user flow
 
 1. Pair and retain the device key plus rotating credentials.
 2. Authenticate, call `GET /v1/providers`, and select an `available` provider.
    Unavailable providers remain listed with a stable `reasonCode` (for example
-   `CODEX_COMMAND_NOT_FOUND` or `CLAUDE_SDK_NOT_AVAILABLE`). Discovery and
-   capabilities refresh host readiness with a short server-side TTL and never
-   expose install paths, credentials, or raw process diagnostics.
-3. Read `/v1/providers/{providerId}/capabilities`, then call
-   `GET /v1/workspaces`.
-4. Select an authorized workspace, then call
-   `GET /v1/providers/{providerId}/conversations`.
-5. Select a provider-native conversation or choose New conversation.
-6. For an existing conversation, load its latest history page for display.
-7. Attach the selected conversation or create its runtime. Retain the
-   returned `task.id` internally as `taskId`; do not show a separate task step.
-8. Open `/v1/events` and subscribe to `taskId`.
-9. Open `/v1/tasks/{taskId}/agent`. The server installs the native subscriber before
-   activating the new or resumed Query.
-10. After the Agent socket is open, request composer options and reconcile them
-   with raw `system/init` and `system/status` messages.
-11. For Claude, send ordinary prompts and slash commands as raw
-    `SDKUserMessage` frames.
+   `CODEX_COMMAND_NOT_FOUND`, `CODEX_APP_SERVER_VERSION_UNSUPPORTED`,
+   `CODEX_APP_SERVER_PROBE_FAILED`, `CLAUDE_SDK_NOT_AVAILABLE`,
+   `CLAUDE_SDK_VERSION_UNSUPPORTED`, or `CLAUDE_SDK_PROBE_FAILED`). Discovery and
+   capabilities refresh host readiness with a short server-side TTL (~30s) and
+   never expose install paths, credentials, or raw process diagnostics.
+3. Read `/v1/providers/{providerId}/capabilities` and store the closed capability
+   objects before rendering provider-specific controls.
+4. Call `GET /v1/workspaces` and let the user select an exact authorized root.
+5. List conversations with
+   `GET /v1/providers/{providerId}/conversations`. When advertised, use optional
+   `includeArchived` / `searchTerm` filters.
+6. Select a provider-native conversation or choose New conversation.
+7. For an existing conversation, load its latest history page for display.
+   Honor `historyFilters.includeSystemMessages`; never send unsupported filters.
+8. Attach the selected conversation or create its runtime. Retain the returned
+   `task.id` internally as `taskId`; do not show a separate task step.
+9. Open `/v1/events` and subscribe to `taskId`.
+10. Open `/v1/tasks/{taskId}/agent`. The server installs the native subscriber
+    before activation. For Codex, the first frame may be `agent.checkpoint`.
+11. Branch by `task.provider`:
+    - Claude: request composer options and send raw `SDKUserMessage` frames.
+    - Codex: send only allowlisted native App Server methods; see the Codex
+      mobile guide for actions, catalogs, approvals, and reconnect.
 
 Task creation, task selection, and task resume are internal transport details,
-not extra conversation screens. Selecting a Claude session is the user's
-continue action.
+not extra conversation screens. Selecting a provider-native conversation is the
+user's continue action.
 
 ### 3.3 REST operation inventory
 
@@ -158,11 +184,15 @@ must be generated from OpenAPI rather than copied from this table.
 | Authentication | `POST /v1/auth/refresh` | `refreshCredentials` | Public bootstrap; rotate credentials |
 | Authentication | `GET /v1/auth/session` | `getAuthenticatedDeviceSession` | Protected; validate access and read device metadata |
 | Providers | `GET /v1/providers` | `listAgentProviders` | Protected; list available and unavailable local providers with refreshed readiness |
-| Providers | `GET /v1/providers/{providerId}/capabilities` | `getAgentProviderCapabilities` | Protected; read status, native protocol version, and capabilities |
-| Conversations | `GET /v1/providers/{providerId}/conversations` | `listAgentConversations` | Protected; list provider-native workspace conversations |
+| Providers | `GET /v1/providers/{providerId}/capabilities` | `getAgentProviderCapabilities` | Protected; read status, native protocol version, and closed capabilities |
+| Conversations | `GET /v1/providers/{providerId}/conversations` | `listAgentConversations` | Protected; list provider-native workspace conversations; optional `includeArchived` / `searchTerm` when advertised |
 | Conversations | `POST /v1/providers/{providerId}/conversations` | `createAgentConversation` | Protected; create an empty-history runtime |
 | Conversations | `GET /v1/providers/{providerId}/conversations/{conversationId}` | `readAgentConversation` | Protected; read a provider-native history page |
 | Conversations | `POST /v1/providers/{providerId}/conversations/{conversationId}/attach` | `attachAgentConversation` | Protected; attach/reuse a conversation runtime |
+| Conversations | `POST /v1/providers/{providerId}/conversations/{conversationId}/fork` | `forkAgentConversation` | Protected; fork when `threadManagement.fork` is true; returns bound task for the **new** conversation |
+| Conversations | `POST /v1/providers/{providerId}/conversations/{conversationId}/archive` | `archiveAgentConversation` | Protected; archive when advertised; requires `confirm: true`; returns null task and does **not** auto-close bound tasks |
+| Conversations | `POST /v1/providers/{providerId}/conversations/{conversationId}/unarchive` | `unarchiveAgentConversation` | Protected; unarchive when advertised; returns null task |
+| Conversations | `POST /v1/providers/{providerId}/conversations/{conversationId}/delete` | `deleteAgentConversation` | Protected; delete when advertised; requires `confirm: true`; terminates a bound non-terminal task only after native success |
 | Tasks | `GET /v1/capabilities` | `getCapabilities` | Protected; protocol version and permission modes |
 | Tasks | `GET /v1/workspaces` | `listAuthorizedWorkspaces` | Protected; configured authorized roots |
 | Tasks | `GET /v1/tasks` | `listTasks` | Protected; internal runtime metadata list |
@@ -171,13 +201,20 @@ must be generated from OpenAPI rather than copied from this table.
 | Tasks | `POST /v1/tasks/{taskId}/interrupt` | `interruptTask` | Protected mutation; cancel current work/approval |
 | Tasks | `POST /v1/tasks/{taskId}/close` | `closeTask` | Protected mutation; terminal close |
 | Tasks | `POST /v1/tasks/{taskId}/resume` | `resumeTask` | Protected mutation; recover a persisted interrupted task |
-| Composer | `GET /v1/tasks/{taskId}/composer-options` | `getTaskComposerOptions` | Protected; models, modes, and effort |
-| Composer | `POST /v1/tasks/{taskId}/model` | `setTaskModel` | Protected mutation; next-turn model |
-| Composer | `POST /v1/tasks/{taskId}/permission-mode` | `setTaskPermissionMode` | Protected mutation; permission mode |
-| Composer | `POST /v1/tasks/{taskId}/effort` | `setTaskEffort` | Protected mutation; next-turn effort |
-| Approval | `POST /v1/tasks/{taskId}/approvals/{requestId}` | `resolveTaskApproval` | Protected mutation; complete SDK `PermissionResult` |
+| Composer | `GET /v1/tasks/{taskId}/composer-options` | `getTaskComposerOptions` | Protected; Claude models, modes, and effort |
+| Composer | `POST /v1/tasks/{taskId}/model` | `setTaskModel` | Protected mutation; Claude next-turn model |
+| Composer | `POST /v1/tasks/{taskId}/permission-mode` | `setTaskPermissionMode` | Protected mutation; Claude permission mode |
+| Composer | `POST /v1/tasks/{taskId}/effort` | `setTaskEffort` | Protected mutation; Claude next-turn effort |
+| Approval | `POST /v1/tasks/{taskId}/approvals/{requestId}` | `resolveTaskApproval` | Protected mutation; complete Claude SDK `PermissionResult` |
 | Events | `GET /v1/events` | `subscribeTaskEvents` | Protected WebSocket upgrade |
 | Agent Stream | `GET /v1/tasks/{taskId}/agent` | `streamTaskAgentMessages` | Protected provider-native WebSocket upgrade |
+
+Conversation lifecycle mutations stay on these REST routes. Do not invent Agent
+WebSocket wrappers for fork, archive, unarchive, or delete. Codex currently
+advertises the thread-management surface; Claude currently publishes those flags
+as `false`. Confirm semantics, native actions, status catalogs, and Codex
+reconnect details live in the
+[Codex mobile guide](./codex-mobile-integration-guide.en.md).
 
 ## 4. Pairing, Device Proof, Credential Claim, Refresh, and Revocation
 
@@ -861,22 +898,30 @@ shape. Branch on `code`; present `message` only as user-safe context.
 | `REFRESH_TOKEN_EXPIRED`, `REFRESH_TOKEN_INVALID` | 401 | Clear credentials and pair again |
 | `REFRESH_TOKEN_REUSED` | 401 | Security event: clear credentials, close local sockets, pair again |
 | `PAIRING_*`, `CHALLENGE_*`, `DEVICE_PROOF_INVALID` | 401/404/409/410 | Return to the appropriate pairing step; never reuse a consumed/expired challenge |
+| `AGENT_PROVIDER_NOT_FOUND` | 404 | Fix client routing; re-read `/v1/providers` |
+| `AGENT_PROVIDER_UNAVAILABLE` | 409 | Provider is registered but not executable; refresh discovery and direct the user to the computer |
 | `WORKSPACE_SCOPE_RISK_NOT_ACCEPTED` | 422 | Obtain explicit scope acceptance, then issue a new operation |
 | `WORKSPACE_NOT_AUTHORIZED` | 403 | Reload `/v1/workspaces`; user changes authorization on the computer |
 | `CLAUDE_SESSION_NOT_FOUND` | 404 | Remove stale row and reload the session list without exposing another path |
 | `CLAUDE_HISTORY_UNAVAILABLE` | 409 | Keep attached Query/composer usable; retry history with backoff |
+| `CODEX_THREAD_NOT_FOUND` | 404 | Remove stale Codex thread row and reload conversation list |
+| `CODEX_HISTORY_UNAVAILABLE` | 409 | Keep current UI; retry history later; never resend history as a prompt |
 | `HISTORY_CURSOR_STALE` | 409 | Discard older-page cursor chain and reload latest history |
 | `HISTORY_FILTER_NOT_SUPPORTED` | 409 | Drop the unsupported filter; consult `capabilities.historyFilters` before sending |
+| `CONFIRMATION_REQUIRED` | 409 | Archive/delete require explicit `confirm: true`; show confirm UI and retry |
 | `CONCURRENT_TASK_LIMIT_REACHED` | 409 | Do not loop; wait for active work to finish or user closes work |
 | `TASK_NOT_FOUND` | 404 | Stop reconnecting that handle; return to session discovery/attach |
 | `TASK_INTERRUPTED` | 409 | Reattach selected session or perform explicit low-level resume |
 | `TASK_SESSION_UNAVAILABLE` | 409 | Wait for interruption cleanup or reattach; do not replay a prompt automatically |
 | `TASK_TERMINAL` | 409 | Stop using `taskId`; attach/create another runtime |
 | `TASK_BUSY` | 409 | Refresh task state; use resume only for a truly interrupted task |
+| `TASK_CONTROL_NOT_SUPPORTED` | 409 | Claude-only control used on a non-Claude task (or unsupported surface); switch to the provider-native path |
 | `STALE_APPROVAL` | 409 | Dismiss prompt and await a current approval event |
 | `UNSUPPORTED_PERMISSION_MODE` | 422 | Refresh capabilities/composer options and remove stale selection |
 | `INVALID_TASK_OPERATION` | 422 | Fix client payload; do not blindly retry |
 | `TASK_OPERATION_SUPERSEDED` | 409 | Do not reuse the tombstoned operation for new intent; refresh state |
+| `CODEX_REQUEST_NOT_ALLOWED` | 403 | Denied Codex method/params; fix client payload and consult Codex allowlist |
+| `CODEX_APP_SERVER_UNAVAILABLE` | 503/409 | Show provider unavailability; wait for host/App Server recovery |
 | `EVENT_REPLAY_STORAGE_LIMIT_REACHED` | Control event | Continue live; on reconnect refresh task/history baseline because the gap is not replayable |
 | Command unavailable | Raw SDK output | Render the SDK message; leave transport and composer active |
 
@@ -884,17 +929,25 @@ shape. Branch on `code`; present `message` only as user-safe context.
 
 | Socket | Code / reason | Recovery |
 | --- | --- | --- |
-| Raw SDK | `4000 SDK_MESSAGE_INVALID` | Client bug: inspect the outbound raw frame; do not resend unchanged |
+| Agent | `4000 SDK_MESSAGE_INVALID` | Client bug: inspect the outbound provider-native frame; do not resend unchanged |
 | Both | `4003 AUTHENTICATION_FAILED` or device-revoked reason | Refresh/validate credentials; pair again when revoked |
-| Raw SDK | `4004 TASK_NOT_FOUND` | Stop reconnecting task; attach/create again |
-| Raw SDK | `4009 TASK_SESSION_UNAVAILABLE` | Refresh task; wait/re-attach unless terminal |
-| Raw SDK | `4011 SDK_TRANSPORT_FAILED` | Back off, refresh task state, reconnect with last `afterCursor`; never auto-resend prompt |
+| Agent | `4004 TASK_NOT_FOUND` | Stop reconnecting task; attach/create again |
+| Agent | `4009 TASK_SESSION_UNAVAILABLE` | Refresh task; wait/re-attach unless terminal |
+| Agent | `4011 SDK_TRANSPORT_FAILED` | Back off, refresh task state, reconnect with last provider transport cursor; never auto-resend prompt |
+
+The `SDK_*` close-reason wording is transport-compatible naming. For a Codex task
+it describes the provider-native transport, not a Claude SDK message.
 
 The control socket additionally sends
-`EVENT_SUBSCRIPTION_INVALID` as a JSON message without closing. Neither socket
-uses an SDK-error wrapper. Use bounded exponential backoff with jitter for
-network/`4011` reconnects, but authentication and terminal errors require state
-repair rather than an infinite retry loop.
+`EVENT_SUBSCRIPTION_INVALID` as a JSON message without closing. The Agent socket
+never sends a PocketPilot JSON error frame. Use bounded exponential backoff with
+jitter for network/`4011` reconnects, but authentication and terminal errors
+require state repair rather than an infinite retry loop.
+
+Codex reconnect note: on each successful Agent subscribe, Codex may first emit
+`agent.checkpoint` before retained native frames. Store that cursor when
+non-null; a missing/unknown cursor still correctly falls back to the full
+retained active-turn window. Claude does not emit `agent.checkpoint`.
 
 ## 15. Security and Data-Handling Boundaries
 
@@ -1169,25 +1222,98 @@ sequenceDiagram
 - Local interactive REST schema: `http://127.0.0.1:<local-admin-port>/documentation/`
 - Local raw schema: `http://127.0.0.1:<local-admin-port>/documentation/json`
 - Packaged schema: [`dist/openapi/mobile-v1.json`](../dist/openapi/mobile-v1.json)
-- SDK wire owner: `@anthropic-ai/claude-agent-sdk@0.3.210`
+- Claude SDK wire owner: `@anthropic-ai/claude-agent-sdk@0.3.210`
 - API capability probe: `GET /v1/capabilities`, currently
   `{ "protocolVersion": 1, "supportedPermissionModes": [...] }`
+- Provider capability probe: `GET /v1/providers` and
+  `GET /v1/providers/{providerId}/capabilities`
 
 Generate REST request/response bindings from OpenAPI, but model both
-WebSockets explicitly from their `x-websocket` descriptions and the pinned SDK
-types. Swagger UI documents but does not execute WebSocket frames.
+WebSockets explicitly from their `x-websocket` descriptions and the provider
+wire owners. Swagger UI documents but does not execute WebSocket frames.
 
 On any OpenAPI change, compare path, `operationId`, authentication, error, and
-schema changes before regenerating. On any SDK upgrade, recheck at least:
+schema changes before regenerating. On any provider upgrade, recheck at least:
 
-- the `SDKUserMessage`, `SDKMessage`, `SessionMessage`, and `PermissionResult`
-  unions;
-- raw `system/init`, `system/status`, command-output, and
+- closed capability objects (`historyFilters`, `nativeActions`,
+  `statusCatalogs`, `threadManagement`, `attachments`);
+- Claude `SDKUserMessage`, `SDKMessage`, `SessionMessage`, and
+  `PermissionResult` unions;
+- raw Claude `system/init`, `system/status`, command-output, and
   `conversation_reset` behavior;
-- permission modes, models, effort levels, command metadata, and replay UUIDs;
+- Codex subscribe-time `agent.checkpoint`, allowlisted methods, and status
+  catalog projection rules;
 - WebSocket base guards and all stable close codes.
 
-Do not freeze exhaustive SDK unions in a mobile-only schema. Feature-detect
-from capabilities and raw SDK initialization where available, retain unknown
+Do not freeze exhaustive provider unions in a mobile-only schema. Feature-detect
+from capabilities and provider initialization where available, retain unknown
 fields, and update both language versions of this guide whenever workflow
 behavior changes.
+
+## 18. Provider differences matrix
+
+| Area | Shared PocketPilot surface | Claude | Codex |
+| --- | --- | --- | --- |
+| Auth / workspaces / task IDs | Same Bearer, pairing, `/v1/workspaces`, `taskId` | Same | Same |
+| Discovery | `/v1/providers`, capabilities, readiness TTL, stable `reasonCode` | Claude reason codes | Codex reason codes |
+| Conversation list/create/history/attach | Common provider-scoped REST | SDK session rows / SessionMessage history | Native threads / turn-item history |
+| Fork / archive / unarchive / delete | REST routes exist for every provider | `threadManagement.*` currently false | Closed true flags; archive/delete need `confirm: true` |
+| Agent WebSocket | `/v1/tasks/{taskId}/agent` | Raw SDK frames only | Native JSON-RPC + subscribe-time `agent.checkpoint` |
+| Control WebSocket | `/v1/events` only | Same | Same; may project provider-tagged `approval.requested` |
+| History filter | `historyFilters.includeSystemMessages` | `true`; filter honored | `false`; `true` → `HISTORY_FILTER_NOT_SUPPORTED` |
+| Composer / model / mode / effort | Claude REST controls | Supported | `TASK_CONTROL_NOT_SUPPORTED`; use native catalogs |
+| Approvals | Control projection may exist | Resolve over approval REST with `PermissionResult` | Answer native JSON-RPC request on Agent socket |
+| Native actions | Closed `nativeActions` | Empty until reviewed | `review` / `rename` / `compact` |
+| Status catalogs | Closed `statusCatalogs` | Empty / false until reviewed | account/rateLimits/skills/hooks/mcpServers |
+| Attachments | Boolean capability | Provider-specific | `false` |
+
+Read `task.provider` and `nativeProtocolVersion` before choosing a codec. Never
+infer the provider from a path, history shape, or a message `type` member.
+
+## 19. Capability-driven client checklist
+
+Before shipping a multi-provider mobile client, gate UI and requests on the
+closed capability snapshot rather than hardcoding provider IDs where possible.
+
+- [ ] Pairing, refresh, and revocation use shared auth from this guide.
+- [ ] Provider picker lists unavailable providers with stable `reasonCode` and
+      never shows install paths or raw process diagnostics.
+- [ ] Capability objects are treated as closed:
+  - `attachments: boolean`
+  - `historyFilters: { includeSystemMessages: boolean }`
+  - `nativeActions: { review?, rename?, compact? }` only
+  - `statusCatalogs: { account?, rateLimits?, skills?, hooks?, mcpServers? }` only
+  - `threadManagement: { archive?, delete?, fork?, includeArchived?, search?, unarchive? }` only
+- [ ] List filters (`includeArchived`, `searchTerm`) appear only when advertised.
+- [ ] History never sends unsupported `includeSystemMessages=true`.
+- [ ] Fork/archive/unarchive/delete UI appears only when advertised; archive and
+      delete require explicit `confirm: true`.
+- [ ] Archive does not assume auto-close of bound tasks; delete terminates a bound
+      non-terminal task only after native success.
+- [ ] Agent and control sockets remain separate; no `{ kind: "sdk", payload }`
+      wrapper is introduced.
+- [ ] Claude path: subscribe-before-activation, raw SDK frames, composer controls
+      before dependent Send, approval REST, UUID history/live dedupe.
+- [ ] Codex path: handle subscribe-time `agent.checkpoint`, pure native later
+      frames, allowlisted methods, native actions, status catalogs, native
+      approval responses, and checkpoint/`afterCursor` reconnect rules from the
+      Codex guide.
+- [ ] Claude-only REST controls are not called for Codex tasks.
+- [ ] Error recovery covers `CONFIRMATION_REQUIRED`,
+      `HISTORY_FILTER_NOT_SUPPORTED`, provider unavailability, and stable Agent
+      close codes `4000` / `4003` / `4004` / `4009` / `4011`.
+- [ ] Logs, analytics, and caches contain no credentials, prompts, tool inputs,
+      absolute host paths, or raw process diagnostics.
+
+## 20. Provider-specific guides
+
+- [Codex mobile integration guide (en)](./codex-mobile-integration-guide.en.md)
+- [Codex mobile integration guide (zh-CN)](./codex-mobile-integration-guide.zh-CN.md)
+- [Codex App Server integration](./codex-app-server-integration.en.md)
+- [Claude SDK message types (zh-CN)](./claude-sdk-message-types.zh-CN.md)
+
+Use this general guide for shared auth, workspaces, task model, REST inventory,
+and capability gating. Use the Codex guide for confirm semantics, checkpoint
+reconnect, native actions, and status catalogs. Use the Claude SDK guide for
+message-type ownership details that are intentionally outside this workflow
+document.
