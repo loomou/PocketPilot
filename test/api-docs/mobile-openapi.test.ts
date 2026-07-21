@@ -22,7 +22,11 @@ const expectedPaths = [
   "/v1/providers/{providerId}/capabilities",
   "/v1/providers/{providerId}/conversations",
   "/v1/providers/{providerId}/conversations/{conversationId}",
+  "/v1/providers/{providerId}/conversations/{conversationId}/archive",
   "/v1/providers/{providerId}/conversations/{conversationId}/attach",
+  "/v1/providers/{providerId}/conversations/{conversationId}/delete",
+  "/v1/providers/{providerId}/conversations/{conversationId}/fork",
+  "/v1/providers/{providerId}/conversations/{conversationId}/unarchive",
   "/v1/tasks",
   "/v1/tasks/{taskId}",
   "/v1/tasks/{taskId}/agent",
@@ -135,6 +139,38 @@ describe("mobile OpenAPI generation", () => {
     ]) {
       expect(approvalSerialized).toContain(field);
     }
+
+    const providerCapabilities =
+      first.paths["/v1/providers/{providerId}/capabilities"]?.get;
+    const capabilitySerialized = JSON.stringify(providerCapabilities);
+    for (const field of [
+      "attachments",
+      "historyFilters",
+      "includeSystemMessages",
+      "nativeActions",
+      "statusCatalogs",
+      "threadManagement",
+      "review",
+      "rename",
+      "compact",
+      "deliveries",
+      "targetTypes",
+      "startsTurn",
+      "availability",
+      "account",
+      "skills",
+      "hooks",
+      "mcpServers",
+      "rateLimits",
+      "archive",
+      "delete",
+      "fork",
+      "includeArchived",
+      "search",
+      "unarchive",
+    ]) {
+      expect(capabilitySerialized).toContain(field);
+    }
   });
 
   it("documents WebSocket messages from the runtime Zod contracts", async () => {
@@ -185,9 +221,10 @@ describe("mobile OpenAPI generation", () => {
     expect(agent.notes.join(" ")).toContain(
       "@anthropic-ai/claude-agent-sdk@0.3.210",
     );
-    expect(agent.notes.join(" ")).toContain("no PocketPilot wrapper");
+    expect(agent.notes.join(" ")).toContain("agent.checkpoint");
     expect(agent.notes.join(" ")).toContain("afterCursor query");
     expect(agent.notes.join(" ")).toContain("complete retained active-turn");
+    expect(agent.notes.join(" ")).toContain("provider-native objects");
     expect(agent.notes.join(" ")).toContain("approval.requested");
     expect(agent.notes.join(" ")).toContain("method-specific native response");
     expect(agent.notes.join(" ")).toContain("TASK_CONTROL_NOT_SUPPORTED");

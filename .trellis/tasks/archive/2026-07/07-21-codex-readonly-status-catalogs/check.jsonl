@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/agent-provider-contracts.md", "reason": "Verify closed statusCatalogs is sanitized and only reviewed fields are published"}
+{"file": ".trellis/spec/backend/codex-app-server-contracts.md", "reason": "Verify only reviewed read methods/notifications are allowed and projections omit secrets/paths"}
+{"file": ".trellis/spec/backend/task-runtime-contracts.md", "reason": "Verify catalog reads stay on P3 without capacity reservation"}
+{"file": ".trellis/spec/backend/api-documentation-contracts.md", "reason": "Verify OpenAPI and docs match capability and method contracts"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify no forbidden patterns, credential/path leakage, or unrelated churn"}
+{"file": ".trellis/tasks/07-21-codex-readonly-status-catalogs/research/codex-app-server.schema.json/ClientRequest.json", "reason": "Cross-check implemented methods against native schema"}
+{"file": ".trellis/tasks/07-21-codex-readonly-status-catalogs/research/codex-app-server.schema.json/ServerNotification.json", "reason": "Cross-check implemented notifications against native schema"}

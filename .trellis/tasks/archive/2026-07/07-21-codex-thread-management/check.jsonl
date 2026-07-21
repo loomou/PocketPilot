@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/agent-provider-contracts.md", "reason": "Verify closed threadManagement capability and provider-neutral conversation APIs"}
+{"file": ".trellis/spec/backend/codex-app-server-contracts.md", "reason": "Verify REST lifecycle ownership, no path-based fork, and path hygiene"}
+{"file": ".trellis/spec/backend/task-runtime-contracts.md", "reason": "Verify fork task creation and delete-bound-task close semantics"}
+{"file": ".trellis/spec/backend/api-documentation-contracts.md", "reason": "Verify OpenAPI/docs match implemented routes and capabilities"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify no forbidden patterns, secret/path leakage, or unrelated churn"}
+{"file": ".trellis/tasks/archive/2026-07/07-21-codex-readonly-status-catalogs/research/codex-app-server.schema.json/ClientRequest.json", "reason": "Cross-check implemented native methods against schema"}

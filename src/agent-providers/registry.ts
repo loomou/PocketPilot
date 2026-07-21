@@ -3,6 +3,7 @@ import type {
   AgentCapabilitySnapshot,
   AgentProviderAdapter,
   AgentProviderDescriptor,
+  AgentProviderReadinessRefreshOptions,
 } from "./types.js";
 
 /** Owns provider registration and diagnostics-safe discovery. */
@@ -30,6 +31,33 @@ export class AgentProviderRegistry {
 
   public descriptor(providerId: string): AgentProviderDescriptor {
     return sanitizeDescriptor(this.get(providerId).descriptor);
+  }
+
+  /**
+   * Refreshes every registered adapter's readiness cache when supported.
+   * Adapters without `refreshReadiness` keep their current descriptor.
+   */
+  public async refreshDescriptors(
+    options: AgentProviderReadinessRefreshOptions = {},
+  ): Promise<void> {
+    await Promise.all(
+      [...this.#providers.values()].map(async (adapter) => {
+        await adapter.refreshReadiness?.(options);
+      }),
+    );
+  }
+
+  /**
+   * Refreshes one provider's readiness cache when supported, then returns the
+   * sanitized descriptor snapshot.
+   */
+  public async refreshDescriptor(
+    providerId: string,
+    options: AgentProviderReadinessRefreshOptions = {},
+  ): Promise<AgentProviderDescriptor> {
+    const adapter = this.get(providerId);
+    await adapter.refreshReadiness?.(options);
+    return sanitizeDescriptor(adapter.descriptor);
   }
 
   public get(providerId: string): AgentProviderAdapter {
@@ -84,12 +112,116 @@ function sanitizeCapabilities(
     approvals: capabilities.approvals,
     attachments: capabilities.attachments,
     effort: capabilities.effort,
+    historyFilters: sanitizeHistoryFilters(capabilities.historyFilters),
     historyPagination: capabilities.historyPagination,
     interrupt: capabilities.interrupt,
     modes: capabilities.modes,
     models: capabilities.models,
+    nativeActions: sanitizeNativeActions(capabilities.nativeActions),
     newConversation: capabilities.newConversation,
     resumeConversation: capabilities.resumeConversation,
+    statusCatalogs: sanitizeStatusCatalogs(capabilities.statusCatalogs),
     streamProtocol: capabilities.streamProtocol,
+    threadManagement: sanitizeThreadManagement(capabilities.threadManagement),
   };
+}
+
+function sanitizeHistoryFilters(
+  historyFilters: AgentCapabilitySnapshot["historyFilters"] | undefined | null,
+): AgentCapabilitySnapshot["historyFilters"] {
+  if (
+    historyFilters === undefined ||
+    historyFilters === null ||
+    typeof historyFilters !== "object"
+  ) {
+    return {
+      includeSystemMessages: false,
+    };
+  }
+  return {
+    includeSystemMessages: historyFilters.includeSystemMessages === true,
+  };
+}
+
+function sanitizeThreadManagement(
+  threadManagement: AgentCapabilitySnapshot["threadManagement"] | undefined,
+): AgentCapabilitySnapshot["threadManagement"] {
+  if (threadManagement === undefined || typeof threadManagement !== "object") {
+    return {
+      archive: false,
+      delete: false,
+      fork: false,
+      includeArchived: false,
+      search: false,
+      unarchive: false,
+    };
+  }
+  return {
+    archive: threadManagement.archive === true,
+    delete: threadManagement.delete === true,
+    fork: threadManagement.fork === true,
+    includeArchived: threadManagement.includeArchived === true,
+    search: threadManagement.search === true,
+    unarchive: threadManagement.unarchive === true,
+  };
+}
+
+function sanitizeStatusCatalogs(
+  statusCatalogs: AgentCapabilitySnapshot["statusCatalogs"] | undefined,
+): AgentCapabilitySnapshot["statusCatalogs"] {
+  if (statusCatalogs === undefined || typeof statusCatalogs !== "object") {
+    return {};
+  }
+  const sanitized: AgentCapabilitySnapshot["statusCatalogs"] = {};
+  if (statusCatalogs.account === true) {
+    sanitized.account = true;
+  }
+  if (statusCatalogs.hooks === true) {
+    sanitized.hooks = true;
+  }
+  if (statusCatalogs.mcpServers === true) {
+    sanitized.mcpServers = true;
+  }
+  if (statusCatalogs.rateLimits === true) {
+    sanitized.rateLimits = true;
+  }
+  if (statusCatalogs.skills === true) {
+    sanitized.skills = true;
+  }
+  return sanitized;
+}
+
+function sanitizeNativeActions(
+  nativeActions: AgentCapabilitySnapshot["nativeActions"],
+): AgentCapabilitySnapshot["nativeActions"] {
+  const sanitized: AgentCapabilitySnapshot["nativeActions"] = {};
+  if (nativeActions.review !== undefined) {
+    sanitized.review = {
+      availability: "idle",
+      deliveries: ["inline"] as const,
+      method: nativeActions.review.method,
+      startsTurn: true,
+      targetTypes: [
+        "uncommittedChanges",
+        "baseBranch",
+        "commit",
+        "custom",
+      ] as const,
+    };
+  }
+  if (nativeActions.rename !== undefined) {
+    sanitized.rename = {
+      availability: "always",
+      method: nativeActions.rename.method,
+      startsTurn: false,
+    };
+  }
+  if (nativeActions.compact !== undefined) {
+    sanitized.compact = {
+      availability: "idle",
+      method: nativeActions.compact.method,
+      startsTurn: true,
+    };
+  }
+  return sanitized;
 }

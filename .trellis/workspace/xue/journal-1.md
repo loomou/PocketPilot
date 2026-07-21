@@ -539,3 +539,290 @@ Documented the hard project rule that commits must be created on non-main branch
 ### Next Steps
 
 - None - task complete
+
+## Session 17: Codex native action capabilities
+
+**Date**: 2026-07-21
+**Task**: Codex native action capabilities
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Implemented Codex nativeActions for review/rename/compact, set attachments false, shared turn lifecycle with non-steerable review/compact, updated contracts/docs/tests, and committed the feature.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `effa056` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+## Session 18: Codex read-only status catalogs
+
+**Date**: 2026-07-21
+**Task**: Codex read-only status catalogs
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Implemented Codex P3 status catalogs (account/quota/skills/hooks/MCP), closed statusCatalogs discovery, path-safe projections, reviewed readiness notifications, docs/tests/contracts, and committed the feature.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `af11bb6` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+## Session 19: Codex REST thread management
+
+**Date**: 2026-07-21
+**Task**: Codex REST thread management
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Implemented Codex conversation list filters plus REST fork/archive/unarchive/delete with confirm gates, closed threadManagement, fork task creation, delete-bound-task close, docs/tests/contracts, and committed the feature.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `80a8bda` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+## Session 20: Provider readiness and live coverage
+
+**Date**: 2026-07-21
+**Task**: Provider readiness and live coverage
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Implemented bounded provider readiness probes (30s TTL, single-flight, stable reason codes) for Codex/Claude discovery, expanded opt-in Codex live coverage for status catalogs and disposable fork cleanup, updated contracts/docs/tests, and archived the task.
+
+### Main Changes
+
+- Added `refreshReadiness` with TTL caching and single-flight refresh on discovery/capabilities.
+- Codex App Server initialize probe maps install/version/unhealthy statuses without path/secret leakage.
+- Claude adapter readiness probe with matching reason-code projection.
+- Expanded `pnpm test:codex:live` for status catalogs + disposable thread cleanup.
+- Updated agent-provider and codex-app-server contracts for readiness/live harness rules.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8b21262` | feat(providers): add readiness refresh and expand Codex live coverage |
+| `e590a18` | docs(spec): record provider readiness and live harness contracts |
+| `785eea1` | chore(task): archive 07-21-provider-readiness-live-coverage |
+
+### Testing
+
+- Unit/route/adapter readiness tests (TTL, single-flight, provisional probe, route refresh).
+- Opt-in live suite remains skipped under ordinary `pnpm test`.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Parent audit `07-20-claude-code-parity-audit` is 4/4 children done; update findings/archive when ready.
+- Remaining planning tasks: `07-19-claude-session-id-timing`, `07-19-enable-sdk-streaming`.
+
+## Session 21: Parity audit closeout
+
+**Date**: 2026-07-21
+**Task**: Close parent parity audit and leftover 07-19 planning tasks
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Updated the parent Claude/Codex parity audit findings to mark children 1–4 done, residual open items (history options, P3 replay checkpoint, deferred attachments), then archived the parent audit plus leftover completed 07-19 research/streaming planning tasks.
+
+### Main Changes
+
+- Marked P1/P2 child tasks done in `07-20-claude-code-parity-audit/prd.md` with residual open map.
+- Added completion notes to `07-19-claude-session-id-timing` and `07-19-enable-sdk-streaming`.
+- Archived all three planning tasks; task queue is empty.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `74cd7c5` | chore(task): archive 07-19-claude-session-id-timing |
+| `12eb51e` | chore(task): archive 07-19-enable-sdk-streaming |
+| `9cd4293` | chore(task): archive 07-20-claude-code-parity-audit |
+
+### Testing
+
+- No runtime code changes; archive-only closeout.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Optional next implementation: P2 history options contracts, or P3 Codex replay checkpoint.
+- Attachments remain deferred.
+
+## Session 22: Codex history options contracts
+
+**Date**: 2026-07-21
+**Task**: Codex history options contracts
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Made the common includeSystemMessages history filter provider-honest: closed historyFilters capability (Claude true / Codex false), reject Codex true with HISTORY_FILTER_NOT_SUPPORTED, keep native Codex rows unchanged, update docs/tests/contracts.
+
+### Main Changes
+
+- Added required closed `historyFilters: { includeSystemMessages: boolean }`.
+- Registry sanitizer + null-safe default false closed object.
+- Codex readConversation rejects includeSystemMessages=true before native list.
+- OpenAPI, mobile guides, and backend contracts updated.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a4c23b7` | feat(providers): advertise historyFilters and reject Codex includeSystemMessages=true |
+| `3ebb04f` | docs(spec): record historyFilters capability and HISTORY_FILTER_NOT_SUPPORTED |
+| `5052816` | chore(task): archive 07-21-codex-history-options |
+
+### Testing
+
+- Targeted provider/registry/route/OpenAPI tests passed; typecheck/lint clean.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Optional: P3 Codex replay checkpoint.
+- Attachments remain deferred.
+
+## Session 23: Codex replay checkpoint
+
+**Date**: 2026-07-21
+**Task**: Codex replay checkpoint
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Exposed a subscribe-time out-of-band agent.checkpoint on the Codex Agent WebSocket so clients can reconnect with a known afterCursor without embedding PocketPilot metadata in native Codex frames. Claude streams unchanged. Docs/contracts/tests updated; task archived.
+
+### Main Changes
+
+- CodexNativeJournal.subscribe emits one agent.checkpoint before retained replay.
+- Payload: provider=codex, cursor=latestCursor|null.
+- Mobile/OpenAPI docs describe checkpoint exception and reconnect guidance.
+- Backend contracts record Codex-only stream purity exception.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1b22c9a` | feat(codex): emit subscribe-time agent.checkpoint for reconnect cursors |
+| `fa3a1ab` | docs(spec): record Codex agent.checkpoint reconnect contract |
+| `ed4f025` | chore(task): archive 07-21-codex-replay-checkpoint |
+
+### Testing
+
+- Full suite 190 passed / 4 skipped; typecheck/lint clean.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Attachments remain deferred.
+- Optional follow-up: per-publish checkpoints for long-turn weak-network efficiency.
+
+## Session 24: Polish mobile integration docs
+
+**Date**: 2026-07-21
+**Task**: Polish mobile integration docs for parity
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Rewrote Codex mobile integration guides (en/zh) and expanded the shared mobile guides for multi-provider parity: closed capabilities, full conversation REST lifecycle, historyFilters honesty, agent.checkpoint reconnect, capability-driven checklist, and error recovery. Light app-server guide cross-link polish only.
+
+### Main Changes
+
+- Full client-path rewrite of Codex mobile guides.
+- Multi-provider expansion of general mobile guides (REST inventory + checklist).
+- Fixed delete wording terminals → terminates during check.
+- Archived docs polish task.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `27c182b` | docs(mobile): rewrite Claude/Codex parity integration guides |
+| `2ccb433` | chore(task): archive 07-21-polish-mobile-integration-docs |
+
+### Testing
+
+- `pnpm test -- test/api-docs/mobile-openapi.test.ts` passed during check.
+- Keyword/structure parity greps for en/zh guides.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Optional: open PR for `audit/claude-code-parity`.
+- Attachments remain deferred; optional per-publish checkpoint / safety notifications.

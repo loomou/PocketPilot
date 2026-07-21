@@ -49,6 +49,16 @@ import { WorkspaceAuthorizationCoordinator } from "../../src/tasks/workspace-aut
 
 const deviceId = "00000000-0000-4000-8000-000000000001";
 
+function requireTaskResult(result: {
+  action: string;
+  task: import("../../src/tasks/task-types.js").TaskSnapshot | null;
+}): import("../../src/tasks/task-types.js").TaskSnapshot {
+  if (result.task === null) {
+    throw new Error(`expected task for action ${result.action}`);
+  }
+  return result.task;
+}
+
 describe("TaskManager", () => {
   const connections: StorageConnection[] = [];
   const managers: TaskManager[] = [];
@@ -99,11 +109,13 @@ describe("TaskManager", () => {
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
     );
 
-    expect(first.task.state).toBe("idle");
-    expect(second.task.initialCwd).toBe(first.task.initialCwd);
-    await manager.submitSdkMessage(sdkInput(first.task.id));
-    await manager.submitSdkMessage(sdkInput(second.task.id));
-    await manager.submitSdkMessage(sdkInput(third.task.id));
+    expect(requireTaskResult(first).state).toBe("idle");
+    expect(requireTaskResult(second).initialCwd).toBe(
+      requireTaskResult(first).initialCwd,
+    );
+    await manager.submitSdkMessage(sdkInput(requireTaskResult(first).id));
+    await manager.submitSdkMessage(sdkInput(requireTaskResult(second).id));
+    await manager.submitSdkMessage(sdkInput(requireTaskResult(third).id));
 
     await expect(
       manager.createTask(
@@ -111,13 +123,17 @@ describe("TaskManager", () => {
       ),
     ).rejects.toMatchObject({ code: "CONCURRENT_TASK_LIMIT_REACHED" });
 
-    fixture.sessionFor(first.task.id).emitState("idle");
-    await waitFor(() => manager.getTask(first.task.id).state === "idle");
+    fixture.sessionFor(requireTaskResult(first).id).emitState("idle");
+    await waitFor(
+      () => manager.getTask(requireTaskResult(first).id).state === "idle",
+    );
 
     const fourth = await manager.createTask(
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
     );
-    expect(fourth.task.initialCwd).toBe(first.task.initialCwd);
+    expect(requireTaskResult(fourth).initialCwd).toBe(
+      requireTaskResult(first).initialCwd,
+    );
   });
 
   it("lets an executing turn finish but rechecks authorization before the next message", async () => {
@@ -328,25 +344,27 @@ describe("TaskManager", () => {
     const created = await fixture.manager.createTask(
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
     );
-    const appendOnly = sdkInput(created.task.id, "context only", {
+    const appendOnly = sdkInput(requireTaskResult(created).id, "context only", {
       priority: "later",
       shouldQuery: false,
     });
 
     const appended = await fixture.manager.submitSdkMessage(appendOnly);
-    const session = fixture.sessionFor(created.task.id);
+    const session = fixture.sessionFor(requireTaskResult(created).id);
 
     expect(appended.state).toBe("idle");
     expect(session.submissions).toEqual([appendOnly.message]);
     expect(fixture.eventSink.begunTurns).toEqual([]);
 
-    const querying = sdkInput(created.task.id, "now answer", {
+    const querying = sdkInput(requireTaskResult(created).id, "now answer", {
       priority: "next",
     });
     const executing = await fixture.manager.submitSdkMessage(querying);
     expect(executing.state).toBe("executing");
     expect(session.submissions).toEqual([appendOnly.message, querying.message]);
-    expect(fixture.eventSink.begunTurns).toEqual([created.task.id]);
+    expect(fixture.eventSink.begunTurns).toEqual([
+      requireTaskResult(created).id,
+    ]);
   });
 
   it("logs task and SDK lifecycle without conversation or configuration content", async () => {
@@ -370,23 +388,25 @@ describe("TaskManager", () => {
       }),
     );
     await fixture.manager.submitSdkMessage(
-      sdkInput(created.task.id, "sensitive user prompt"),
+      sdkInput(requireTaskResult(created).id, "sensitive user prompt"),
     );
-    const session = fixture.sessionFor(created.task.id);
+    const session = fixture.sessionFor(requireTaskResult(created).id);
     const decision = session.requestApproval("approval-observable");
     await waitFor(
       () =>
-        fixture.manager.getTask(created.task.id).state === "awaiting_approval",
+        fixture.manager.getTask(requireTaskResult(created).id).state ===
+        "awaiting_approval",
     );
     await fixture.manager.resolveApproval({
-      ...operationInput(created.task.id),
+      ...operationInput(requireTaskResult(created).id),
       requestId: "approval-observable",
       result: { behavior: "allow" },
     });
     await expect(decision).resolves.toMatchObject({ behavior: "allow" });
     session.emitResult();
     await waitFor(
-      () => fixture.manager.getTask(created.task.id).state === "idle",
+      () =>
+        fixture.manager.getTask(requireTaskResult(created).id).state === "idle",
     );
 
     const output = logs.value();
@@ -420,8 +440,10 @@ describe("TaskManager", () => {
         workspaceRiskAccepted: true,
       }),
     );
-    await fixture.manager.submitSdkMessage(sdkInput(created.task.id));
-    const session = fixture.sessionFor(created.task.id);
+    await fixture.manager.submitSdkMessage(
+      sdkInput(requireTaskResult(created).id),
+    );
+    const session = fixture.sessionFor(requireTaskResult(created).id);
 
     expect(session.options.model).toBe("haiku");
     expect(session.options.permissionMode).toBe("default");
@@ -429,24 +451,25 @@ describe("TaskManager", () => {
 
     await waitFor(
       () =>
-        fixture.manager.getTask(created.task.id).state === "awaiting_approval",
+        fixture.manager.getTask(requireTaskResult(created).id).state ===
+        "awaiting_approval",
     );
     const interrupted = await fixture.manager.interruptTask(
-      operationInput(created.task.id),
+      operationInput(requireTaskResult(created).id),
     );
 
-    expect(interrupted.task.state).toBe("idle");
+    expect(requireTaskResult(interrupted).state).toBe("idle");
     await expect(decision).rejects.toBeInstanceOf(ToolApprovalCancelledError);
     await expect(
       fixture.manager.resolveApproval({
-        ...operationInput(created.task.id),
+        ...operationInput(requireTaskResult(created).id),
         requestId: "approval-1",
         result: { behavior: "allow" },
       }),
     ).rejects.toMatchObject({ code: "STALE_APPROVAL" });
 
     await fixture.manager.submitSdkMessage(
-      sdkInput(created.task.id, "continue"),
+      sdkInput(requireTaskResult(created).id, "continue"),
     );
     expect(session.submissions).toHaveLength(2);
   });
@@ -494,21 +517,23 @@ describe("TaskManager", () => {
     const created = await fixture.manager.createTask(
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
     );
-    await fixture.manager.submitSdkMessage(sdkInput(created.task.id));
-    const session = fixture.sessionFor(created.task.id);
+    await fixture.manager.submitSdkMessage(
+      sdkInput(requireTaskResult(created).id),
+    );
+    const session = fixture.sessionFor(requireTaskResult(created).id);
 
     const model = await fixture.manager.setModel({
-      ...operationInput(created.task.id),
+      ...operationInput(requireTaskResult(created).id),
       model: "sonnet",
     });
     const permission = await fixture.manager.setPermissionMode({
-      ...operationInput(created.task.id),
+      ...operationInput(requireTaskResult(created).id),
       permissionMode: "plan",
     });
-    expect(permission.task.state).toBe("executing");
-    expect(model.task.state).toBe("executing");
+    expect(requireTaskResult(permission).state).toBe("executing");
+    expect(requireTaskResult(model).state).toBe("executing");
     expect(session.permissionModes).toEqual(["plan"]);
-    expect(model.task.model).toBe("sonnet");
+    expect(requireTaskResult(model).model).toBe("sonnet");
     expect(session.models).toEqual(["sonnet"]);
   });
 
@@ -517,10 +542,14 @@ describe("TaskManager", () => {
     const created = await fixture.manager.createTask(
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
     );
-    await fixture.manager.submitSdkMessage(sdkInput(created.task.id));
-    fixture.sessionFor(created.task.id).emitState("running");
+    await fixture.manager.submitSdkMessage(
+      sdkInput(requireTaskResult(created).id),
+    );
+    fixture.sessionFor(requireTaskResult(created).id).emitState("running");
     await waitFor(
-      () => fixture.manager.getTask(created.task.id).sdkSessionId !== null,
+      () =>
+        fixture.manager.getTask(requireTaskResult(created).id).sdkSessionId !==
+        null,
     );
 
     const recoveredSessions: FakeTaskSession[] = [];
@@ -540,9 +569,11 @@ describe("TaskManager", () => {
     managers.push(recovered);
 
     expect(recovered.recoverFromUnexpectedRestart()).toBe(1);
-    expect(recovered.getTask(created.task.id).state).toBe("interrupted");
+    expect(recovered.getTask(requireTaskResult(created).id).state).toBe(
+      "interrupted",
+    );
     await expect(
-      recovered.submitSdkMessage(sdkInput(created.task.id)),
+      recovered.submitSdkMessage(sdkInput(requireTaskResult(created).id)),
     ).rejects.toMatchObject({ code: "TASK_INTERRUPTED" });
 
     await fixture.authorizationCoordinator.replaceTaskRuntimeSettings({
@@ -550,18 +581,22 @@ describe("TaskManager", () => {
       workspaceRoots: [],
     });
     await expect(
-      recovered.resumeTask(operationInput(created.task.id)),
+      recovered.resumeTask(operationInput(requireTaskResult(created).id)),
     ).rejects.toMatchObject({ code: "WORKSPACE_NOT_AUTHORIZED" });
-    expect(recovered.getTask(created.task.id).state).toBe("interrupted");
+    expect(recovered.getTask(requireTaskResult(created).id).state).toBe(
+      "interrupted",
+    );
     await fixture.authorizationCoordinator.replaceTaskRuntimeSettings({
       concurrentTaskCapacity: 3,
       workspaceRoots: [fixture.workspace],
     });
 
-    const resumed = await recovered.resumeTask(operationInput(created.task.id));
-    expect(resumed.task.state).toBe("idle");
+    const resumed = await recovered.resumeTask(
+      operationInput(requireTaskResult(created).id),
+    );
+    expect(requireTaskResult(resumed).state).toBe("idle");
     expect(recoveredSessions[0]?.options.resume).toBe(
-      fixture.manager.getTask(created.task.id).sdkSessionId,
+      fixture.manager.getTask(requireTaskResult(created).id).sdkSessionId,
     );
   });
 
@@ -570,7 +605,7 @@ describe("TaskManager", () => {
     const created = await fixture.manager.createTask(
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
     );
-    const first = sdkInput(created.task.id, "first", {
+    const first = sdkInput(requireTaskResult(created).id, "first", {
       priority: "next",
       shouldQuery: true,
       timestamp: "2026-07-17T00:00:00.000Z",
@@ -578,7 +613,7 @@ describe("TaskManager", () => {
     });
 
     await fixture.manager.submitSdkMessage(first);
-    const session = fixture.sessionFor(created.task.id);
+    const session = fixture.sessionFor(requireTaskResult(created).id);
     expect(session.submissions[0]).toBe(first.message);
 
     const decision = session.requestApproval("approval-full", {
@@ -599,10 +634,11 @@ describe("TaskManager", () => {
     });
     await waitFor(
       () =>
-        fixture.manager.getTask(created.task.id).state === "awaiting_approval",
+        fixture.manager.getTask(requireTaskResult(created).id).state ===
+        "awaiting_approval",
     );
 
-    const later = sdkInput(created.task.id, "later", {
+    const later = sdkInput(requireTaskResult(created).id, "later", {
       priority: "now",
       shouldQuery: false,
     });
@@ -652,7 +688,7 @@ describe("TaskManager", () => {
       ],
     } satisfies PermissionResult;
     await fixture.manager.resolveApproval({
-      ...operationInput(created.task.id),
+      ...operationInput(requireTaskResult(created).id),
       requestId: "approval-full",
       result,
     });
@@ -683,19 +719,24 @@ describe("TaskManager", () => {
     const created = await fixture.manager.createTask(
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
     );
-    await fixture.manager.submitSdkMessage(sdkInput(created.task.id, "first"));
-    const session = fixture.sessionFor(created.task.id);
     await fixture.manager.submitSdkMessage(
-      sdkInput(created.task.id, "queued", { priority: "next" }),
+      sdkInput(requireTaskResult(created).id, "first"),
+    );
+    const session = fixture.sessionFor(requireTaskResult(created).id);
+    await fixture.manager.submitSdkMessage(
+      sdkInput(requireTaskResult(created).id, "queued", { priority: "next" }),
     );
 
     session.emitResult();
     await waitFor(() => fixture.eventSink.begunTurns.length === 2);
-    expect(fixture.manager.getTask(created.task.id).state).toBe("executing");
+    expect(fixture.manager.getTask(requireTaskResult(created).id).state).toBe(
+      "executing",
+    );
 
     session.emitResult();
     await waitFor(
-      () => fixture.manager.getTask(created.task.id).state === "idle",
+      () =>
+        fixture.manager.getTask(requireTaskResult(created).id).state === "idle",
     );
   });
 
@@ -707,18 +748,22 @@ describe("TaskManager", () => {
     const second = await fixture.manager.createTask(
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
     );
-    await fixture.manager.submitSdkMessage(sdkInput(first.task.id));
-    const session = fixture.sessionFor(first.task.id);
+    await fixture.manager.submitSdkMessage(
+      sdkInput(requireTaskResult(first).id),
+    );
+    const session = fixture.sessionFor(requireTaskResult(first).id);
 
     const closed = await fixture.manager.closeTask(
-      operationInput(first.task.id),
+      operationInput(requireTaskResult(first).id),
     );
-    expect(closed.task.state).toBe("terminal");
+    expect(requireTaskResult(closed).state).toBe("terminal");
     expect(session.interruptCalls).toBe(1);
     expect(session.closed).toBe(true);
 
     await fixture.manager.shutdown();
-    expect(fixture.manager.getTask(second.task.id).state).toBe("terminal");
+    expect(fixture.manager.getTask(requireTaskResult(second).id).state).toBe(
+      "terminal",
+    );
   });
 
   it("normalizes parent roots and P0-revokes every uncovered task", async () => {
@@ -748,7 +793,9 @@ describe("TaskManager", () => {
       removedRedundantPaths: [child],
       result: "added",
     });
-    expect(fixture.manager.getTask(created.task.id).state).toBe("idle");
+    expect(fixture.manager.getTask(requireTaskResult(created).id).state).toBe(
+      "idle",
+    );
     expect(
       readTaskRuntimeSettings(fixture.settingsRepository).workspaceRoots,
     ).toEqual([independent, fixture.workspace]);
@@ -768,8 +815,10 @@ describe("TaskManager", () => {
     });
 
     expect(removed.stoppedTaskCount).toBe(1);
-    expect(fixture.manager.getTask(created.task.id).state).toBe("terminal");
-    expect(closedTaskIds).toEqual([created.task.id]);
+    expect(fixture.manager.getTask(requireTaskResult(created).id).state).toBe(
+      "terminal",
+    );
+    expect(closedTaskIds).toEqual([requireTaskResult(created).id]);
     expect(
       readTaskRuntimeSettings(fixture.settingsRepository).workspaceRoots,
     ).toEqual([independent]);
@@ -786,7 +835,9 @@ describe("TaskManager", () => {
       selectedPath: child,
       volumeRootRiskAccepted: false,
     });
-    expect(fixture.manager.getTask(created.task.id).state).toBe("terminal");
+    expect(fixture.manager.getTask(requireTaskResult(created).id).state).toBe(
+      "terminal",
+    );
   });
 
   it("preserves a concurrent capacity save while adding a root", async () => {
@@ -855,15 +906,17 @@ describe("TaskManager", () => {
     const created = await fixture.manager.createTask(
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
     );
-    await fixture.manager.submitSdkMessage(sdkInput(created.task.id));
-    const session = fixture.sessionFor(created.task.id);
+    await fixture.manager.submitSdkMessage(
+      sdkInput(requireTaskResult(created).id),
+    );
+    const session = fixture.sessionFor(requireTaskResult(created).id);
     const modelGate = session.deferNextModel();
     const modelInput = {
-      ...operationInput(created.task.id),
+      ...operationInput(requireTaskResult(created).id),
       model: "opus",
     };
     const permissionInput = {
-      ...operationInput(created.task.id),
+      ...operationInput(requireTaskResult(created).id),
       permissionMode: "plan",
     };
 
@@ -871,16 +924,16 @@ describe("TaskManager", () => {
     await modelGate.started;
     const permission = fixture.manager.setPermissionMode(permissionInput);
     const interrupted = await fixture.manager.interruptTask(
-      operationInput(created.task.id),
+      operationInput(requireTaskResult(created).id),
     );
 
-    expect(interrupted.task.state).toBe("idle");
+    expect(requireTaskResult(interrupted).state).toBe("idle");
     await expect(permission).rejects.toMatchObject({
       code: "TASK_OPERATION_SUPERSEDED",
     });
     await expect(
       fixture.manager.setPermissionMode({
-        ...operationInput(created.task.id),
+        ...operationInput(requireTaskResult(created).id),
         permissionMode: "acceptEdits",
       }),
     ).resolves.toMatchObject({ action: "permission-mode-changed" });
@@ -900,24 +953,30 @@ describe("TaskManager", () => {
     const created = await fixture.manager.createTask(
       createTaskInput(fixture.workspace, { workspaceRiskAccepted: true }),
     );
-    await fixture.manager.submitSdkMessage(sdkInput(created.task.id));
-    const session = fixture.sessionFor(created.task.id);
+    await fixture.manager.submitSdkMessage(
+      sdkInput(requireTaskResult(created).id),
+    );
+    const session = fixture.sessionFor(requireTaskResult(created).id);
     const interruptGate = session.deferNextInterrupt();
 
     const interrupt = fixture.manager.interruptTask(
-      operationInput(created.task.id),
+      operationInput(requireTaskResult(created).id),
     );
     await interruptGate.started;
-    expect(fixture.manager.getTask(created.task.id).state).toBe("interrupted");
+    expect(fixture.manager.getTask(requireTaskResult(created).id).state).toBe(
+      "interrupted",
+    );
     const closed = await fixture.manager.closeTask(
-      operationInput(created.task.id),
+      operationInput(requireTaskResult(created).id),
     );
     interruptGate.release();
     const interrupted = await interrupt;
 
-    expect(closed.task.state).toBe("terminal");
-    expect(interrupted.task.state).toBe("terminal");
-    expect(fixture.manager.getTask(created.task.id).state).toBe("terminal");
+    expect(requireTaskResult(closed).state).toBe("terminal");
+    expect(requireTaskResult(interrupted).state).toBe("terminal");
+    expect(fixture.manager.getTask(requireTaskResult(created).id).state).toBe(
+      "terminal",
+    );
   });
 });
 

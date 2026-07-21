@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/agent-provider-contracts.md", "reason": "Capability sanitizer rules, closed capability objects, descriptor projection, history route contracts"}
+{"file": ".trellis/spec/backend/codex-app-server-contracts.md", "reason": "Codex history is native turn/item rows; no Claude system-message filtering; REST history ownership"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "TaskError code catalog and HTTP status mapping for new HISTORY_FILTER_NOT_SUPPORTED"}
+{"file": ".trellis/spec/backend/api-documentation-contracts.md", "reason": "OpenAPI capability schema and mobile docs consistency for historyFilters"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Test hygiene and closed capability fixture updates"}

@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/agent-provider-contracts.md", "reason": "Capability discovery sanitizer and closed statusCatalogs publication rules"}
+{"file": ".trellis/spec/backend/codex-app-server-contracts.md", "reason": "Codex method allowlist, P3 reads, notification filter, and path hygiene contracts"}
+{"file": ".trellis/spec/backend/task-runtime-contracts.md", "reason": "Shared P3 readable path and capacity boundaries for non-turn catalog reads"}
+{"file": ".trellis/spec/backend/api-documentation-contracts.md", "reason": "OpenAPI capability schema consistency for provider routes"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Code standards for adapter/protocol projection changes"}
+{"file": ".trellis/tasks/07-21-codex-readonly-status-catalogs/research/codex-app-server.schema.json/ClientRequest.json", "reason": "Authoritative method names and params for account/skills/hooks/mcp status reads"}
+{"file": ".trellis/tasks/07-21-codex-readonly-status-catalogs/research/codex-app-server.schema.json/ServerNotification.json", "reason": "Authoritative notification names for D1 status invalidation events"}

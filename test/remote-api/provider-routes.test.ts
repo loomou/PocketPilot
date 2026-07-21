@@ -44,6 +44,10 @@ describe("provider routes", () => {
     expect(providers.json()).toEqual({
       providers: [adapter.descriptor],
     });
+    expect(providers.json().providers[0].capabilities.nativeActions).toEqual(
+      {},
+    );
+    expect(providers.json().providers[0].capabilities.attachments).toBe(false);
 
     const list = await app.inject({
       headers: { authorization: "Bearer access-token" },
@@ -152,6 +156,354 @@ describe("provider routes", () => {
     });
     expect(calls).toEqual([]);
   });
+
+  it("surfaces HISTORY_FILTER_NOT_SUPPORTED from readConversation as 409", async () => {
+    const calls: Array<{ name: string; value: unknown }> = [];
+    const adapter = fakeProvider(calls);
+    adapter.readConversation = async (input) => {
+      calls.push({ name: "read", value: input });
+      if (input.includeSystemMessages === true) {
+        throw new TaskError(
+          "HISTORY_FILTER_NOT_SUPPORTED",
+          409,
+          "This provider does not support includeSystemMessages.",
+        );
+      }
+      return {
+        items: [{ nativeHistory: true }],
+        page: { cursor: null, hasMore: false },
+      };
+    };
+    const runtime = new AgentRuntimeManager(
+      new AgentProviderRegistry([adapter]),
+      {
+        authorizeWorkspace: async (workspace) => workspace,
+        getTask: () => taskSnapshot("fake"),
+      },
+    );
+    const app = await buildRemoteApiApp({
+      agentRuntimeManager: runtime,
+      deviceAuthService: deviceAuthService(),
+    });
+    apps.push(app);
+
+    const rejected = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "GET",
+      url: "/v1/providers/fake/conversations/native-1?workspace=C%3A%5Cworkspace&includeSystemMessages=true",
+    });
+    expect(rejected.statusCode).toBe(409);
+    expect(rejected.json()).toEqual({
+      code: "HISTORY_FILTER_NOT_SUPPORTED",
+      message: "This provider does not support includeSystemMessages.",
+    });
+    expect(calls).toEqual([
+      {
+        name: "read",
+        value: {
+          includeSystemMessages: true,
+          nativeConversationId: "native-1",
+          workspace: "C:\\workspace",
+        },
+      },
+    ]);
+
+    calls.length = 0;
+    const allowed = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "GET",
+      url: "/v1/providers/fake/conversations/native-1?workspace=C%3A%5Cworkspace&includeSystemMessages=false",
+    });
+    expect(allowed.statusCode).toBe(200);
+    expect(allowed.json()).toEqual({
+      messages: [{ nativeHistory: true }],
+      page: { cursor: null, hasMore: false },
+    });
+    expect(calls).toEqual([
+      {
+        name: "read",
+        value: {
+          includeSystemMessages: false,
+          nativeConversationId: "native-1",
+          workspace: "C:\\workspace",
+        },
+      },
+    ]);
+  });
+
+  it("forwards list filters and thread-management operations", async () => {
+    const calls: Array<{ name: string; value: unknown }> = [];
+    const adapter = fakeProvider(calls);
+    const runtime = new AgentRuntimeManager(
+      new AgentProviderRegistry([adapter]),
+      {
+        authorizeWorkspace: async (workspace) => workspace,
+        getTask: () => taskSnapshot("fake"),
+      },
+    );
+    const app = await buildRemoteApiApp({
+      agentRuntimeManager: runtime,
+      deviceAuthService: deviceAuthService(),
+    });
+    apps.push(app);
+
+    const list = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "GET",
+      url: "/v1/providers/fake/conversations?workspace=C%3A%5Cworkspace&includeArchived=true&searchTerm=review",
+    });
+    expect(list.statusCode).toBe(200);
+    expect(calls[0]).toEqual({
+      name: "list",
+      value: {
+        includeArchived: true,
+        searchTerm: "review",
+        workspace: "C:\\workspace",
+      },
+    });
+
+    const operationId = randomUUID();
+    const fork = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "POST",
+      payload: {
+        operationId,
+        workspace: "C:\\workspace",
+        workspaceRiskAccepted: true,
+      },
+      url: "/v1/providers/fake/conversations/native-1/fork",
+    });
+    expect(fork.statusCode).toBe(200);
+    expect(fork.json().action).toBe("forked");
+
+    const archiveUnconfirmed = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "POST",
+      payload: {
+        operationId: randomUUID(),
+        workspace: "C:\\workspace",
+        workspaceRiskAccepted: true,
+      },
+      url: "/v1/providers/fake/conversations/native-1/archive",
+    });
+    expect(archiveUnconfirmed.statusCode).toBe(409);
+    expect(archiveUnconfirmed.json()).toMatchObject({
+      code: "CONFIRMATION_REQUIRED",
+    });
+
+    const archive = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "POST",
+      payload: {
+        confirm: true,
+        operationId: randomUUID(),
+        workspace: "C:\\workspace",
+        workspaceRiskAccepted: true,
+      },
+      url: "/v1/providers/fake/conversations/native-1/archive",
+    });
+    expect(archive.statusCode).toBe(200);
+    expect(archive.json()).toEqual({ action: "archived", task: null });
+
+    const unarchive = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "POST",
+      payload: {
+        operationId: randomUUID(),
+        workspace: "C:\\workspace",
+        workspaceRiskAccepted: true,
+      },
+      url: "/v1/providers/fake/conversations/native-1/unarchive",
+    });
+    expect(unarchive.statusCode).toBe(200);
+    expect(unarchive.json().action).toBe("unarchived");
+
+    const deleteUnconfirmed = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "POST",
+      payload: {
+        operationId: randomUUID(),
+        workspace: "C:\\workspace",
+        workspaceRiskAccepted: true,
+      },
+      url: "/v1/providers/fake/conversations/native-1/delete",
+    });
+    expect(deleteUnconfirmed.statusCode).toBe(409);
+    expect(deleteUnconfirmed.json()).toMatchObject({
+      code: "CONFIRMATION_REQUIRED",
+    });
+
+    const deleteRejected = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "POST",
+      payload: {
+        confirm: false,
+        operationId: randomUUID(),
+        workspace: "C:\\workspace",
+        workspaceRiskAccepted: true,
+      },
+      url: "/v1/providers/fake/conversations/native-1/delete",
+    });
+    expect(deleteRejected.statusCode).toBe(409);
+    expect(deleteRejected.json()).toMatchObject({
+      code: "CONFIRMATION_REQUIRED",
+    });
+
+    const deleted = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "POST",
+      payload: {
+        confirm: true,
+        operationId: randomUUID(),
+        workspace: "C:\\workspace",
+        workspaceRiskAccepted: true,
+      },
+      url: "/v1/providers/fake/conversations/native-1/delete",
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toEqual({ action: "deleted", task: null });
+
+    expect(calls.map((call) => call.name)).toEqual([
+      "list",
+      "fork",
+      "archive",
+      "archive",
+      "unarchive",
+      "delete",
+      "delete",
+      "delete",
+    ]);
+  });
+
+  it("refreshes provider readiness on discovery and capabilities", async () => {
+    let probes = 0;
+    const calls: Array<{ name: string; value: unknown }> = [];
+    const adapter = fakeProvider(calls, "not_installed") as ReturnType<
+      typeof fakeProvider
+    > & {
+      descriptor: {
+        capabilities?: unknown;
+        displayName: string;
+        id: string;
+        protocolVersion?: string;
+        reasonCode?: string;
+        status: string;
+      };
+      refreshReadiness?: () => Promise<void>;
+    };
+    // Keep id consistent with route paths while still starting unavailable.
+    adapter.descriptor = {
+      displayName: "Fake",
+      id: "fake",
+      reasonCode: "STALE",
+      status: "not_installed",
+    };
+    adapter.refreshReadiness = async () => {
+      probes += 1;
+      adapter.descriptor = {
+        capabilities: {
+          activeTurnSteering: true,
+          approvals: false,
+          attachments: false,
+          effort: false,
+          historyFilters: {
+            includeSystemMessages: false,
+          },
+          historyPagination: "cursor",
+          interrupt: true,
+          modes: false,
+          models: false,
+          nativeActions: {},
+          newConversation: true,
+          resumeConversation: true,
+          statusCatalogs: {},
+          streamProtocol: "test",
+          threadManagement: {
+            archive: false,
+            delete: false,
+            fork: false,
+            includeArchived: false,
+            search: false,
+            unarchive: false,
+          },
+        },
+        displayName: "Fake",
+        id: "fake",
+        protocolVersion: "fake-1",
+        status: "available",
+      };
+    };
+    const runtime = new AgentRuntimeManager(
+      new AgentProviderRegistry([adapter]),
+      {
+        authorizeWorkspace: async (workspace) => workspace,
+        getTask: () => taskSnapshot("fake"),
+      },
+    );
+    const app = await buildRemoteApiApp({
+      agentRuntimeManager: runtime,
+      deviceAuthService: deviceAuthService(),
+    });
+    apps.push(app);
+
+    const providers = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "GET",
+      url: "/v1/providers",
+    });
+    expect(providers.statusCode).toBe(200);
+    expect(probes).toBe(1);
+    expect(providers.json()).toEqual({
+      providers: [
+        {
+          capabilities: {
+            activeTurnSteering: true,
+            approvals: false,
+            attachments: false,
+            effort: false,
+            historyFilters: {
+              includeSystemMessages: false,
+            },
+            historyPagination: "cursor",
+            interrupt: true,
+            modes: false,
+            models: false,
+            nativeActions: {},
+            newConversation: true,
+            resumeConversation: true,
+            statusCatalogs: {},
+            streamProtocol: "test",
+            threadManagement: {
+              archive: false,
+              delete: false,
+              fork: false,
+              includeArchived: false,
+              search: false,
+              unarchive: false,
+            },
+          },
+          displayName: "Fake",
+          id: "fake",
+          protocolVersion: "fake-1",
+          status: "available",
+        },
+      ],
+    });
+
+    const capabilities = await app.inject({
+      headers: { authorization: "Bearer access-token" },
+      method: "GET",
+      url: "/v1/providers/fake/capabilities",
+    });
+    expect(capabilities.statusCode).toBe(200);
+    expect(probes).toBe(2);
+    expect(capabilities.json()).toMatchObject({
+      id: "fake",
+      protocolVersion: "fake-1",
+      status: "available",
+    });
+    expect(capabilities.json().reasonCode).toBeUndefined();
+  });
 });
 
 function fakeProvider(
@@ -165,13 +517,26 @@ function fakeProvider(
         approvals: false,
         attachments: false,
         effort: false,
+        historyFilters: {
+          includeSystemMessages: false,
+        },
         historyPagination: "cursor",
         interrupt: true,
         modes: false,
         models: false,
+        nativeActions: {},
         newConversation: true,
         resumeConversation: true,
+        statusCatalogs: {},
         streamProtocol: "fake-native",
+        threadManagement: {
+          archive: true,
+          delete: true,
+          fork: true,
+          includeArchived: true,
+          search: true,
+          unarchive: true,
+        },
       },
       displayName: "Fake Agent",
       id: "fake",
@@ -205,6 +570,36 @@ function fakeProvider(
         items: [{ nativeHistory: true }],
         page: { cursor: null, hasMore: false },
       };
+    },
+    async forkConversation(input) {
+      calls.push({ name: "fork", value: input });
+      return { action: "forked", task: taskSnapshot("fake") };
+    },
+    async archiveConversation(input) {
+      calls.push({ name: "archive", value: input });
+      if (input.confirm !== true) {
+        throw new TaskError(
+          "CONFIRMATION_REQUIRED",
+          409,
+          "Archive requires confirm=true.",
+        );
+      }
+      return { action: "archived", task: null };
+    },
+    async unarchiveConversation(input) {
+      calls.push({ name: "unarchive", value: input });
+      return { action: "unarchived", task: null };
+    },
+    async deleteConversation(input) {
+      calls.push({ name: "delete", value: input });
+      if (input.confirm !== true) {
+        throw new TaskError(
+          "CONFIRMATION_REQUIRED",
+          409,
+          "Delete requires confirm=true.",
+        );
+      }
+      return { action: "deleted", task: null };
     },
   };
 }

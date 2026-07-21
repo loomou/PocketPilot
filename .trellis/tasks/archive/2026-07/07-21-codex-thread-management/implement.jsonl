@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/agent-provider-contracts.md", "reason": "Provider conversation surface, capability sanitizer, and REST lifecycle boundaries"}
+{"file": ".trellis/spec/backend/codex-app-server-contracts.md", "reason": "Codex thread identity, REST vs WS ownership, and native method constraints"}
+{"file": ".trellis/spec/backend/task-runtime-contracts.md", "reason": "Task create/attach/close semantics used by fork and delete side effects"}
+{"file": ".trellis/spec/backend/api-documentation-contracts.md", "reason": "OpenAPI consistency for provider conversation routes and capabilities"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Code standards for adapter/route changes"}
+{"file": ".trellis/tasks/archive/2026-07/07-21-codex-readonly-status-catalogs/research/codex-app-server.schema.json/ClientRequest.json", "reason": "Authoritative native thread/fork|archive|unarchive|delete and thread/list filter params"}

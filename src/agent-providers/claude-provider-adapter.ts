@@ -7,7 +7,10 @@ import {
 } from "../claude-sdk/transport.js";
 import type { TaskEventJournal } from "../tasks/task-event-journal.js";
 import type { TaskManager } from "../tasks/task-manager.js";
-import type { TaskOperationResult, TaskSnapshot } from "../tasks/task-types.js";
+import type {
+  TaskBoundOperationResult,
+  TaskSnapshot,
+} from "../tasks/task-types.js";
 import type {
   AgentConversationAttachInput,
   AgentConversationHistoryInput,
@@ -15,8 +18,12 @@ import type {
   AgentConversationOperationInput,
   AgentConversationPage,
   AgentProviderAdapter,
+  AgentProviderDescriptor,
+  AgentProviderReadinessRefreshOptions,
+  AgentProviderStatus,
   AgentTaskStreamAdapter,
 } from "./types.js";
+import { PROVIDER_READINESS_TTL_MS } from "./types.js";
 
 type ClaudeProviderTaskManager = Pick<
   TaskManager,
@@ -31,34 +38,76 @@ type ClaudeProviderTaskManager = Pick<
 
 type ClaudeProviderEventJournal = Pick<TaskEventJournal, "subscribeSdk">;
 
+export type ClaudeProviderAdapterOptions = {
+  now?: () => number;
+  probeSdk?: () => Promise<ClaudeReadinessSnapshot> | ClaudeReadinessSnapshot;
+  readinessTtlMs?: number;
+};
+
+export type ClaudeReadinessSnapshot = {
+  protocolVersion?: string;
+  reasonCode?: string;
+  status: AgentProviderStatus;
+};
+
+const CLAUDE_CAPABILITIES = {
+  activeTurnSteering: true,
+  approvals: true,
+  attachments: false,
+  effort: true,
+  historyFilters: {
+    includeSystemMessages: true,
+  },
+  historyPagination: "cursor" as const,
+  interrupt: true,
+  modes: true,
+  models: true,
+  nativeActions: {},
+  newConversation: true,
+  resumeConversation: true,
+  statusCatalogs: {},
+  streamProtocol: "claude-agent-sdk" as const,
+  threadManagement: {
+    archive: false,
+    delete: false,
+    fork: false,
+    includeArchived: false,
+    search: false,
+    unarchive: false,
+  },
+};
+
 /** Keeps Claude SDK types and lifecycle semantics inside one provider adapter. */
 export class ClaudeProviderAdapter implements AgentProviderAdapter {
-  public readonly descriptor = {
-    capabilities: {
-      activeTurnSteering: true,
-      approvals: true,
-      attachments: false,
-      effort: true,
-      historyPagination: "cursor" as const,
-      interrupt: true,
-      modes: true,
-      models: true,
-      newConversation: true,
-      resumeConversation: true,
-      streamProtocol: "claude-agent-sdk" as const,
-    },
-    displayName: "Claude Code",
-    id: "claude",
-    protocolVersion: claudeAgentSdkProtocolVersion,
-    status: "available" as const,
-  };
-
   public readonly taskStream: AgentTaskStreamAdapter;
+  readonly #now: () => number;
+  readonly #probeSdk: () =>
+    | Promise<ClaudeReadinessSnapshot>
+    | ClaudeReadinessSnapshot;
+  readonly #readinessTtlMs: number;
+  #descriptor: AgentProviderDescriptor;
+  #inFlightProbe: Promise<void> | undefined;
+  #readinessCheckedAt = 0;
+
+  public get descriptor(): AgentProviderDescriptor {
+    return this.#descriptor;
+  }
 
   public constructor(
     private readonly taskManager: ClaudeProviderTaskManager,
     eventJournal: ClaudeProviderEventJournal,
+    options: ClaudeProviderAdapterOptions = {},
   ) {
+    this.#now = options.now ?? Date.now;
+    this.#probeSdk = options.probeSdk ?? defaultClaudeSdkProbe;
+    this.#readinessTtlMs = options.readinessTtlMs ?? PROVIDER_READINESS_TTL_MS;
+    this.#descriptor = {
+      capabilities: { ...CLAUDE_CAPABILITIES },
+      displayName: "Claude Code",
+      id: "claude",
+      protocolVersion: claudeAgentSdkProtocolVersion,
+      status: "available",
+    };
     this.taskStream = {
       activate: (taskId) => this.taskManager.activateSdkSession(taskId),
       parseClientFrame: (frame, isBinary) =>
@@ -71,6 +120,63 @@ export class ClaudeProviderAdapter implements AgentProviderAdapter {
           },
         }),
     };
+  }
+
+  public async refreshReadiness(
+    options: AgentProviderReadinessRefreshOptions = {},
+  ): Promise<void> {
+    const force = options.force === true;
+    const ageMs = this.#now() - this.#readinessCheckedAt;
+    if (
+      !force &&
+      this.#readinessCheckedAt > 0 &&
+      ageMs < this.#readinessTtlMs
+    ) {
+      return;
+    }
+    if (this.#inFlightProbe !== undefined) {
+      await this.#inFlightProbe;
+      return;
+    }
+    this.#inFlightProbe = this.#runProbe();
+    try {
+      await this.#inFlightProbe;
+    } finally {
+      this.#inFlightProbe = undefined;
+    }
+  }
+
+  async #runProbe(): Promise<void> {
+    try {
+      const snapshot = await this.#probeSdk();
+      this.#applySnapshot(snapshot);
+    } catch {
+      this.#applySnapshot({
+        reasonCode: "CLAUDE_SDK_PROBE_FAILED",
+        status: "unhealthy",
+      });
+    } finally {
+      this.#readinessCheckedAt = this.#now();
+    }
+  }
+
+  #applySnapshot(snapshot: ClaudeReadinessSnapshot): void {
+    const next: AgentProviderDescriptor = {
+      displayName: "Claude Code",
+      id: "claude",
+      status: snapshot.status,
+    };
+    if (snapshot.status === "available") {
+      next.capabilities = { ...CLAUDE_CAPABILITIES };
+      next.protocolVersion =
+        snapshot.protocolVersion ?? claudeAgentSdkProtocolVersion;
+    } else if (snapshot.protocolVersion !== undefined) {
+      next.protocolVersion = snapshot.protocolVersion;
+    }
+    if (snapshot.reasonCode !== undefined) {
+      next.reasonCode = snapshot.reasonCode;
+    }
+    this.#descriptor = next;
   }
 
   public async listConversations(
@@ -115,13 +221,13 @@ export class ClaudeProviderAdapter implements AgentProviderAdapter {
 
   public createConversation(
     input: AgentConversationOperationInput,
-  ): Promise<TaskOperationResult> {
+  ): Promise<TaskBoundOperationResult> {
     return this.taskManager.createClaudeConversation(input);
   }
 
   public attachConversation(
     input: AgentConversationAttachInput,
-  ): Promise<TaskOperationResult> {
+  ): Promise<TaskBoundOperationResult> {
     return this.taskManager.attachClaudeSession({
       ...input,
       sessionId: input.nativeConversationId,
@@ -153,4 +259,28 @@ function parseOffsetCursor(cursor: string): number {
     throw new Error("The Claude conversation cursor is invalid.");
   }
   return offset;
+}
+
+async function defaultClaudeSdkProbe(): Promise<ClaudeReadinessSnapshot> {
+  try {
+    await import("@anthropic-ai/claude-agent-sdk");
+  } catch {
+    return {
+      reasonCode: "CLAUDE_SDK_NOT_AVAILABLE",
+      status: "not_installed",
+    };
+  }
+  if (
+    typeof claudeAgentSdkProtocolVersion !== "string" ||
+    claudeAgentSdkProtocolVersion.length === 0
+  ) {
+    return {
+      reasonCode: "CLAUDE_SDK_VERSION_UNSUPPORTED",
+      status: "unsupported_version",
+    };
+  }
+  return {
+    protocolVersion: claudeAgentSdkProtocolVersion,
+    status: "available",
+  };
 }

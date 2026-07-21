@@ -31,6 +31,16 @@ const sdkControlTimeoutMilliseconds = 30_000;
 const catalogTimeoutMilliseconds = 30_000;
 const liveConfig = readLiveSdkTestConfig();
 
+function requireTaskResult(result: {
+  action: string;
+  task: import("../../src/tasks/task-types.js").TaskSnapshot | null;
+}) {
+  if (result.task === null) {
+    throw new Error(`expected task for action ${result.action}`);
+  }
+  return result.task;
+}
+
 describe.runIf(liveConfig.enabled)("Claude Agent SDK live contracts", () => {
   it("runs two direct turns and resumes the same session through TaskManager", async () => {
     if (!liveConfig.enabled) {
@@ -187,7 +197,7 @@ async function runTaskManagerPhase(
         state: "idle",
       },
     });
-    const taskId = attached.task.id;
+    const taskId = requireTaskResult(attached).id;
 
     await withDeadline(
       manager.activateSdkSession(taskId),

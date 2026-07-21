@@ -47,7 +47,7 @@ type PersistOperationInput = {
   operationId: string;
   result: TaskOperationResult;
   resultLabel: string;
-  taskId: string;
+  taskId: string | null;
 };
 
 type PersistOperationErrorInput = {

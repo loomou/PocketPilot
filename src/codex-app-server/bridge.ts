@@ -724,3 +724,114 @@ export function isSupportedCodexVersion(version: string): boolean {
 }
 
 export const codexAppServerProtocolVersion = `codex-app-server@${CODEX_PROTOCOL_VERSION}`;
+
+export type CodexReadinessSnapshot = {
+  protocolVersion?: string;
+  reasonCode?: string;
+  status: "available" | "not_installed" | "unhealthy" | "unsupported_version";
+};
+
+const DEFAULT_CODEX_READINESS_PROBE_TIMEOUT_MS = 8_000;
+
+/**
+ * Bounded Codex readiness probe used by discovery. Never returns install
+ * paths, env dumps, raw stderr, or credentials.
+ */
+export async function probeCodexReadiness(options: {
+  command: string;
+  createBridge?: () => CodexAppServerBridge;
+  environment?: NodeJS.ProcessEnv;
+  existingBridge?: CodexAppServerBridge;
+  probeTimeoutMs?: number;
+}): Promise<CodexReadinessSnapshot> {
+  const environment = options.environment ?? process.env;
+  const existingInfo = options.existingBridge?.initializeInfo;
+  if (existingInfo !== undefined) {
+    if (isSupportedCodexVersion(existingInfo.cliVersion)) {
+      return {
+        protocolVersion: codexAppServerProtocolVersion,
+        status: "available",
+      };
+    }
+    return {
+      reasonCode: "CODEX_APP_SERVER_VERSION_UNSUPPORTED",
+      status: "unsupported_version",
+    };
+  }
+
+  if (!isCodexCommandAvailable(options.command, environment)) {
+    return {
+      reasonCode: "CODEX_COMMAND_NOT_FOUND",
+      status: "not_installed",
+    };
+  }
+
+  // Short-lived probe path. Always close the bridge we create here so a
+  // timeout/failure cannot leave an App Server child running.
+  const probeTimeoutMs =
+    options.probeTimeoutMs ?? DEFAULT_CODEX_READINESS_PROBE_TIMEOUT_MS;
+  const bridge =
+    options.createBridge?.() ??
+    new CodexAppServerBridge({
+      command: options.command,
+      environment,
+      requestTimeoutMs: probeTimeoutMs,
+    });
+  let timedOut = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const info = await Promise.race([
+      bridge.start(),
+      new Promise<never>((_resolve, reject) => {
+        timeoutHandle = setTimeout(() => {
+          timedOut = true;
+          reject(
+            new CodexAppServerError(
+              "CODEX_APP_SERVER_REQUEST_TIMEOUT",
+              "Codex readiness probe timed out.",
+            ),
+          );
+        }, probeTimeoutMs);
+      }),
+    ]);
+    if (!isSupportedCodexVersion(info.cliVersion)) {
+      return {
+        reasonCode: "CODEX_APP_SERVER_VERSION_UNSUPPORTED",
+        status: "unsupported_version",
+      };
+    }
+    return {
+      protocolVersion: codexAppServerProtocolVersion,
+      status: "available",
+    };
+  } catch (error) {
+    if (
+      error instanceof CodexAppServerError &&
+      error.code === "CODEX_APP_SERVER_VERSION_UNSUPPORTED"
+    ) {
+      return {
+        reasonCode: "CODEX_APP_SERVER_VERSION_UNSUPPORTED",
+        status: "unsupported_version",
+      };
+    }
+    if (
+      timedOut ||
+      (error instanceof CodexAppServerError &&
+        error.code === "CODEX_APP_SERVER_REQUEST_TIMEOUT")
+    ) {
+      return {
+        reasonCode: "CODEX_APP_SERVER_PROBE_FAILED",
+        status: "unhealthy",
+      };
+    }
+    return {
+      reasonCode: "CODEX_APP_SERVER_PROBE_FAILED",
+      status: "unhealthy",
+    };
+  } finally {
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
+    }
+    await bridge.close().catch(() => undefined);
+  }
+}

@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/agent-provider-contracts.md", "reason": "Capability discovery surface, sanitized descriptors, and native Agent WebSocket boundaries for nativeActions"}
+{"file": ".trellis/spec/backend/codex-app-server-contracts.md", "reason": "Codex method allowlist, turn lifecycle, idle/active gating, and App Server passthrough rules"}
+{"file": ".trellis/spec/backend/task-runtime-contracts.md", "reason": "Shared P0-P3 priority, capacity reservation, generation lease, and provider turn-start rollback"}
+{"file": ".trellis/spec/backend/api-documentation-contracts.md", "reason": "OpenAPI capability schema and documentation consistency for provider routes"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Code standards and forbidden patterns for adapter/protocol changes"}
+{"file": ".trellis/tasks/archive/2026-07/07-19-remote-codex-cli/research/codex-app-server-vs-claude-sdk.md", "reason": "Background on Codex App Server methods versus Claude SDK capabilities"}

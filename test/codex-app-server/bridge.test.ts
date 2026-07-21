@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   CodexAppServerBridge,
   isCodexCommandAvailable,
+  probeCodexReadiness,
 } from "../../src/codex-app-server/bridge.js";
 
 class FakeCodexProcess extends EventEmitter {
@@ -240,5 +241,88 @@ describe("CodexAppServerBridge", () => {
       },
     });
     await bridge.close();
+  });
+
+  it("maps readiness probe outcomes without leaking install paths", async () => {
+    await expect(
+      probeCodexReadiness({
+        command: "pocketpilot-command-that-does-not-exist",
+      }),
+    ).resolves.toEqual({
+      reasonCode: "CODEX_COMMAND_NOT_FOUND",
+      status: "not_installed",
+    });
+
+    const missingPath =
+      "C:\\Users\\secret\\AppData\\Local\\Programs\\codex.exe";
+    const missing = await probeCodexReadiness({ command: missingPath });
+    expect(missing).toEqual({
+      reasonCode: "CODEX_COMMAND_NOT_FOUND",
+      status: "not_installed",
+    });
+    expect(JSON.stringify(missing)).not.toContain("Users\\secret");
+
+    const healthyBridge = {
+      initializeInfo: {
+        cliVersion: "0.144.6",
+        platformFamily: "windows",
+        platformOs: "windows",
+        userAgent: "codex-app-server",
+      },
+    } as CodexAppServerBridge;
+    await expect(
+      probeCodexReadiness({
+        command: process.execPath,
+        existingBridge: healthyBridge,
+      }),
+    ).resolves.toEqual({
+      protocolVersion: expect.stringContaining("codex-app-server@"),
+      status: "available",
+    });
+
+    const unsupportedBridge = {
+      initializeInfo: {
+        cliVersion: "0.143.0",
+        platformFamily: "windows",
+        platformOs: "windows",
+        userAgent: "codex-app-server",
+      },
+    } as CodexAppServerBridge;
+    await expect(
+      probeCodexReadiness({
+        command: process.execPath,
+        existingBridge: unsupportedBridge,
+      }),
+    ).resolves.toEqual({
+      reasonCode: "CODEX_APP_SERVER_VERSION_UNSUPPORTED",
+      status: "unsupported_version",
+    });
+
+    // createBridge is a DI seam for unit tests. The probe always closes the
+    // bridge it starts so timeouts cannot leave an App Server child running.
+    const child = new FakeCodexProcess();
+    const createdBridge = new CodexAppServerBridge({
+      processFactory: () => child,
+      requestTimeoutMs: 1_000,
+    });
+    let closed = false;
+    const originalClose = createdBridge.close.bind(createdBridge);
+    createdBridge.close = async () => {
+      closed = true;
+      await originalClose();
+    };
+    await expect(
+      probeCodexReadiness({
+        command: process.execPath,
+        createBridge: () => createdBridge,
+      }),
+    ).resolves.toEqual({
+      protocolVersion: expect.stringContaining("codex-app-server@"),
+      status: "available",
+    });
+    expect(child.writes.some((frame) => frame.method === "initialize")).toBe(
+      true,
+    );
+    expect(closed).toBe(true);
   });
 });

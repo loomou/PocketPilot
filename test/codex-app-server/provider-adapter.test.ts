@@ -19,11 +19,13 @@ import { TaskManager } from "../../src/tasks/task-manager.js";
 import { TaskRepository } from "../../src/tasks/task-repository.js";
 
 class FakeCodexProcess extends EventEmitter {
+  public errorAfterTurnStarted = false;
   public failInterrupts = false;
   public failTurnStarts = false;
   public readonly stderr = new PassThrough();
   public readonly stdin = new PassThrough();
   public readonly stdout = new PassThrough();
+  public turnStartedBeforeResponse = false;
   public readonly writes: Record<string, unknown>[] = [];
   private nextThread = 1;
 
@@ -63,6 +65,125 @@ class FakeCodexProcess extends EventEmitter {
           result: { backwardsCursor: null, data: [thread()], nextCursor: null },
         });
       }
+      if (frame.method === "thread/fork") {
+        const params = frame.params as { threadId?: unknown } | undefined;
+        const sourceId =
+          typeof params?.threadId === "string" ? params.threadId : "thread-1";
+        this.emitFrame({
+          id: frame.id,
+          result: {
+            thread: thread(`thread-${this.nextThread++}`, {
+              forkedFrom: sourceId,
+            }),
+          },
+        });
+      }
+      if (frame.method === "thread/archive") {
+        this.emitFrame({ id: frame.id, result: {} });
+      }
+      if (frame.method === "thread/unarchive") {
+        this.emitFrame({ id: frame.id, result: {} });
+      }
+      if (frame.method === "thread/delete") {
+        this.emitFrame({ id: frame.id, result: {} });
+      }
+      if (frame.method === "account/read") {
+        this.emitFrame({
+          id: frame.id,
+          result: {
+            account: {
+              email: "user@example.com",
+              planType: "pro",
+              refreshToken: "secret-token",
+              type: "chatgpt",
+            },
+            requiresOpenaiAuth: true,
+          },
+        });
+      }
+      if (frame.method === "account/rateLimits/read") {
+        this.emitFrame({
+          id: frame.id,
+          result: {
+            rateLimits: {
+              limit_id: "primary",
+              plan_type: "pro",
+              primary: { used_percent: 12 },
+              secretQuotaToken: "quota-secret",
+            },
+          },
+        });
+      }
+      if (frame.method === "skills/list") {
+        this.emitFrame({
+          id: frame.id,
+          result: {
+            data: [
+              {
+                description: "Review helper",
+                enabled: true,
+                metadata: {
+                  description: "Review helper",
+                  name: "review",
+                  path: "C:\\skills\\review",
+                },
+                name: "review",
+                path: "C:\\skills\\review",
+                scope: "repo",
+              },
+            ],
+            errors: [
+              {
+                message: "bad skill",
+                path: "C:\\skills\\broken",
+                scope: "user",
+              },
+            ],
+          },
+        });
+      }
+      if (frame.method === "hooks/list") {
+        this.emitFrame({
+          id: frame.id,
+          result: {
+            data: [
+              {
+                description: "pre tool",
+                enabled: true,
+                hooks: ["PreToolUse"],
+                metadata: {
+                  hooks: ["PreToolUse"],
+                  name: "guard",
+                  path: "C:\\hooks\\guard",
+                },
+                name: "guard",
+                path: "C:\\hooks\\guard",
+                scope: "user",
+              },
+            ],
+          },
+        });
+      }
+      if (frame.method === "mcpServerStatus/list") {
+        this.emitFrame({
+          id: frame.id,
+          result: {
+            data: [
+              {
+                authStatus: "unsupported",
+                command: "npx",
+                name: "demo",
+                tools: [
+                  {
+                    description: "demo tool",
+                    name: "echo",
+                  },
+                ],
+              },
+            ],
+          },
+        });
+      }
       if (frame.method === "thread/turns/list") {
         this.emitFrame({
           id: frame.id,
@@ -86,7 +207,11 @@ class FakeCodexProcess extends EventEmitter {
             : { id: frame.id, result: {} },
         );
       }
-      if (frame.method === "turn/start") {
+      if (
+        frame.method === "turn/start" ||
+        frame.method === "review/start" ||
+        frame.method === "thread/compact/start"
+      ) {
         if (this.failTurnStarts) {
           this.emitFrame({
             error: { code: -32_000, message: "turn start rejected" },
@@ -97,10 +222,42 @@ class FakeCodexProcess extends EventEmitter {
         const params = frame.params as { threadId?: unknown } | undefined;
         const threadId =
           typeof params?.threadId === "string" ? params.threadId : "thread-1";
-        this.emitFrame({ id: frame.id, result: { turn: { id: "turn-1" } } });
-        this.emitFrame({
+        const turnId =
+          frame.method === "review/start"
+            ? "review-turn-1"
+            : frame.method === "thread/compact/start"
+              ? "compact-turn-1"
+              : "turn-1";
+        const started = {
           method: "turn/started",
-          params: { threadId, turn: { id: "turn-1" } },
+          params: { threadId, turn: { id: turnId } },
+        };
+        if (this.turnStartedBeforeResponse || this.errorAfterTurnStarted) {
+          this.emitFrame(started);
+        }
+        if (this.errorAfterTurnStarted) {
+          this.emitFrame({
+            error: { code: -32_000, message: "late turn start rejection" },
+            id: frame.id,
+          });
+          return;
+        }
+        this.emitFrame({ id: frame.id, result: { turn: { id: turnId } } });
+        if (!this.turnStartedBeforeResponse) {
+          this.emitFrame(started);
+        }
+      }
+      if (frame.method === "thread/name/set") {
+        const params = frame.params as
+          | { name?: unknown; threadId?: unknown }
+          | undefined;
+        const threadId =
+          typeof params?.threadId === "string" ? params.threadId : "thread-1";
+        const name = typeof params?.name === "string" ? params.name : "renamed";
+        this.emitFrame({ id: frame.id, result: {} });
+        this.emitFrame({
+          method: "thread/name/updated",
+          params: { name, threadId },
         });
       }
     });
@@ -118,6 +275,25 @@ class FakeCodexProcess extends EventEmitter {
 
 const deviceId = "00000000-0000-4000-8000-000000000010";
 const workspace = "C:\\workspace";
+
+function requireNativeConversationId(
+  task: import("../../src/tasks/task-types.js").TaskSnapshot,
+): string {
+  if (task.nativeConversationId === null) {
+    throw new Error("expected nativeConversationId");
+  }
+  return task.nativeConversationId;
+}
+
+function requireTaskResult(result: {
+  action: string;
+  task: import("../../src/tasks/task-types.js").TaskSnapshot | null;
+}): import("../../src/tasks/task-types.js").TaskSnapshot {
+  if (result.task === null) {
+    throw new Error(`expected task for action ${result.action}`);
+  }
+  return result.task;
+}
 
 describe("CodexProviderAdapter", () => {
   const connections: StorageConnection[] = [];
@@ -156,9 +332,9 @@ describe("CodexProviderAdapter", () => {
       workspaceRiskAccepted: true,
     });
     expect(created.action).toBe("created");
-    expect(created.task.provider).toBe("codex");
-    expect(created.task.nativeConversationId).toBe("thread-1");
-    expect(created.task.nativeSessionId).toBe("session-1");
+    expect(requireTaskResult(created).provider).toBe("codex");
+    expect(requireTaskResult(created).nativeConversationId).toBe("thread-1");
+    expect(requireTaskResult(created).nativeSessionId).toBe("session-1");
 
     await expect(
       adapter.listConversations({ workspace, limit: 50 }),
@@ -175,6 +351,16 @@ describe("CodexProviderAdapter", () => {
       items: [{ id: "turn-1", items: [], status: "completed" }],
       page: { cursor: null, hasMore: false },
     });
+    await expect(
+      adapter.readConversation({
+        includeSystemMessages: false,
+        nativeConversationId: "thread-1",
+        workspace,
+      }),
+    ).resolves.toEqual({
+      items: [{ id: "turn-1", items: [], status: "completed" }],
+      page: { cursor: null, hasMore: false },
+    });
 
     const attached = await adapter.attachConversation({
       deviceId,
@@ -184,7 +370,174 @@ describe("CodexProviderAdapter", () => {
       workspaceRiskAccepted: true,
     });
     expect(attached.action).toBe("attached");
-    expect(attached.task.id).toBe(created.task.id);
+    expect(requireTaskResult(attached).id).toBe(requireTaskResult(created).id);
+    await adapter.shutdown();
+  });
+
+  it("rejects includeSystemMessages=true history filters before native reads", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository: new TaskRepository(connection.database),
+      taskRuntime: createTaskRuntime(connection),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+
+    await expect(
+      adapter.readConversation({
+        includeSystemMessages: true,
+        nativeConversationId: "thread-1",
+        workspace,
+      }),
+    ).rejects.toMatchObject({
+      code: "HISTORY_FILTER_NOT_SUPPORTED",
+      statusCode: 409,
+    });
+    expect(
+      process.writes.some((frame) => frame.method === "thread/turns/list"),
+    ).toBe(false);
+    expect(adapter.descriptor.capabilities?.historyFilters).toEqual({
+      includeSystemMessages: false,
+    });
+    await adapter.shutdown();
+  });
+
+  it("forwards list filters and forks, archives, unarchives, and deletes threads", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    const repository = new TaskRepository(connection.database);
+    const taskManager = createTaskManager(connection);
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository,
+      taskRuntime: taskManager.providerTaskRuntime(),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+
+    await adapter.listConversations({
+      includeArchived: true,
+      searchTerm: "review",
+      workspace,
+    });
+    const listWrite = process.writes.find(
+      (frame) => frame.method === "thread/list",
+    );
+    expect(listWrite?.params).toMatchObject({
+      archived: true,
+      searchTerm: "review",
+      sourceKinds: ["cli", "vscode", "appServer"],
+    });
+
+    const forked = await adapter.forkConversation({
+      deviceId,
+      nativeConversationId: "thread-1",
+      operationId: "00000000-0000-4000-8000-000000000031",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    expect(forked.action).toBe("forked");
+    expect(requireTaskResult(forked).nativeConversationId).toMatch(/^thread-/);
+    expect(process.writes.some((frame) => frame.method === "thread/fork")).toBe(
+      true,
+    );
+
+    const created = await adapter.createConversation({
+      deviceId,
+      operationId: "00000000-0000-4000-8000-000000000032",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    const createdTask = requireTaskResult(created);
+    await expect(
+      adapter.archiveConversation({
+        confirm: false,
+        deviceId,
+        nativeConversationId: requireNativeConversationId(createdTask),
+        operationId: "00000000-0000-4000-8000-000000000033",
+        workspace,
+        workspaceRiskAccepted: true,
+      }),
+    ).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED", statusCode: 409 });
+    await expect(
+      adapter.archiveConversation({
+        deviceId,
+        nativeConversationId: requireNativeConversationId(createdTask),
+        operationId: "00000000-0000-4000-8000-000000000039",
+        workspace,
+        workspaceRiskAccepted: true,
+      }),
+    ).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED", statusCode: 409 });
+
+    const archived = await adapter.archiveConversation({
+      confirm: true,
+      deviceId,
+      nativeConversationId: requireNativeConversationId(createdTask),
+      operationId: "00000000-0000-4000-8000-000000000040",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    expect(archived).toEqual({ action: "archived", task: null });
+    expect(repository.find(createdTask.id)?.state).not.toBe("terminal");
+
+    const unarchived = await adapter.unarchiveConversation({
+      deviceId,
+      nativeConversationId: requireNativeConversationId(createdTask),
+      operationId: "00000000-0000-4000-8000-000000000034",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    expect(unarchived).toEqual({ action: "unarchived", task: null });
+
+    const deleted = await adapter.deleteConversation({
+      confirm: true,
+      deviceId,
+      nativeConversationId: requireNativeConversationId(createdTask),
+      operationId: "00000000-0000-4000-8000-000000000035",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    expect(deleted).toEqual({ action: "deleted", task: null });
+    expect(
+      process.writes.some((frame) => frame.method === "thread/delete"),
+    ).toBe(true);
+    expect(repository.find(createdTask.id)?.state).toBe("terminal");
+
+    await expect(
+      adapter.deleteConversation({
+        confirm: false,
+        deviceId,
+        nativeConversationId: "thread-1",
+        operationId: "00000000-0000-4000-8000-000000000037",
+        workspace,
+        workspaceRiskAccepted: true,
+      }),
+    ).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED", statusCode: 409 });
+
+    await expect(
+      adapter.deleteConversation({
+        deviceId,
+        nativeConversationId: "thread-1",
+        operationId: "00000000-0000-4000-8000-000000000038",
+        workspace,
+        workspaceRiskAccepted: true,
+      }),
+    ).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED", statusCode: 409 });
+
     await adapter.shutdown();
   });
 
@@ -221,13 +574,13 @@ describe("CodexProviderAdapter", () => {
     });
     const received: unknown[] = [];
     const controlEvents: unknown[] = [];
-    eventJournal.subscribeControl(created.task.id, -1, {
+    eventJournal.subscribeControl(requireTaskResult(created).id, -1, {
       send(event) {
         controlEvents.push(event);
       },
     });
     const unsubscribe = adapter.taskStream.subscribe(
-      created.task.id,
+      requireTaskResult(created).id,
       undefined,
       {
         send(frame) {
@@ -235,7 +588,7 @@ describe("CodexProviderAdapter", () => {
         },
       },
     );
-    await adapter.taskStream.activate(created.task.id);
+    await adapter.taskStream.activate(requireTaskResult(created).id);
     const turnStart = adapter.taskStream.parseClientFrame(
       JSON.stringify({
         id: "turn-start",
@@ -247,7 +600,7 @@ describe("CodexProviderAdapter", () => {
     await adapter.taskStream.submit({
       deviceId,
       message: turnStart,
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     process.emitFrame({
       id: "approval-1",
@@ -265,7 +618,7 @@ describe("CodexProviderAdapter", () => {
       method: "item/commandExecution/requestApproval",
       params: { command: "git status", threadId: "thread-1", turnId: "turn-1" },
     });
-    expect(taskManager.getTask(created.task.id).state).toBe(
+    expect(taskManager.getTask(requireTaskResult(created).id).state).toBe(
       "awaiting_approval",
     );
     expect(controlEvents).toContainEqual(
@@ -283,7 +636,7 @@ describe("CodexProviderAdapter", () => {
             requestId: "approval-1",
           },
         },
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     );
 
@@ -296,19 +649,19 @@ describe("CodexProviderAdapter", () => {
       adapter.taskStream.submit({
         deviceId: "00000000-0000-4000-8000-000000000099",
         message: response,
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "STALE_APPROVAL" });
     await adapter.taskStream.submit({
       deviceId,
       message: response,
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     expect(process.writes).toContainEqual({
       id: "approval-1",
       result: { decision: "accept" },
     });
-    expect(taskManager.getTask(created.task.id).state).toBe(
+    expect(taskManager.getTask(requireTaskResult(created).id).state).toBe(
       "awaiting_approval",
     );
     expect(received).toContainEqual({
@@ -324,13 +677,15 @@ describe("CodexProviderAdapter", () => {
     await adapter.taskStream.submit({
       deviceId,
       message: secondResponse,
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     expect(process.writes).toContainEqual({
       id: "approval-2",
       result: { decision: "decline" },
     });
-    expect(taskManager.getTask(created.task.id).state).toBe("executing");
+    expect(taskManager.getTask(requireTaskResult(created).id).state).toBe(
+      "executing",
+    );
     process.emitFrame({
       id: "approval-outside",
       method: "item/commandExecution/requestApproval",
@@ -392,7 +747,7 @@ describe("CodexProviderAdapter", () => {
     });
 
     first.emit("close", 1, null);
-    await adapter.taskStream.activate(created.task.id);
+    await adapter.taskStream.activate(requireTaskResult(created).id);
 
     expect(second.writes.map((frame) => frame.method)).toContain(
       "thread/resume",
@@ -433,7 +788,7 @@ describe("CodexProviderAdapter", () => {
         method: "turn/start",
         params: { input: [] },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     first.emit("close", 1, null);
 
@@ -445,7 +800,7 @@ describe("CodexProviderAdapter", () => {
           method: "turn/interrupt",
           params: { turnId: "turn-1" },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "TASK_BUSY" });
     expect(second.writes.map((frame) => frame.method)).toContain(
@@ -454,7 +809,7 @@ describe("CodexProviderAdapter", () => {
     expect(second.writes.map((frame) => frame.method)).not.toContain(
       "turn/interrupt",
     );
-    expect(manager.getTask(created.task.id).state).toBe("idle");
+    expect(manager.getTask(requireTaskResult(created).id).state).toBe("idle");
 
     await manager.shutdown();
     await adapter.shutdown();
@@ -488,7 +843,7 @@ describe("CodexProviderAdapter", () => {
       workspace,
       workspaceRiskAccepted: true,
     });
-    await adapter.taskStream.activate(created.task.id);
+    await adapter.taskStream.activate(requireTaskResult(created).id);
     await adapter.taskStream.submit({
       deviceId,
       message: parseClientFrame(adapter, {
@@ -496,7 +851,7 @@ describe("CodexProviderAdapter", () => {
         method: "turn/start",
         params: { input: [] },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     first.emitFrame({
       id: "approval-old",
@@ -506,7 +861,7 @@ describe("CodexProviderAdapter", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     first.emit("close", 1, null);
-    await adapter.taskStream.activate(created.task.id);
+    await adapter.taskStream.activate(requireTaskResult(created).id);
 
     const staleResponse = adapter.taskStream.parseClientFrame(
       JSON.stringify({ id: "approval-old", result: { decision: "accept" } }),
@@ -516,7 +871,7 @@ describe("CodexProviderAdapter", () => {
       adapter.taskStream.submit({
         deviceId,
         message: staleResponse,
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "STALE_APPROVAL" });
     await adapter.shutdown();
@@ -568,9 +923,9 @@ describe("CodexProviderAdapter", () => {
       adapter.taskStream.submit({
         deviceId,
         message: promptFrame,
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
-    ).resolves.toMatchObject({ id: created.task.id });
+    ).resolves.toMatchObject({ id: requireTaskResult(created).id });
 
     const outsideWorkspaceFrame = adapter.taskStream.parseClientFrame(
       JSON.stringify({
@@ -584,7 +939,7 @@ describe("CodexProviderAdapter", () => {
       adapter.taskStream.submit({
         deviceId,
         message: outsideWorkspaceFrame,
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).rejects.toMatchObject({ code: "WORKSPACE_NOT_AUTHORIZED" });
     await adapter.shutdown();
@@ -713,7 +1068,7 @@ describe("CodexProviderAdapter", () => {
         method: "turn/start",
         params: { input: [] },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     await runEntered;
 
@@ -725,9 +1080,9 @@ describe("CodexProviderAdapter", () => {
           method: "model/list",
           params: {},
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
-    ).resolves.toMatchObject({ id: created.task.id });
+    ).resolves.toMatchObject({ id: requireTaskResult(created).id });
     expect(process.writes).toContainEqual(
       expect.objectContaining({ method: "model/list" }),
     );
@@ -784,7 +1139,7 @@ describe("CodexProviderAdapter", () => {
         method: "turn/start",
         params: { input: [] },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
 
     blockPaths = true;
@@ -800,7 +1155,7 @@ describe("CodexProviderAdapter", () => {
             input: [],
           },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       });
     const activeSteer = steer("active-steer");
     await pathEntered;
@@ -820,7 +1175,7 @@ describe("CodexProviderAdapter", () => {
           method: "turn/interrupt",
           params: { turnId: "turn-1" },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).resolves.toMatchObject({ state: "idle" });
     releasePath();
@@ -867,10 +1222,10 @@ describe("CodexProviderAdapter", () => {
           method: "turn/start",
           params: { input: [] },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).resolves.toMatchObject({ state: "idle" });
-    expect(manager.getTask(created.task.id)).toMatchObject({
+    expect(manager.getTask(requireTaskResult(created).id)).toMatchObject({
       activeTurnId: null,
       state: "idle",
     });
@@ -879,7 +1234,7 @@ describe("CodexProviderAdapter", () => {
       params: { requestId: "unknown", threadId: "thread-1" },
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(manager.getTask(created.task.id).state).toBe("idle");
+    expect(manager.getTask(requireTaskResult(created).id).state).toBe("idle");
 
     await manager.shutdown();
     await adapter.shutdown();
@@ -916,7 +1271,7 @@ describe("CodexProviderAdapter", () => {
         method: "turn/start",
         params: { input: [] },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     process.failInterrupts = true;
 
@@ -928,10 +1283,10 @@ describe("CodexProviderAdapter", () => {
           method: "turn/interrupt",
           params: { turnId: "turn-1" },
         }),
-        taskId: created.task.id,
+        taskId: requireTaskResult(created).id,
       }),
     ).resolves.toMatchObject({ state: "idle" });
-    expect(manager.getTask(created.task.id)).toMatchObject({
+    expect(manager.getTask(requireTaskResult(created).id)).toMatchObject({
       activeTurnId: null,
       state: "idle",
     });
@@ -987,7 +1342,7 @@ describe("CodexProviderAdapter", () => {
         method: "turn/start",
         params: { cwd: `${workspace}\\pending`, input: [] },
       }),
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     const staleResult = expect(staleTurn).rejects.toMatchObject({
       code: "TASK_OPERATION_SUPERSEDED",
@@ -997,7 +1352,7 @@ describe("CodexProviderAdapter", () => {
     await manager.closeTask({
       deviceId,
       operationId: "00000000-0000-4000-8000-000000000028",
-      taskId: created.task.id,
+      taskId: requireTaskResult(created).id,
     });
     releasePath();
     await staleResult;
@@ -1008,14 +1363,759 @@ describe("CodexProviderAdapter", () => {
     await manager.shutdown();
     await adapter.shutdown();
   });
+
+  it("advertises Codex native action capabilities without attachment support", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository: new TaskRepository(connection.database),
+      taskRuntime: createTaskRuntime(connection),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+
+    expect(adapter.descriptor.capabilities).toEqual({
+      activeTurnSteering: true,
+      approvals: true,
+      attachments: false,
+      effort: true,
+      historyFilters: {
+        includeSystemMessages: false,
+      },
+      historyPagination: "cursor",
+      interrupt: true,
+      modes: true,
+      models: true,
+      nativeActions: {
+        compact: {
+          availability: "idle",
+          method: "thread/compact/start",
+          startsTurn: true,
+        },
+        rename: {
+          availability: "always",
+          method: "thread/name/set",
+          startsTurn: false,
+        },
+        review: {
+          availability: "idle",
+          deliveries: ["inline"],
+          method: "review/start",
+          startsTurn: true,
+          targetTypes: ["uncommittedChanges", "baseBranch", "commit", "custom"],
+        },
+      },
+      newConversation: true,
+      resumeConversation: true,
+      statusCatalogs: {
+        account: true,
+        hooks: true,
+        mcpServers: true,
+        rateLimits: true,
+        skills: true,
+      },
+      streamProtocol: "codex-app-server-json-rpc",
+      threadManagement: {
+        archive: true,
+        delete: true,
+        fork: true,
+        includeArchived: true,
+        search: true,
+        unarchive: true,
+      },
+    });
+    await adapter.shutdown();
+  });
+
+  it("forwards readonly status catalogs as P3 reads and projects path-safe payloads", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    const manager = createTaskManager(connection);
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository: new TaskRepository(connection.database),
+      taskRuntime: manager.providerTaskRuntime(),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+    manager.setProviderTaskController(adapter.taskLifecycle);
+    const created = await adapter.createConversation({
+      deviceId,
+      operationId: "00000000-0000-4000-8000-000000000041",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    const received: unknown[] = [];
+    adapter.taskStream.subscribe(requireTaskResult(created).id, undefined, {
+      send(frame) {
+        received.push(frame);
+      },
+    });
+    await adapter.taskStream.activate(requireTaskResult(created).id);
+
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "account-1",
+        method: "account/read",
+        params: {},
+      }),
+      taskId: requireTaskResult(created).id,
+    });
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "skills-1",
+        method: "skills/list",
+        params: { cwd: workspace },
+      }),
+      taskId: requireTaskResult(created).id,
+    });
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "hooks-1",
+        method: "hooks/list",
+        params: {},
+      }),
+      taskId: requireTaskResult(created).id,
+    });
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "mcp-1",
+        method: "mcpServerStatus/list",
+        params: {},
+      }),
+      taskId: requireTaskResult(created).id,
+    });
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "limits-1",
+        method: "account/rateLimits/read",
+        params: {},
+      }),
+      taskId: requireTaskResult(created).id,
+    });
+
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "account/read",
+        params: {},
+      }),
+    );
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "skills/list",
+        params: { cwds: [workspace] },
+      }),
+    );
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "hooks/list",
+        params: { cwds: [workspace] },
+      }),
+    );
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "mcpServerStatus/list",
+        params: {},
+      }),
+    );
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "account/rateLimits/read",
+        params: {},
+      }),
+    );
+
+    await waitFor(() =>
+      received.some(
+        (frame) =>
+          isObject(frame) && frame.id === "account-1" && isObject(frame.result),
+      ),
+    );
+
+    expect(received).toContainEqual({
+      id: "account-1",
+      result: {
+        account: {
+          planType: "pro",
+          type: "chatgpt",
+        },
+        requiresOpenaiAuth: true,
+      },
+    });
+    expect(JSON.stringify(received)).not.toContain("user@example.com");
+    expect(received).toContainEqual({
+      id: "skills-1",
+      result: {
+        data: [
+          {
+            description: "Review helper",
+            enabled: true,
+            metadata: {
+              description: "Review helper",
+              name: "review",
+            },
+            name: "review",
+            scope: "repo",
+          },
+        ],
+        errors: [
+          {
+            message: "bad skill",
+            scope: "user",
+          },
+        ],
+      },
+    });
+    expect(received).toContainEqual({
+      id: "hooks-1",
+      result: {
+        data: [
+          {
+            description: "pre tool",
+            enabled: true,
+            hooks: ["PreToolUse"],
+            metadata: {
+              hooks: ["PreToolUse"],
+              name: "guard",
+            },
+            name: "guard",
+            scope: "user",
+          },
+        ],
+      },
+    });
+    expect(received).toContainEqual({
+      id: "mcp-1",
+      result: {
+        data: [
+          {
+            authStatus: "unsupported",
+            name: "demo",
+            tools: [
+              {
+                description: "demo tool",
+                name: "echo",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(received).toContainEqual({
+      id: "limits-1",
+      result: {
+        rateLimits: {
+          limit_id: "primary",
+          plan_type: "pro",
+          primary: { used_percent: 12 },
+        },
+      },
+    });
+    expect(JSON.stringify(received)).not.toContain("secret-token");
+    expect(JSON.stringify(received)).not.toContain("quota-secret");
+    expect(JSON.stringify(received)).not.toContain("C:\\skills");
+    expect(JSON.stringify(received)).not.toContain("C:\\hooks");
+    expect(JSON.stringify(received)).not.toContain('"command"');
+
+    process.emitFrame({
+      method: "account/updated",
+      params: {
+        authMode: "chatgpt",
+        planType: "pro",
+      },
+    });
+    process.emitFrame({
+      method: "skills/changed",
+      params: {
+        cwd: "C:\\skills",
+      },
+    });
+    process.emitFrame({
+      method: "hook/started",
+      params: {
+        run: {
+          eventName: "PreToolUse",
+          id: "run-1",
+          sourcePath: "C:\\hooks\\guard",
+          status: "running",
+        },
+        threadId: "thread-1",
+      },
+    });
+    process.emitFrame({
+      method: "mcpServer/startupStatus/updated",
+      params: {
+        command: "npx",
+        name: "demo",
+        status: "ready",
+      },
+    });
+
+    await waitFor(() =>
+      received.some(
+        (frame) =>
+          isObject(frame) && frame.method === "mcpServer/startupStatus/updated",
+      ),
+    );
+
+    expect(received).toContainEqual({
+      method: "account/updated",
+      params: {
+        authMode: "chatgpt",
+        planType: "pro",
+      },
+    });
+    expect(received).toContainEqual({
+      method: "skills/changed",
+      params: {},
+    });
+    expect(received).toContainEqual({
+      method: "hook/started",
+      params: {
+        run: {
+          eventName: "PreToolUse",
+          id: "run-1",
+          status: "running",
+        },
+        threadId: "thread-1",
+      },
+    });
+    expect(received).toContainEqual({
+      method: "mcpServer/startupStatus/updated",
+      params: {
+        name: "demo",
+        status: "ready",
+      },
+    });
+
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "refresh-forbidden",
+          method: "account/read",
+          params: { refreshToken: true },
+        }),
+        taskId: requireTaskResult(created).id,
+      }),
+    ).rejects.toMatchObject({ code: "CODEX_REQUEST_NOT_ALLOWED" });
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "skills-escape",
+          method: "skills/list",
+          params: { cwds: ["C:\\outside"] },
+        }),
+        taskId: requireTaskResult(created).id,
+      }),
+    ).rejects.toMatchObject({ code: "WORKSPACE_NOT_AUTHORIZED" });
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "skills-cwd-escape",
+          method: "skills/list",
+          params: { cwd: "C:\\outside" },
+        }),
+        taskId: requireTaskResult(created).id,
+      }),
+    ).rejects.toMatchObject({ code: "WORKSPACE_NOT_AUTHORIZED" });
+
+    await adapter.shutdown();
+  });
+
+  it("forwards native review, rename, and compact actions with shared lifecycle rules", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    const manager = createTaskManager(connection);
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository: new TaskRepository(connection.database),
+      taskRuntime: manager.providerTaskRuntime(),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+    manager.setProviderTaskController(adapter.taskLifecycle);
+    const created = await adapter.createConversation({
+      deviceId,
+      operationId: "00000000-0000-4000-8000-000000000031",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    const received: unknown[] = [];
+    adapter.taskStream.subscribe(requireTaskResult(created).id, undefined, {
+      send(frame) {
+        received.push(frame);
+      },
+    });
+    await adapter.taskStream.activate(requireTaskResult(created).id);
+
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "rename-1",
+        method: "thread/name/set",
+        params: { name: "Provider parity audit" },
+      }),
+      taskId: requireTaskResult(created).id,
+    });
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "thread/name/set",
+        params: {
+          name: "Provider parity audit",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(received).toContainEqual({
+      method: "thread/name/updated",
+      params: { name: "Provider parity audit", threadId: "thread-1" },
+    });
+    expect(manager.getTask(requireTaskResult(created).id).state).toBe("idle");
+
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "review-1",
+        method: "review/start",
+        params: {
+          delivery: "inline",
+          target: { type: "uncommittedChanges" },
+        },
+      }),
+      taskId: requireTaskResult(created).id,
+    });
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "review/start",
+        params: {
+          delivery: "inline",
+          target: { type: "uncommittedChanges" },
+          threadId: "thread-1",
+        },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(manager.getTask(requireTaskResult(created).id)).toMatchObject({
+      activeTurnId: "review-turn-1",
+      state: "executing",
+    });
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "steer-during-review",
+          method: "turn/steer",
+          params: {
+            expectedTurnId: "review-turn-1",
+            input: [{ text: "nudge", text_elements: [], type: "text" }],
+          },
+        }),
+        taskId: requireTaskResult(created).id,
+      }),
+    ).rejects.toMatchObject({ code: "TASK_BUSY" });
+    process.emitFrame({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "review-turn-1", status: "completed" },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(manager.getTask(requireTaskResult(created).id)).toMatchObject({
+      activeTurnId: null,
+      state: "idle",
+    });
+
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "compact-1",
+        method: "thread/compact/start",
+        params: {},
+      }),
+      taskId: requireTaskResult(created).id,
+    });
+    expect(process.writes).toContainEqual(
+      expect.objectContaining({
+        method: "thread/compact/start",
+        params: { threadId: "thread-1" },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(manager.getTask(requireTaskResult(created).id)).toMatchObject({
+      activeTurnId: "compact-turn-1",
+      state: "executing",
+    });
+    process.emitFrame({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "compact-turn-1", status: "completed" },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await manager.shutdown();
+    await adapter.shutdown();
+  });
+
+  it("rejects detached review, unsupported targets, and empty rename names", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    const manager = createTaskManager(connection);
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository: new TaskRepository(connection.database),
+      taskRuntime: manager.providerTaskRuntime(),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+    manager.setProviderTaskController(adapter.taskLifecycle);
+    const created = await adapter.createConversation({
+      deviceId,
+      operationId: "00000000-0000-4000-8000-000000000032",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    await adapter.taskStream.activate(requireTaskResult(created).id);
+
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "detached-review",
+          method: "review/start",
+          params: {
+            delivery: "detached",
+            target: { type: "uncommittedChanges" },
+          },
+        }),
+        taskId: requireTaskResult(created).id,
+      }),
+    ).rejects.toMatchObject({ code: "CODEX_REQUEST_NOT_ALLOWED" });
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "bad-target",
+          method: "review/start",
+          params: {
+            delivery: "inline",
+            target: { type: "unsupported" },
+          },
+        }),
+        taskId: requireTaskResult(created).id,
+      }),
+    ).rejects.toMatchObject({ code: "CODEX_REQUEST_NOT_ALLOWED" });
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "empty-name",
+          method: "thread/name/set",
+          params: { name: "   " },
+        }),
+        taskId: requireTaskResult(created).id,
+      }),
+    ).rejects.toMatchObject({ code: "CODEX_REQUEST_NOT_ALLOWED" });
+    expect(
+      process.writes.filter(
+        (frame) =>
+          frame.method === "review/start" || frame.method === "thread/name/set",
+      ),
+    ).toHaveLength(0);
+
+    await manager.shutdown();
+    await adapter.shutdown();
+  });
+
+  it("rolls back shared capacity when a native review start fails", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    process.failTurnStarts = true;
+    const manager = createTaskManager(connection);
+    writeTaskCapacitySettings(new SettingsRepository(connection.database), {
+      concurrentTaskCapacity: 1,
+    });
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository: new TaskRepository(connection.database),
+      taskRuntime: manager.providerTaskRuntime(),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+    manager.setProviderTaskController(adapter.taskLifecycle);
+    const first = await adapter.createConversation({
+      deviceId,
+      operationId: "00000000-0000-4000-8000-000000000033",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    const second = await adapter.createConversation({
+      deviceId,
+      operationId: "00000000-0000-4000-8000-000000000034",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    await adapter.taskStream.activate(first.task.id);
+
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "failed-review",
+        method: "review/start",
+        params: {
+          delivery: "inline",
+          target: { type: "uncommittedChanges" },
+        },
+      }),
+      taskId: first.task.id,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(manager.getTask(first.task.id).state).toBe("idle");
+    expect(manager.getTask(first.task.id).activeTurnId).toBeNull();
+
+    // Capacity must be free for another task after rollback.
+    process.failTurnStarts = false;
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "second-turn",
+        method: "turn/start",
+        params: { input: [] },
+      }),
+      taskId: second.task.id,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(manager.getTask(second.task.id).state).toBe("executing");
+
+    await manager.shutdown();
+    await adapter.shutdown();
+  });
+
+  it("keeps an authoritative review turn when the native request later errors", async () => {
+    const connection = openStorage({ databasePath: ":memory:" });
+    connections.push(connection);
+    insertDevice(connection);
+    const process = new FakeCodexProcess();
+    process.errorAfterTurnStarted = true;
+    const manager = createTaskManager(connection);
+    writeTaskCapacitySettings(new SettingsRepository(connection.database), {
+      concurrentTaskCapacity: 1,
+    });
+    const adapter = new CodexProviderAdapter({
+      bridge: new CodexAppServerBridge({
+        processFactory: () => process,
+        requestTimeoutMs: 1_000,
+      }),
+      repository: new TaskRepository(connection.database),
+      taskRuntime: manager.providerTaskRuntime(),
+      workspaceDirectoryResolver: {
+        canonicalizeDirectory: async (path) => path,
+      },
+    });
+    manager.setProviderTaskController(adapter.taskLifecycle);
+    const created = await adapter.createConversation({
+      deviceId,
+      operationId: "00000000-0000-4000-8000-000000000035",
+      workspace,
+      workspaceRiskAccepted: true,
+    });
+    await adapter.taskStream.activate(requireTaskResult(created).id);
+
+    await adapter.taskStream.submit({
+      deviceId,
+      message: parseClientFrame(adapter, {
+        id: "late-error-review",
+        method: "review/start",
+        params: {
+          delivery: "inline",
+          target: { type: "uncommittedChanges" },
+        },
+      }),
+      taskId: requireTaskResult(created).id,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(manager.getTask(requireTaskResult(created).id).state).toBe(
+      "executing",
+    );
+    expect(manager.getTask(requireTaskResult(created).id).activeTurnId).toBe(
+      "review-turn-1",
+    );
+
+    await expect(
+      adapter.taskStream.submit({
+        deviceId,
+        message: parseClientFrame(adapter, {
+          id: "steer-after-late-error",
+          method: "turn/steer",
+          params: {
+            input: [{ text: "should stay blocked", type: "text" }],
+            turnId: "review-turn-1",
+          },
+        }),
+        taskId: requireTaskResult(created).id,
+      }),
+    ).rejects.toMatchObject({ code: "TASK_BUSY" });
+    expect(process.writes.some((frame) => frame.method === "turn/steer")).toBe(
+      false,
+    );
+
+    await manager.shutdown();
+    await adapter.shutdown();
+  });
 });
 
-function thread(id = "thread-1"): Record<string, unknown> {
+function thread(
+  id = "thread-1",
+  extras: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     cwd: workspace,
     id,
     sessionId: `session-${id.slice("thread-".length)}`,
     turns: [],
+    ...extras,
   };
 }
 
@@ -1039,6 +2139,20 @@ function parseClientFrame(
     throw new Error("The test Codex frame is invalid.");
   }
   return parsed;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > 2_000) {
+      throw new Error("Timed out waiting for Codex adapter condition.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 }
 
 function createTaskManager(
@@ -1066,3 +2180,190 @@ function createTaskManager(
 function createTaskRuntime(connection: StorageConnection) {
   return createTaskManager(connection).providerTaskRuntime();
 }
+
+describe("CodexProviderAdapter readiness", () => {
+  it("caches readiness probes and projects stable reason codes only", async () => {
+    let now = 5_000;
+    let probes = 0;
+    const bridge = {
+      initializeInfo: undefined,
+      subscribe() {
+        return () => undefined;
+      },
+      async start() {
+        return { userAgent: "codex_cli_rs/0.0.0" };
+      },
+      async close() {
+        return undefined;
+      },
+    } as never;
+    const repository = {
+      async getTask() {
+        return undefined;
+      },
+    } as never;
+    const taskRuntime = {
+      async runExclusive() {
+        throw new Error("unused");
+      },
+    } as never;
+
+    const adapter = new CodexProviderAdapter({
+      bridge,
+      command: "codex",
+      now: () => now,
+      readinessTtlMs: 30_000,
+      repository,
+      taskRuntime,
+      async probeReadiness() {
+        probes += 1;
+        if (probes === 1) {
+          return {
+            reasonCode: "CODEX_COMMAND_NOT_FOUND",
+            status: "not_installed",
+          };
+        }
+        if (probes === 2) {
+          return {
+            reasonCode: "CODEX_APP_SERVER_VERSION_UNSUPPORTED",
+            status: "unsupported_version",
+          };
+        }
+        if (probes === 3) {
+          throw new Error("spawn ENOENT /usr/local/bin/codex secret=token");
+        }
+        return {
+          protocolVersion: "codex-app-server@1",
+          status: "available",
+        };
+      },
+    });
+
+    await adapter.refreshReadiness();
+    expect(probes).toBe(1);
+    expect(adapter.descriptor).toEqual({
+      displayName: "Codex CLI",
+      id: "codex",
+      reasonCode: "CODEX_COMMAND_NOT_FOUND",
+      status: "not_installed",
+    });
+    expect(JSON.stringify(adapter.descriptor)).not.toContain("/usr/local/bin");
+    expect(JSON.stringify(adapter.descriptor)).not.toContain("secret=token");
+
+    await adapter.refreshReadiness();
+    expect(probes).toBe(1);
+
+    now += 30_001;
+    await adapter.refreshReadiness();
+    expect(probes).toBe(2);
+    expect(adapter.descriptor.status).toBe("unsupported_version");
+    expect(adapter.descriptor.reasonCode).toBe(
+      "CODEX_APP_SERVER_VERSION_UNSUPPORTED",
+    );
+
+    await adapter.refreshReadiness({ force: true });
+    expect(probes).toBe(3);
+    expect(adapter.descriptor).toEqual({
+      displayName: "Codex CLI",
+      id: "codex",
+      reasonCode: "CODEX_APP_SERVER_PROBE_FAILED",
+      status: "unhealthy",
+    });
+
+    await adapter.refreshReadiness({ force: true });
+    expect(probes).toBe(4);
+    expect(adapter.descriptor.status).toBe("available");
+    expect(adapter.descriptor.protocolVersion).toBe("codex-app-server@1");
+    expect(adapter.descriptor.capabilities?.streamProtocol).toBe(
+      "codex-app-server-json-rpc",
+    );
+  });
+
+  it("honors disabled constructor status until a forced readiness refresh", async () => {
+    let probes = 0;
+    const adapter = new CodexProviderAdapter({
+      bridge: {
+        subscribe() {
+          return () => undefined;
+        },
+      } as never,
+      repository: {} as never,
+      status: "disabled",
+      statusReasonCode: "CODEX_DISABLED_BY_ADMIN",
+      taskRuntime: {} as never,
+      async probeReadiness() {
+        probes += 1;
+        return { status: "available", protocolVersion: "codex-app-server@1" };
+      },
+    });
+
+    expect(adapter.descriptor.status).toBe("disabled");
+    expect(adapter.descriptor.reasonCode).toBe("CODEX_DISABLED_BY_ADMIN");
+    await adapter.refreshReadiness();
+    expect(probes).toBe(0);
+    await adapter.refreshReadiness({ force: true });
+    expect(probes).toBe(1);
+    expect(adapter.descriptor.status).toBe("available");
+  });
+
+  it("treats startup not_installed/available as provisional until first probe", async () => {
+    let probes = 0;
+    const adapter = new CodexProviderAdapter({
+      bridge: {
+        subscribe() {
+          return () => undefined;
+        },
+      } as never,
+      repository: {} as never,
+      status: "not_installed",
+      statusReasonCode: "CODEX_COMMAND_NOT_FOUND",
+      taskRuntime: {} as never,
+      async probeReadiness() {
+        probes += 1;
+        return {
+          protocolVersion: "codex-app-server@1",
+          status: "available",
+        };
+      },
+    });
+
+    expect(adapter.descriptor.status).toBe("not_installed");
+    await adapter.refreshReadiness();
+    expect(probes).toBe(1);
+    expect(adapter.descriptor.status).toBe("available");
+  });
+
+  it("single-flights concurrent readiness probes", async () => {
+    let probes = 0;
+    let releaseProbe!: () => void;
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const adapter = new CodexProviderAdapter({
+      bridge: {
+        subscribe() {
+          return () => undefined;
+        },
+      } as never,
+      repository: {} as never,
+      taskRuntime: {} as never,
+      async probeReadiness() {
+        probes += 1;
+        await probeGate;
+        return {
+          protocolVersion: "codex-app-server@1",
+          status: "available",
+        };
+      },
+    });
+
+    const first = adapter.refreshReadiness({ force: true });
+    const second = adapter.refreshReadiness({ force: true });
+    await Promise.resolve();
+    expect(probes).toBe(1);
+    releaseProbe();
+    await Promise.all([first, second]);
+    expect(probes).toBe(1);
+    expect(adapter.descriptor.status).toBe("available");
+  });
+});

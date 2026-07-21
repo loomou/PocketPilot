@@ -1,6 +1,18 @@
 import type { AgentTaskStreamSubscriber } from "../agent-providers/types.js";
 import type { CodexServerFrame } from "./types.js";
 
+export type CodexAgentCheckpointFrame = {
+  kind: "agent.checkpoint";
+  payload: {
+    cursor: string | null;
+    provider: "codex";
+  };
+};
+
+export type CodexJournalStreamFrame =
+  | CodexAgentCheckpointFrame
+  | CodexServerFrame;
+
 type JournalEntry = {
   byteLength: number;
   cursor: number;
@@ -11,7 +23,7 @@ type TaskJournal = {
   byteLength: number;
   entries: JournalEntry[];
   nextCursor: number;
-  subscribers: Set<AgentTaskStreamSubscriber<CodexServerFrame>>;
+  subscribers: Set<AgentTaskStreamSubscriber<CodexJournalStreamFrame>>;
   turnActive: boolean;
 };
 
@@ -20,7 +32,9 @@ export type CodexNativeJournalOptions = {
   maxEntriesPerTask?: number;
 };
 
-/** Retains native Codex frames while keeping the reconnect cursor out-of-band. */
+/** Retains native Codex frames while keeping the reconnect cursor out-of-band.
+ * Subscribe emits one Codex-only agent.checkpoint control frame before retained replay.
+ */
 export class CodexNativeJournal {
   readonly #maxBytesPerTask: number;
   readonly #maxEntriesPerTask: number;
@@ -78,9 +92,16 @@ export class CodexNativeJournal {
   public subscribe(
     taskId: string,
     afterCursor: string | undefined,
-    subscriber: AgentTaskStreamSubscriber<CodexServerFrame>,
+    subscriber: AgentTaskStreamSubscriber<CodexJournalStreamFrame>,
   ): () => void {
     const journal = this.task(taskId);
+    subscriber.send({
+      kind: "agent.checkpoint",
+      payload: {
+        cursor: this.latestCursor(taskId),
+        provider: "codex",
+      },
+    });
     const parsedCursor = parseCursor(afterCursor);
     const knownCursor =
       parsedCursor !== undefined &&

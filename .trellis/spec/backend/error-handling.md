@@ -19,7 +19,7 @@ output.
 | `AgentMaintenanceError` | `AGENT_DATA_NOT_FOUND`, `AGENT_MAINTENANCE_LOCKED`, `AGENT_MAINTENANCE_LOCK_UNAVAILABLE`, `MASTER_KEYS_IDENTICAL` | Stopped-only maintenance preconditions and exclusive data-lock failures. |
 | `EnvironmentConfigurationError` | `DOTENV_READ_FAILED`, `ENVIRONMENT_VALUE_INVALID` | Safe startup-directory dotenv read and allowlisted value validation failures. |
 | `DeviceAuthError` | Pairing, device-proof, challenge, opaque-token, and revocation codes | HTTP-safe device authentication failure. |
-| `TaskError` | Task lifecycle/policy codes plus `CLAUDE_SESSION_NOT_FOUND`, `CLAUDE_SESSION_CONFLICT`, `CLAUDE_HISTORY_UNAVAILABLE`, and `HISTORY_CURSOR_STALE` | Validated mobile task, SDK-session, history, and control failures. |
+| `TaskError` | Task lifecycle/policy codes plus `CLAUDE_SESSION_NOT_FOUND`, `CLAUDE_SESSION_CONFLICT`, `CLAUDE_HISTORY_UNAVAILABLE`, `HISTORY_CURSOR_STALE`, and `HISTORY_FILTER_NOT_SUPPORTED` | Validated mobile task, SDK-session, history, and control failures. |
 | `LocalAdminError` | Directory picker/selection/authorization management codes | HTTP-safe loopback directory-management failures. |
 
 ## Patterns

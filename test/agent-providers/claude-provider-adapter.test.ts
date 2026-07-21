@@ -8,10 +8,7 @@ import { describe, expect, it } from "vitest";
 import { ClaudeProviderAdapter } from "../../src/agent-providers/claude-provider-adapter.js";
 import type { TaskEventJournal } from "../../src/tasks/task-event-journal.js";
 import type { TaskManager } from "../../src/tasks/task-manager.js";
-import type {
-  TaskOperationResult,
-  TaskSnapshot,
-} from "../../src/tasks/task-types.js";
+import type { TaskSnapshot } from "../../src/tasks/task-types.js";
 
 type ClaudeManager = Pick<
   TaskManager,
@@ -137,6 +134,16 @@ describe("ClaudeProviderAdapter", () => {
       "message-anchor",
       { send: (message) => received.push(message) },
     );
+    expect(received).toEqual([]);
+    expect(
+      received.some(
+        (frame) =>
+          typeof frame === "object" &&
+          frame !== null &&
+          "kind" in frame &&
+          frame.kind === "agent.checkpoint",
+      ),
+    ).toBe(false);
     const output = {
       type: "future_sdk_variant",
       uuid: "output-1",
@@ -147,11 +154,130 @@ describe("ClaudeProviderAdapter", () => {
     ]);
     expect(received).toEqual([output]);
     expect(received[0]).toBe(output);
+    expect(
+      received.some(
+        (frame) =>
+          typeof frame === "object" &&
+          frame !== null &&
+          "kind" in frame &&
+          frame.kind === "agent.checkpoint",
+      ),
+    ).toBe(false);
 
     await fixture.adapter.taskStream.activate(task.id);
     expect(fixture.activationInputs).toEqual([task.id]);
     unsubscribe();
     expect(fixture.unsubscribed).toBe(true);
+  });
+
+  it("probes Claude SDK readiness with TTL caching and stable reason codes", async () => {
+    let now = 1_000;
+    let probes = 0;
+    const fixture = createFixture();
+    const adapter = new ClaudeProviderAdapter(
+      fixture.manager as never,
+      fixture.journal as never,
+      {
+        now: () => now,
+        readinessTtlMs: 30_000,
+        async probeSdk() {
+          probes += 1;
+          if (probes === 1) {
+            return {
+              reasonCode: "CLAUDE_SDK_NOT_AVAILABLE",
+              status: "not_installed",
+            };
+          }
+          if (probes === 2) {
+            return {
+              reasonCode: "CLAUDE_SDK_VERSION_UNSUPPORTED",
+              status: "unsupported_version",
+            };
+          }
+          if (probes === 3) {
+            throw new Error("boom /home/secret/.claude");
+          }
+          return {
+            protocolVersion: "claude-agent-sdk@test",
+            status: "available",
+          };
+        },
+      },
+    );
+
+    await adapter.refreshReadiness();
+    expect(probes).toBe(1);
+    expect(adapter.descriptor).toEqual({
+      displayName: "Claude Code",
+      id: "claude",
+      reasonCode: "CLAUDE_SDK_NOT_AVAILABLE",
+      status: "not_installed",
+    });
+    expect(JSON.stringify(adapter.descriptor)).not.toContain("/home/secret");
+
+    await adapter.refreshReadiness();
+    expect(probes).toBe(1);
+
+    now += 30_001;
+    await adapter.refreshReadiness();
+    expect(probes).toBe(2);
+    expect(adapter.descriptor.status).toBe("unsupported_version");
+    expect(adapter.descriptor.reasonCode).toBe(
+      "CLAUDE_SDK_VERSION_UNSUPPORTED",
+    );
+
+    await adapter.refreshReadiness({ force: true });
+    expect(probes).toBe(3);
+    expect(adapter.descriptor).toEqual({
+      displayName: "Claude Code",
+      id: "claude",
+      reasonCode: "CLAUDE_SDK_PROBE_FAILED",
+      status: "unhealthy",
+    });
+    expect(JSON.stringify(adapter.descriptor)).not.toContain("/home/secret");
+
+    await adapter.refreshReadiness({ force: true });
+    expect(probes).toBe(4);
+    expect(adapter.descriptor.status).toBe("available");
+    expect(adapter.descriptor.protocolVersion).toBe("claude-agent-sdk@test");
+    expect(adapter.descriptor.capabilities?.streamProtocol).toBe(
+      "claude-agent-sdk",
+    );
+    expect(adapter.descriptor.capabilities?.historyFilters).toEqual({
+      includeSystemMessages: true,
+    });
+  });
+
+  it("single-flights concurrent Claude readiness probes", async () => {
+    const fixture = createFixture();
+    let probes = 0;
+    let releaseProbe!: () => void;
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const adapter = new ClaudeProviderAdapter(
+      fixture.manager as never,
+      fixture.journal as never,
+      {
+        async probeSdk() {
+          probes += 1;
+          await probeGate;
+          return {
+            protocolVersion: "claude-agent-sdk@test",
+            status: "available",
+          };
+        },
+      },
+    );
+
+    const first = adapter.refreshReadiness({ force: true });
+    const second = adapter.refreshReadiness({ force: true });
+    await Promise.resolve();
+    expect(probes).toBe(1);
+    releaseProbe();
+    await Promise.all([first, second]);
+    expect(probes).toBe(1);
+    expect(adapter.descriptor.status).toBe("available");
   });
 });
 
@@ -193,11 +319,19 @@ function createFixture() {
     async activateSdkSession(taskId): Promise<void> {
       activationInputs.push(taskId);
     },
-    async attachClaudeSession(input): Promise<TaskOperationResult> {
+    async attachClaudeSession(
+      input,
+    ): Promise<
+      import("../../src/tasks/task-types.js").TaskBoundOperationResult
+    > {
       attachInputs.push(input);
       return { action: "attached", task };
     },
-    async createClaudeConversation(input): Promise<TaskOperationResult> {
+    async createClaudeConversation(
+      input,
+    ): Promise<
+      import("../../src/tasks/task-types.js").TaskBoundOperationResult
+    > {
       createInputs.push(input);
       return { action: "created", task };
     },
@@ -234,6 +368,8 @@ function createFixture() {
     attachInputs,
     createInputs,
     historyInputs,
+    journal,
+    manager,
     set historyResult(value: typeof historyResult) {
       historyResult = value;
     },

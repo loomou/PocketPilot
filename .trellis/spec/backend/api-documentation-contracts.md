@@ -73,10 +73,13 @@ emits `dist/openapi/mobile-v1.json`.
   exported `sdkUserMessageTransportSchema` for the documented base guard;
   describe SDK output as an open SDK-owned object instead of hand-copying its
   evolving union into Zod.
-- Document `afterCursor`, absent/unknown replay fallback, no PocketPilot wrapper,
-  and close codes `4000`, `4003`, `4004`, `4009`, and `4011`. Keep
+- Document `afterCursor`, absent/unknown replay fallback, the Codex-only
+  subscribe-time `agent.checkpoint` control frame before retained native
+  replay, that subsequent Codex frames and Claude frames stay unwrapped, and
+  close codes `4000`, `4003`, `4004`, `4009`, and `4011`. Keep
   `afterCursor` and `EVENT_SUBSCRIPTION_INVALID` specific to the control
-  socket.
+  socket (Codex Agent `afterCursor` remains a query parameter, not a control
+  event).
 - Document subscribe-before-activation for session-centric runtimes without
   changing the raw WebSocket schemas or adding an SDK envelope.
 - Document approval controls with every serializable `CanUseTool` option and
@@ -134,8 +137,11 @@ emits `dist/openapi/mobile-v1.json`.
   provider-scoped conversation list/create/history/attach, composer options,
   and effort; descriptions include the SDK version, 50-row cursor
   behavior, history/live separation, and subscribe-before-activation.
-- Assert control docs contain no SDK server message, raw SDK docs contain no
-  PocketPilot wrapper, and all approval fields and stable close codes appear.
+- Assert capability schemas include closed `historyFilters` with boolean
+  `includeSystemMessages` (Claude true / Codex false in product docs).
+- Assert control docs contain no SDK server message, Agent docs describe the
+  Codex `agent.checkpoint` exception while Claude frames remain unwrapped, and
+  all approval fields and stable close codes appear.
 - Local-app injection must return Swagger UI and the exact raw document while
   remote-app injection returns 404 for the same paths.
 - `pnpm build`, tarball inspection, and the Windows packed-install smoke test

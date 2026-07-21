@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/codex-app-server-contracts.md", "reason": "Verify subscribe-time agent.checkpoint before replay, pure native frames, cursor null rules"}
+{"file": ".trellis/spec/backend/agent-provider-contracts.md", "reason": "Verify Codex-only emission and Claude unchanged subscribe behavior"}
+{"file": ".trellis/spec/backend/api-documentation-contracts.md", "reason": "Verify reconnect docs and Agent stream documentation match checkpoint extension"}
+{"file": ".trellis/spec/backend/task-runtime-contracts.md", "reason": "Verify no leakage of checkpoint into control-events or wrong channels"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify tests cover ordering, null cursor, non-injection, and no unrelated churn"}

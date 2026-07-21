@@ -53,6 +53,10 @@ export const taskOperationActionSchema = z.enum([
   "model-changed",
   "permission-mode-changed",
   "effort-changed",
+  "forked",
+  "archived",
+  "unarchived",
+  "deleted",
 ]);
 
 export type TaskOperationAction = z.infer<typeof taskOperationActionSchema>;
@@ -61,10 +65,39 @@ export type TaskOperationAction = z.infer<typeof taskOperationActionSchema>;
  * Persisted idempotency results intentionally contain only task metadata.
  * SDK messages, model output, tool inputs, and approval details stay outside
  * this table so it can never become a second Claude transcript.
+ * Thread-management actions that leave no local task return `task: null`.
  */
-export const taskOperationResultSchema = z.object({
-  action: taskOperationActionSchema,
-  task: taskSnapshotSchema,
-});
+export const taskOperationResultSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.enum([
+      "attached",
+      "created",
+      "interrupted",
+      "closed",
+      "resumed",
+      "approval-approved",
+      "approval-denied",
+      "model-changed",
+      "permission-mode-changed",
+      "effort-changed",
+      "forked",
+    ]),
+    task: taskSnapshotSchema,
+  }),
+  z.object({
+    action: z.enum(["archived", "unarchived", "deleted"]),
+    task: z.null(),
+  }),
+]);
 
 export type TaskOperationResult = z.infer<typeof taskOperationResultSchema>;
+
+export type TaskBoundOperationResult = Extract<
+  TaskOperationResult,
+  { task: TaskSnapshot }
+>;
+
+export type TaskNullOperationResult = Extract<
+  TaskOperationResult,
+  { task: null }
+>;

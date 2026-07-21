@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/api-documentation-contracts.md", "reason": "Mobile/OpenAPI documentation rules and Agent stream doc exceptions"}
+{"file": ".trellis/spec/backend/agent-provider-contracts.md", "reason": "Closed capabilities, readiness, historyFilters, conversation ops"}
+{"file": ".trellis/spec/backend/codex-app-server-contracts.md", "reason": "Codex REST lifecycle, native actions, catalogs, agent.checkpoint"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Client-relevant TaskError codes and HTTP mapping"}
+{"file": ".trellis/spec/backend/task-runtime-contracts.md", "reason": "Agent WS vs control events ownership"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Doc honesty, no invented APIs, bilingual consistency expectations"}

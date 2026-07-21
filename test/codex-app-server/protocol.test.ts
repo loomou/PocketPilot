@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   isCodexClientRequestFrame,
   isCodexReadClientRequestMethod,
+  isCodexStatusCatalogMethod,
+  isCodexStatusCatalogNotification,
+  isCodexTurnStartingMethod,
+  isSupportedCodexReviewTarget,
   parseCodexClientFrame,
 } from "../../src/codex-app-server/protocol.js";
 
@@ -23,6 +27,32 @@ describe("Codex native transport guard", () => {
       method: "turn/start",
       params: { input: [{ text: "hello", text_elements: [], type: "text" }] },
     });
+  });
+
+  it("accepts native review, rename, and compact requests without wrapping them", () => {
+    for (const frame of [
+      {
+        id: 21,
+        method: "review/start",
+        params: {
+          delivery: "inline",
+          target: { type: "uncommittedChanges" },
+          threadId: "thr_123",
+        },
+      },
+      {
+        id: 22,
+        method: "thread/name/set",
+        params: { name: "Provider parity audit", threadId: "thr_123" },
+      },
+      {
+        id: 23,
+        method: "thread/compact/start",
+        params: { threadId: "thr_123" },
+      },
+    ]) {
+      expect(parseCodexClientFrame(JSON.stringify(frame))).toEqual(frame);
+    }
   });
 
   it("rejects binary frames and privileged methods", () => {
@@ -54,17 +84,107 @@ describe("Codex native transport guard", () => {
 
   it("classifies native catalogs and history as P3 reads", () => {
     for (const method of [
+      "account/rateLimits/read",
+      "account/read",
+      "hooks/list",
+      "mcpServerStatus/list",
       "model/list",
       "collaborationMode/list",
       "permissionProfile/list",
+      "skills/list",
       "thread/read",
       "thread/turns/list",
       "thread/items/list",
     ]) {
       expect(isCodexReadClientRequestMethod(method)).toBe(true);
     }
-    for (const method of ["turn/start", "turn/steer", "turn/interrupt"]) {
+    for (const method of [
+      "turn/start",
+      "turn/steer",
+      "turn/interrupt",
+      "review/start",
+      "thread/name/set",
+      "thread/compact/start",
+    ]) {
       expect(isCodexReadClientRequestMethod(method)).toBe(false);
     }
+  });
+
+  it("accepts readonly status-catalog requests as native P3 methods", () => {
+    for (const method of [
+      "account/read",
+      "account/rateLimits/read",
+      "skills/list",
+      "hooks/list",
+      "mcpServerStatus/list",
+    ]) {
+      expect(
+        parseCodexClientFrame(
+          JSON.stringify({ id: method, method, params: {} }),
+        ),
+      ).toMatchObject({ id: method, method, params: {} });
+      expect(isCodexStatusCatalogMethod(method)).toBe(true);
+      expect(isCodexReadClientRequestMethod(method)).toBe(true);
+    }
+    expect(isCodexStatusCatalogMethod("model/list")).toBe(false);
+    expect(isCodexStatusCatalogMethod("account/login/start")).toBe(false);
+    expect(isCodexStatusCatalogMethod("account/logout")).toBe(false);
+  });
+
+  it("forwards only the reviewed status-catalog notifications", () => {
+    for (const method of [
+      "account/updated",
+      "account/rateLimits/updated",
+      "skills/changed",
+      "hook/started",
+      "hook/completed",
+      "mcpServer/startupStatus/updated",
+    ]) {
+      expect(isCodexStatusCatalogNotification(method)).toBe(true);
+    }
+    expect(isCodexStatusCatalogNotification("account/login/completed")).toBe(
+      false,
+    );
+  });
+
+  it("classifies review and compact as turn-starting methods", () => {
+    expect(isCodexTurnStartingMethod("turn/start")).toBe(true);
+    expect(isCodexTurnStartingMethod("review/start")).toBe(true);
+    expect(isCodexTurnStartingMethod("thread/compact/start")).toBe(true);
+    expect(isCodexTurnStartingMethod("thread/name/set")).toBe(false);
+    expect(isCodexTurnStartingMethod("turn/steer")).toBe(false);
+  });
+
+  it("accepts only the reviewed native review targets", () => {
+    expect(isSupportedCodexReviewTarget({ type: "uncommittedChanges" })).toBe(
+      true,
+    );
+    expect(
+      isSupportedCodexReviewTarget({
+        branch: "main",
+        type: "baseBranch",
+      }),
+    ).toBe(true);
+    expect(
+      isSupportedCodexReviewTarget({
+        sha: "abc123",
+        title: "fix",
+        type: "commit",
+      }),
+    ).toBe(true);
+    expect(
+      isSupportedCodexReviewTarget({
+        instructions: "focus on security",
+        type: "custom",
+      }),
+    ).toBe(true);
+    expect(isSupportedCodexReviewTarget({ type: "detached" })).toBe(false);
+    expect(isSupportedCodexReviewTarget({ type: "baseBranch" })).toBe(false);
+    expect(
+      isSupportedCodexReviewTarget({
+        instructions: "   ",
+        type: "custom",
+      }),
+    ).toBe(false);
   });
 });

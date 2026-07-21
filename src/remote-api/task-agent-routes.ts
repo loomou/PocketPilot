@@ -25,7 +25,7 @@ const taskAgentQuerySchema = z.object({
 
 export const taskAgentRouteDocumentation = {
   description:
-    "Authenticated bidirectional transport for the selected task provider's native client and server messages. Frames have no PocketPilot payload wrapper.",
+    "Authenticated bidirectional transport for the selected task provider's native client and server messages. Frames remain provider-native, except Codex emits one subscribe-time agent.checkpoint control frame before retained native replay.",
   operationId: "streamTaskAgentMessages",
   security: [{ bearerAuth: [] }],
   summary: "Exchange provider-native Agent messages",

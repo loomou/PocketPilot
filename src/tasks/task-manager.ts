@@ -50,6 +50,7 @@ import {
 } from "./task-operation-scheduler.js";
 import { TaskRepository } from "./task-repository.js";
 import type {
+  TaskBoundOperationResult,
   TaskOperationAction,
   TaskOperationResult,
   TaskSnapshot,
@@ -207,7 +208,7 @@ type LiveTask = {
 };
 
 type OperationExecution = {
-  action: TaskOperationAction;
+  action: Exclude<TaskOperationAction, "archived" | "unarchived" | "deleted">;
   auditResult: string;
   task: TaskSnapshot;
 };
@@ -306,6 +307,7 @@ export class TaskManager {
       assertReadable: (taskId) => this.assertProviderTaskReadable(taskId),
       beginInterrupt: (taskId) => this.beginProviderInterrupt(taskId),
       completeInterrupt: (taskId) => this.completeProviderInterrupt(taskId),
+      markTerminal: (taskId) => this.markProviderTaskTerminal(taskId),
       reserveTurn: (taskId, lease) => this.reserveProviderTurn(taskId, lease),
       rollbackTurn: (taskId) => this.rollbackProviderTurn(taskId),
       run: (taskId, operation) => this.runProviderTaskLane(taskId, operation),
@@ -696,7 +698,7 @@ export class TaskManager {
 
   public async createClaudeConversation(
     input: SessionOperationInput,
-  ): Promise<TaskOperationResult> {
+  ): Promise<TaskBoundOperationResult> {
     const parsed = sessionOperationInputSchema.safeParse(input);
     if (!parsed.success) {
       throw invalidTaskOperationError();
@@ -735,12 +737,12 @@ export class TaskManager {
           };
         });
       }),
-    );
+    ) as Promise<TaskBoundOperationResult>;
   }
 
   public async attachClaudeSession(
     input: SessionOperationInput & { sessionId: string },
-  ): Promise<TaskOperationResult> {
+  ): Promise<TaskBoundOperationResult> {
     const parsed = attachClaudeSessionInputSchema.safeParse(input);
     if (!parsed.success) {
       throw invalidTaskOperationError();
@@ -779,7 +781,7 @@ export class TaskManager {
           };
         });
       }),
-    );
+    ) as Promise<TaskBoundOperationResult>;
   }
 
   /** Activates only session-centric runtimes after the raw subscriber exists. */
@@ -2287,6 +2289,36 @@ export class TaskManager {
       this.publishTaskState(started);
     }
     return started;
+  }
+
+  private markProviderTaskTerminal(taskId: string): TaskSnapshot | undefined {
+    const task = this.#repository.find(taskId);
+    if (task === undefined || task.state === "terminal") {
+      return task;
+    }
+    const liveTask = this.#liveTasks.get(taskId);
+    if (liveTask !== undefined) {
+      liveTask.closed = true;
+      liveTask.interrupting = false;
+      liveTask.pendingQueryCount = 0;
+      this.cancelPendingApproval(
+        liveTask,
+        "The provider conversation was closed.",
+      );
+    }
+    this.#taskLanes.get(taskId)?.invalidate();
+    this.#providerInterruptTasks.delete(taskId);
+    this.#providerTurnReservations.delete(taskId);
+    const terminal = this.#repository.update(taskId, {
+      activeTurnId: null,
+      state: "terminal",
+      terminalAt: this.#now(),
+      updatedAt: this.#now(),
+    });
+    this.publishTaskState(terminal);
+    this.#eventSink?.endTurn(taskId);
+    this.#closeTaskAgentConnections.closeTaskConnections(taskId);
+    return terminal;
   }
 
   private completeProviderTurn(taskId: string): TaskSnapshot | undefined {
