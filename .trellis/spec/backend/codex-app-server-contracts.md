@@ -101,11 +101,16 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
   the authoritative terminal event. After `turn/started` has set
   `activeTurnId`, a late native error for the original request must not roll
   back capacity, journal retention, or ownership.
-- `afterCursor` is PocketPilot transport metadata. Codex frames never contain
-  it. Retain only the active turn: `beginTurn()` clears the prior window and
-  `endTurn()` clears retained frames without disconnecting subscribers. A
-  missing, invalid, unknown, or evicted cursor replays the full retained active
-  turn; a known cursor replays only later native frames.
+- `afterCursor` is PocketPilot transport metadata. Native Codex JSON-RPC frames
+  never contain it. On each successful Agent subscribe, emit exactly one
+  out-of-band control frame before retained replay:
+  `{ kind: "agent.checkpoint", payload: { provider: "codex",
+  cursor: latestCursor|null } }`. Retained and live native frames stay pure.
+  Checkpoint cadence is subscribe-time only. Retain only the active turn:
+  `beginTurn()` clears the prior window and `endTurn()` clears retained frames
+  without disconnecting subscribers. A missing, invalid, unknown, or evicted
+  cursor replays the full retained active turn; a known cursor replays only
+  later native frames.
 
 ### Remote methods, history, and approvals
 
@@ -241,7 +246,7 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
 - Base: `thread/list` returns mixed roots and sources; PocketPilot includes
   `cli`, `vscode`, and `appServer`, then removes rows outside the authorized
   workspace without changing retained rows.
-- Bad: wrapping frames in `{ kind: "codex", payload }`, inventing PocketPilot
+- Bad: wrapping native frames in `{ kind: "codex", payload }` or inventing envelopes other than the single reviewed `agent.checkpoint`, inventing PocketPilot
   action envelopes, using `taskId` as a thread or turn ID, advertising
   detached review or attachments, parsing absolute paths from prompt text, or
   allowing an old child's close event to kill its replacement.
@@ -262,8 +267,10 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
   projection for account/skills/hooks/mcpServers/rateLimits, workspace
   revocation, and cleanup.
 - Journal tests cover task isolation, entry/byte eviction, known cursor replay,
-  absent/unknown/stale cursor fallback, active-turn reset, and end-turn cleanup
-  without dropping live subscribers.
+  absent/unknown/stale cursor fallback, subscribe-time `agent.checkpoint`
+  emission before retained frames (including null cursor), non-injection into
+  native frames, active-turn reset, and end-turn cleanup without dropping live
+  subscribers.
 - The caller-configured live suite must prove initialize, readiness probe
   semantics, `model/list`, all thread sources, `thread/start`, native streaming,
   `thread/turns/list`, `thread/read`, `thread/resume`, active-turn interrupt,

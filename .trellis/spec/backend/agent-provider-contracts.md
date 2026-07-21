@@ -133,6 +133,9 @@ unarchive, or delete.
 - `/v1/tasks/{taskId}/agent` selects the adapter from the persisted task. It
   installs the native subscriber before activation and transports JSON frames
   without `{ kind: "agent", payload: ... }` or another synthetic wrapper.
+  Codex alone may emit one reviewed subscribe-time control frame
+  `{ kind: "agent.checkpoint", payload: { provider: "codex",
+  cursor: string|null } }` before retained native replay; Claude does not.
 - `/v1/events` remains the independent PocketPilot control stream. Task state,
   task IDs, and control cursors never enter provider-native frames. A provider
   approval may additionally project a metadata-only `approval.requested`
