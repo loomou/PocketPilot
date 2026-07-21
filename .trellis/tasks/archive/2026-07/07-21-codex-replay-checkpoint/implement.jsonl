@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/codex-app-server-contracts.md", "reason": "Agent stream purity, afterCursor replay, active-turn retention, reconnect rules"}
+{"file": ".trellis/spec/backend/agent-provider-contracts.md", "reason": "taskStream.subscribe contract and provider-native message boundaries"}
+{"file": ".trellis/spec/backend/api-documentation-contracts.md", "reason": "Mobile/OpenAPI docs must describe Codex out-of-band checkpoint exception"}
+{"file": ".trellis/spec/backend/task-runtime-contracts.md", "reason": "Task Agent WS routing and journal ownership boundaries"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Test expectations for protocol extensions without silent contract drift"}
