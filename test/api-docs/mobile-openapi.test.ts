@@ -199,9 +199,10 @@ describe("mobile OpenAPI generation", () => {
     expect(agent.notes.join(" ")).toContain(
       "@anthropic-ai/claude-agent-sdk@0.3.210",
     );
-    expect(agent.notes.join(" ")).toContain("no PocketPilot wrapper");
+    expect(agent.notes.join(" ")).toContain("agent.checkpoint");
     expect(agent.notes.join(" ")).toContain("afterCursor query");
     expect(agent.notes.join(" ")).toContain("complete retained active-turn");
+    expect(agent.notes.join(" ")).toContain("provider-native objects");
     expect(agent.notes.join(" ")).toContain("approval.requested");
     expect(agent.notes.join(" ")).toContain("method-specific native response");
     expect(agent.notes.join(" ")).toContain("TASK_CONTROL_NOT_SUPPORTED");

@@ -134,6 +134,16 @@ describe("ClaudeProviderAdapter", () => {
       "message-anchor",
       { send: (message) => received.push(message) },
     );
+    expect(received).toEqual([]);
+    expect(
+      received.some(
+        (frame) =>
+          typeof frame === "object" &&
+          frame !== null &&
+          "kind" in frame &&
+          frame.kind === "agent.checkpoint",
+      ),
+    ).toBe(false);
     const output = {
       type: "future_sdk_variant",
       uuid: "output-1",
@@ -144,6 +154,15 @@ describe("ClaudeProviderAdapter", () => {
     ]);
     expect(received).toEqual([output]);
     expect(received[0]).toBe(output);
+    expect(
+      received.some(
+        (frame) =>
+          typeof frame === "object" &&
+          frame !== null &&
+          "kind" in frame &&
+          frame.kind === "agent.checkpoint",
+      ),
+    ).toBe(false);
 
     await fixture.adapter.taskStream.activate(task.id);
     expect(fixture.activationInputs).toEqual([task.id]);

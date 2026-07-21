@@ -41,7 +41,9 @@ types, and rerun the flows in section 16 before releasing the mobile client.
   protocol or normalize provider-native messages.
 - `/v1/tasks/{taskId}/agent` is the bidirectional provider-native stream. For
   `provider: "claude"`, client frames are raw `SDKUserMessage` objects and
-  server frames are raw `SDKMessage` objects.
+  server frames are raw `SDKMessage` objects. For `provider: "codex"`, server
+  traffic is native Codex JSON-RPC plus one subscribe-time
+  `agent.checkpoint` control frame before retained native replay.
 - `/v1/events` carries PocketPilot control events only. It never carries an SDK
   message, even inside a `kind: "sdk"` envelope.
 - Historical rows remain provider-native. Claude rows are SDK
@@ -107,7 +109,7 @@ wrap SDK messages in a second protocol.
 | Surface | Direction | Authentication | Content |
 | --- | --- | --- | --- |
 | `/v1/*` REST | Request/response | Public only where listed below; otherwise `Authorization: Bearer <accessToken>` | Pairing, discovery, task metadata, controls, approvals |
-| `/v1/tasks/{taskId}/agent` | Bidirectional WebSocket | Bearer header during handshake | Provider-native messages; raw `SDKUserMessage`/`SDKMessage` when `task.provider` is `claude` |
+| `/v1/tasks/{taskId}/agent` | Bidirectional WebSocket | Bearer header during handshake | Provider-native messages; raw `SDKUserMessage`/`SDKMessage` when `task.provider` is `claude`. Codex also emits one subscribe-time `agent.checkpoint` control frame before retained native replay; see the Codex mobile guide. |
 | `/v1/events` | Bidirectional WebSocket | Bearer header during handshake | Subscribe requests and PocketPilot control events only |
 
 Convert the QR `baseUrl` scheme when opening WebSockets: `https` becomes

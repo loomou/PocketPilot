@@ -13,9 +13,9 @@ The [Simplified Chinese Codex guide](./codex-mobile-integration-guide.zh-CN.md) 
 | Endpoint | Responsibility | Codex client behavior |
 | --- | --- | --- |
 | `/v1/events` | PocketPilot control events and task control state | Parse only PocketPilot control events; do not look for Codex text or items here |
-| `/v1/tasks/{taskId}/agent` | Bidirectional provider-native stream for one task | Use native Codex App Server JSON-RPC frames |
+| `/v1/tasks/{taskId}/agent` | Bidirectional provider-native stream for one task | Native Codex JSON-RPC frames, plus one subscribe-time `agent.checkpoint` control frame before retained replay (§10.2) |
 
-The Agent WebSocket does not add an `event`, `payload`, or `kind: "sdk"` envelope. Every server text frame is one native Codex JSON object. Every client frame must be either an allowed native Codex request or a response to a native server request.
+The Agent WebSocket does not add an `event` envelope or a `kind: "sdk"` wrapper. Server traffic is native Codex App Server JSON-RPC, except for one Codex-only subscribe-time control frame `{ kind: "agent.checkpoint", payload: { provider: "codex", cursor } }` emitted once before retained native replay (see §10.2). Every later server frame is one native Codex JSON object. Every client frame must be either an allowed native Codex request or a response to a native server request.
 
 PocketPilot starts and initializes App Server over stdio internally. A mobile client must not send `initialize`, `initialized`, `thread/start`, or `thread/resume` through the task WebSocket. Conversation creation and attachment use PocketPilot REST routes. The task WebSocket accepts only the native methods listed in this guide.
 
@@ -750,22 +750,43 @@ Ordinary prompt text is not interpreted as a path, so the user can mention text 
 
 1. When the Agent WebSocket disconnects, call `GET /v1/tasks/{taskId}` before deciding what to send next.
 2. Stop sending if the task is `terminal`. If it is `interrupted`, follow the product's explicit resume or reattach flow.
-3. Discard the local in-progress Codex turn projection, including delta buffers, before reopening `/v1/tasks/{taskId}/agent` without `afterCursor`.
-4. Rebuild the in-progress UI from the complete retained active-turn replay, then continue with live notifications. Do not append that replay to the pre-disconnect delta buffers.
+3. Before reopening `/v1/tasks/{taskId}/agent`, discard corrupted in-progress delta buffers. Omit `afterCursor` for a full active-turn rebuild, or pass the last non-null subscribe checkpoint as `afterCursor` only when the client already holds a consistent projection through that cursor and wants incremental later frames.
+4. Apply the retained native frames delivered for this subscription (full window or later-only), then continue with live notifications. Do not append replayed text/reasoning deltas onto pre-disconnect buffers.
 5. If no active turn is retained or a final `turn/completed` was missed, read native history and replace the final item list from that source of truth.
 6. Never automatically resend a `turn/start` after an uncertain response. First inspect `turn/started`, `turn/completed`, task metadata, and native history to determine whether Codex already executed it.
 
-### 10.2 Current `afterCursor` limitation
+### 10.2 Subscribe-time checkpoint and `afterCursor`
 
-`afterCursor` is PocketPilot transport metadata, not a field in a Codex frame:
+`afterCursor` is PocketPilot transport metadata, not a field in a Codex JSON-RPC frame:
 
 ```text
 GET /v1/tasks/{taskId}/agent?afterCursor=<opaque-cursor>
 ```
 
-A known retained cursor replays later frames for compatibility. A missing, malformed, expired, or evicted cursor replays the complete retained active turn from its beginning. Starting a newer turn resets that window; completing, interrupting, closing, or revoking the task clears it. The current PocketPilot Agent stream does not add cursor metadata to native JSON frames and does not return the latest cursor during the WebSocket handshake.
+On each successful Codex Agent subscribe, before any retained native frames, the socket emits exactly one out-of-band control frame:
 
-For the current client, omit `afterCursor`. On reconnect, clear the old in-progress reducer state and apply the full active-turn replay once. Native IDs still identify items and terminal notifications, but they are not permission to append text or reasoning deltas to the old reducer a second time. Reconcile completed work from history. Never substitute `threadId`, `turnId`, `itemId`, or a message UUID for the transport cursor.
+```json
+{
+  "kind": "agent.checkpoint",
+  "payload": {
+    "provider": "codex",
+    "cursor": "180"
+  }
+}
+```
+
+- `payload.cursor` is the latest retained journal cursor at emit time, or `null` when no retained window exists.
+- Discriminate frames: `kind === "agent.checkpoint"` (and no `jsonrpc`) is the control frame; all later frames are pure Codex App Server JSON-RPC.
+- Native retained and live frames stay unmodified; never expect a cursor field inside them.
+- A known retained cursor replays only later native frames. A missing, malformed, expired, or evicted cursor replays the complete retained active turn from its beginning. Starting a newer turn resets that window; completing, interrupting, closing, or revoking the task clears it.
+- Checkpoint cadence is subscribe-time only. Frames published after subscribe are not reflected until the next reconnect, so a short re-replay tail is possible.
+
+Recommended reconnect flow:
+
+1. On open, if the first frame is `agent.checkpoint`, store `payload.cursor` as `lastCheckpoint` when non-null.
+2. Apply retained and live **native** frames only; skip non-native control frames.
+3. On disconnect, either reopen without `afterCursor` and rebuild the full active-turn projection, or reopen with `afterCursor=lastCheckpoint` when non-null and accept possible short re-replay of frames published after that checkpoint.
+4. Never substitute `threadId`, `turnId`, `itemId`, or a message UUID for the transport cursor. Reconcile completed work from native history when needed.
 
 ### 10.3 App Server restart
 

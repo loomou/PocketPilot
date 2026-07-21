@@ -97,6 +97,13 @@ describe("task Agent WebSocket", () => {
     journal.beginTurn(taskId);
     journal.publish(taskId, first);
     journal.publish(taskId, second);
+    const checkpoint = {
+      kind: "agent.checkpoint",
+      payload: {
+        cursor: "2",
+        provider: "codex",
+      },
+    };
 
     const initialMessages: unknown[] = [];
     const initial = await fixture.app.injectWS(
@@ -104,15 +111,17 @@ describe("task Agent WebSocket", () => {
       { headers: { authorization: "Bearer access-token" } },
       { onInit: (socket) => collectMessages(socket, initialMessages) },
     );
-    await waitFor(() => initialMessages.length === 2);
-    expect(initialMessages).toEqual([first, second]);
+    await waitFor(() => initialMessages.length === 3);
+    expect(initialMessages).toEqual([checkpoint, first, second]);
+    expect(initialMessages[1]).toEqual(first);
+    expect(Object.hasOwn(initialMessages[1] as object, "cursor")).toBe(false);
     const live = {
       method: "item/completed",
       params: { item: { id: "item-1" }, threadId: "thread-1" },
     };
     journal.publish(taskId, live);
-    await waitFor(() => initialMessages.length === 3);
-    expect(initialMessages[2]).toEqual(live);
+    await waitFor(() => initialMessages.length === 4);
+    expect(initialMessages[3]).toEqual(live);
     initial.terminate();
 
     const fallbackMessages: unknown[] = [];
@@ -121,9 +130,39 @@ describe("task Agent WebSocket", () => {
       { headers: { authorization: "Bearer access-token" } },
       { onInit: (socket) => collectMessages(socket, fallbackMessages) },
     );
-    await waitFor(() => fallbackMessages.length === 3);
-    expect(fallbackMessages).toEqual([first, second, live]);
+    await waitFor(() => fallbackMessages.length === 4);
+    expect(fallbackMessages).toEqual([
+      {
+        kind: "agent.checkpoint",
+        payload: {
+          cursor: "3",
+          provider: "codex",
+        },
+      },
+      first,
+      second,
+      live,
+    ]);
     fallback.terminate();
+
+    const knownMessages: unknown[] = [];
+    const known = await fixture.app.injectWS(
+      `/v1/tasks/${taskId}/agent?afterCursor=2`,
+      { headers: { authorization: "Bearer access-token" } },
+      { onInit: (socket) => collectMessages(socket, knownMessages) },
+    );
+    await waitFor(() => knownMessages.length === 2);
+    expect(knownMessages).toEqual([
+      {
+        kind: "agent.checkpoint",
+        payload: {
+          cursor: "3",
+          provider: "codex",
+        },
+      },
+      live,
+    ]);
+    known.terminate();
 
     const nextTurn = {
       method: "turn/started",
@@ -137,8 +176,17 @@ describe("task Agent WebSocket", () => {
       { headers: { authorization: "Bearer access-token" } },
       { onInit: (socket) => collectMessages(socket, nextTurnMessages) },
     );
-    await waitFor(() => nextTurnMessages.length === 1);
-    expect(nextTurnMessages).toEqual([nextTurn]);
+    await waitFor(() => nextTurnMessages.length === 2);
+    expect(nextTurnMessages).toEqual([
+      {
+        kind: "agent.checkpoint",
+        payload: {
+          cursor: "4",
+          provider: "codex",
+        },
+      },
+      nextTurn,
+    ]);
     next.terminate();
   });
 

@@ -153,9 +153,23 @@ Open the authenticated provider stream after reading the task metadata:
 GET /v1/tasks/{taskId}/agent?afterCursor={providerCursor}
 ```
 
-Every frame is a Codex App Server JSON-RPC object. There is no PocketPilot
-payload wrapper and no Claude SDK translation. Client requests use their own
-JSON-RPC IDs:
+Server traffic is Codex App Server JSON-RPC, except for one Codex-only
+subscribe-time control frame on the Agent WebSocket:
+
+```json
+{
+  "kind": "agent.checkpoint",
+  "payload": {
+    "provider": "codex",
+    "cursor": "180"
+  }
+}
+```
+
+That frame is emitted once before retained native replay. It is not JSON-RPC
+and must not be treated as a Codex method. All subsequent retained and live
+frames remain pure native objects with no PocketPilot payload wrapper and no
+Claude SDK translation. Client requests use their own JSON-RPC IDs:
 
 ```json
 {
@@ -332,16 +346,21 @@ user's selection.
 
 ## Reconnect and failure handling
 
-`afterCursor` is outside native frames. A retained known cursor replays later
-frames for compatibility. A missing, malformed, expired, or evicted cursor
-replays the complete retained active turn from its beginning. Beginning a new
-turn resets the window; completion, interrupt, close, or revocation clears it.
+`afterCursor` is outside native frames. On subscribe, Codex emits one
+`agent.checkpoint` frame first with `payload.cursor` equal to the latest
+retained journal cursor (or `null`). A retained known cursor then replays only
+later native frames. A missing, malformed, expired, or evicted cursor replays
+the complete retained active turn from its beginning. Beginning a new turn
+resets the window; completion, interrupt, close, or revocation clears it.
 
-The current Agent stream does not expose a latest Codex cursor. Clients should
-omit `afterCursor`, discard the pre-disconnect active-turn reducer, rebuild it
-once from the full replay, and then consume live frames. Do not append replayed
-text/reasoning deltas to old buffers. Reconcile completed work from native
-history; native thread/turn/item IDs are not transport cursors.
+Clients may store a non-null checkpoint cursor and pass it as `afterCursor` on
+the next open. Because checkpoints are subscribe-time only, frames published
+after subscribe are not reflected until the next reconnect and a short
+re-replay tail is possible. Omitting `afterCursor` still rebuilds from the full
+retained window. Discard the pre-disconnect active-turn reducer before applying
+replay, do not append replayed text/reasoning deltas to old buffers, and
+reconcile completed work from native history. Native thread/turn/item IDs are
+not transport cursors.
 
 An App Server process restart creates a new bridge generation. PocketPilot
 initializes it, sends `initialized`, and calls `thread/resume` before forwarding

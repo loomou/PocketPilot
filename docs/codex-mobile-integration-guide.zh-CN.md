@@ -11,9 +11,9 @@
 | 地址 | 作用 | Codex 移动端处理方式 |
 | --- | --- | --- |
 | `/v1/events` | PocketPilot 控制事件、任务状态和控制流 | 只按 PocketPilot 控制事件解析，不在这里寻找 Codex 文本或 item |
-| `/v1/tasks/{taskId}/agent` | 当前任务的 provider 原生双向流 | 对 Codex 使用原生 App Server JSON-RPC 帧 |
+| `/v1/tasks/{taskId}/agent` | 当前任务的 provider 原生双向流 | Codex 原生 JSON-RPC 帧，另加订阅时在保留回放前发送的一帧 `agent.checkpoint` 控制帧（§10.2） |
 
-Agent WebSocket 上没有 `event`、`payload` 或 `kind: "sdk"` 包装。服务端发送的每个文本帧就是一个 Codex 原生 JSON 对象，客户端发送的每个请求也必须是 Codex 原生请求或对原生 server request 的响应。
+Agent WebSocket 上没有 `event` 外壳，也没有 `kind: "sdk"` 包装。服务端流量是原生 Codex App Server JSON-RPC，唯一例外是 Codex 专用的订阅时控制帧：在保留的原生回放之前只发送一次 `{ kind: "agent.checkpoint", payload: { provider: "codex", cursor } }`（见 §10.2）。之后的每个服务端文本帧都是一个 Codex 原生 JSON 对象。客户端发送的每个请求也必须是 Codex 原生请求或对原生 server request 的响应。
 
 PocketPilot 自己在内部通过 stdio 启动并初始化 App Server。移动端连接 PocketPilot 时不要发送 `initialize` 或 `initialized`，也不要自行发送 `thread/start`、`thread/resume`。会话创建和绑定由 PocketPilot REST 完成，任务 WebSocket 只允许文档列出的原生方法。
 
@@ -739,22 +739,43 @@ PocketPilot 会对 Codex 请求中的路径字段做授权校验。对 `turn/sta
 
 1. 发现 Agent WebSocket 断开后，先调用 `GET /v1/tasks/{taskId}` 刷新任务状态。
 2. 如果 task 是 `terminal`，停止发送；如果是 `interrupted`，按产品流程让用户确认是否重新绑定或调用可用的 resume 流程。
-3. 先丢弃本地正在进行的 Codex turn 投影和 delta 缓冲，再不带 `afterCursor` 重开 `/v1/tasks/{taskId}/agent`。
-4. 使用服务端完整重放的当前活动 turn 从头重建 UI，然后接续实时通知；不能把这次重放继续追加到断线前的 delta 缓冲。
+3. 重开 `/v1/tasks/{taskId}/agent` 前，先丢弃已损坏的进行中 delta 缓冲。省略 `afterCursor` 做完整活动 turn 重建；仅当本地已持有到该游标的一致投影、并希望只接收其后帧时，才把最近一次非 null 的订阅 checkpoint 作为 `afterCursor` 做增量回放。
+4. 应用本次订阅返回的保留原生帧（完整窗口或仅后续帧），然后接续实时通知；不能把重放的文本/推理 delta 继续追加到断线前的缓冲。
 5. 如果没有保留中的活动 turn，或断线期间错过了最终 `turn/completed`，读取原生历史并以历史结果替换最终 item 列表。
 6. 对于发送后没有收到响应的 `turn/start`，不要因为网络超时自动再发一次；先依据 `turn/started`、`turn/completed`、task 元数据和历史判断请求是否已经执行。
 
-### 10.2 `afterCursor` 的当前限制
+### 10.2 订阅时 checkpoint 与 `afterCursor`
 
-`afterCursor` 是 PocketPilot 的 transport 参数，不是 Codex 帧的一部分：
+`afterCursor` 是 PocketPilot 的 transport 元数据，不是 Codex JSON-RPC 帧的一部分：
 
 ```text
 GET /v1/tasks/{taskId}/agent?afterCursor=<opaque-cursor>
 ```
 
-已知且仍在保留窗口内的 cursor 会让服务端先重放其后的帧；缺失、未知、过期、格式错误或已经被淘汰的 cursor 会从当前完整活动 turn 的开头重放。新 turn 开始时旧窗口会被重置；turn 完成、中断、task 关闭或工作区撤销时窗口会被清除。PocketPilot 不会在原生 JSON 帧中附加 cursor，也不会在 Agent WebSocket 握手响应中返回最新 cursor。
+每次成功订阅 Codex Agent 流时，在任何保留的原生帧之前，套接字会发送且只发送一帧带外控制帧：
 
-当前客户端应省略 `afterCursor`。重连时先清空旧的活动 reducer，再只应用一次完整活动 turn 重放。原生 ID 仍用于标识 item 和终止通知，但不能据此把文本或 reasoning delta 再次追加到断线前的 reducer。已完成内容以历史为准；不能用 `threadId`、`turnId`、`itemId` 或消息 UUID 代替 transport cursor。
+```json
+{
+  "kind": "agent.checkpoint",
+  "payload": {
+    "provider": "codex",
+    "cursor": "180"
+  }
+}
+```
+
+- `payload.cursor` 是发送时刻最新保留的 journal cursor；没有保留窗口时为 `null`。
+- 帧判别：`kind === "agent.checkpoint"`（且没有 `jsonrpc`）是控制帧；其后帧均为纯 Codex App Server JSON-RPC。
+- 保留帧与实时原生帧保持不变；不要期望在原生帧内出现 cursor 字段。
+- 已知且仍在保留窗口中的 cursor 只回放更晚的原生帧；缺失、未知、过期、格式无效或已被淘汰的 cursor 从当前保留的活动 turn 开头完整回放。新 turn 开始时该窗口会被重置；turn 完成、中断、task 关闭或工作区撤销时窗口会被清空。
+- checkpoint 仅在订阅时发送一次。订阅之后发布的帧要到下次重连才会进入 checkpoint，因此可能出现短尾重放。
+
+推荐重连流程：
+
+1. 打开连接后，若首帧是 `agent.checkpoint` 且 `payload.cursor` 非 null，则保存为 `lastCheckpoint`。
+2. 只把保留与实时 **原生** 帧应用到 UI；跳过非原生控制帧。
+3. 断开后可省略 `afterCursor` 并完整重建活动 turn 投影，或在 `lastCheckpoint` 非 null 时以 `afterCursor=lastCheckpoint` 打开并接受该 checkpoint 之后帧的短尾重放。
+4. 不要用 `threadId`、`turnId`、`itemId` 或消息 UUID 代替 transport cursor；需要时用原生历史核对已完成工作。
 
 ### 10.3 App Server 重启
 

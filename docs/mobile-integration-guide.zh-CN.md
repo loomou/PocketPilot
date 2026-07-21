@@ -36,7 +36,8 @@
   会话协议，也不归一化 provider-native 消息。
 - `/v1/tasks/{taskId}/agent` 是双向 provider-native stream。对于
   `provider: "claude"`，客户端帧是原始 `SDKUserMessage`，服务端帧是原始
-  `SDKMessage`。
+  `SDKMessage`。对于 `provider: "codex"`，服务端流量是原生 Codex JSON-RPC，
+  另加订阅时在保留原生回放前发送的一帧 `agent.checkpoint` 控制帧。
 - `/v1/events` 只承载 PocketPilot 控制事件。即使包装在 `kind: "sdk"` 中，
   也绝不能通过该通道传输 SDK 消息。
 - 历史记录行保持 provider-native。Claude 行是 SDK `SessionMessage` 对象；
@@ -99,7 +100,7 @@ PocketPilot 后端会为新建和恢复的 Agent SDK Query 默认设置
 | 接口面 | 方向 | 认证 | 内容 |
 | --- | --- | --- | --- |
 | `/v1/*` REST | 请求/响应 | 仅下文明确列出的接口公开；其余使用 `Authorization: Bearer <accessToken>` | 配对、发现、任务元数据、控制、审批 |
-| `/v1/tasks/{taskId}/agent` | 双向 WebSocket | 握手时使用 Bearer header | provider-native 消息；当 `task.provider` 为 `claude` 时传输原始 `SDKUserMessage`/`SDKMessage` |
+| `/v1/tasks/{taskId}/agent` | 双向 WebSocket | 握手时使用 Bearer header | provider-native 消息；当 `task.provider` 为 `claude` 时传输原始 `SDKUserMessage`/`SDKMessage`。Codex 还会在保留的原生回放前发送一帧订阅时 `agent.checkpoint` 控制帧；详见 Codex 移动端指南。 |
 | `/v1/events` | 双向 WebSocket | 握手时使用 Bearer header | 订阅请求和 PocketPilot 控制事件，不含其他内容 |
 
 打开 WebSocket 时转换 QR `baseUrl` 的 scheme：`https` 对应 `wss`，`http`
