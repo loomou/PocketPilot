@@ -723,3 +723,42 @@ Made the common includeSystemMessages history filter provider-honest: closed his
 
 - Optional: P3 Codex replay checkpoint.
 - Attachments remain deferred.
+
+
+## Session 22: Codex replay checkpoint
+
+**Date**: 2026-07-21
+**Task**: Codex replay checkpoint
+**Branch**: `audit/claude-code-parity`
+
+### Summary
+
+Exposed a subscribe-time out-of-band agent.checkpoint on the Codex Agent WebSocket so clients can reconnect with a known afterCursor without embedding PocketPilot metadata in native Codex frames. Claude streams unchanged. Docs/contracts/tests updated; task archived.
+
+### Main Changes
+
+- CodexNativeJournal.subscribe emits one agent.checkpoint before retained replay.
+- Payload: provider=codex, cursor=latestCursor|null.
+- Mobile/OpenAPI docs describe checkpoint exception and reconnect guidance.
+- Backend contracts record Codex-only stream purity exception.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1b22c9a` | feat(codex): emit subscribe-time agent.checkpoint for reconnect cursors |
+| `fa3a1ab` | docs(spec): record Codex agent.checkpoint reconnect contract |
+| `ed4f025` | chore(task): archive 07-21-codex-replay-checkpoint |
+
+### Testing
+
+- Full suite 190 passed / 4 skipped; typecheck/lint clean.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Attachments remain deferred.
+- Optional follow-up: per-publish checkpoints for long-turn weak-network efficiency.
