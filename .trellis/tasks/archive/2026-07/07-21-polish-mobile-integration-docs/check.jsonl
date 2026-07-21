@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/api-documentation-contracts.md", "reason": "Verify guides match OpenAPI/doc contracts and Agent checkpoint exception"}
+{"file": ".trellis/spec/backend/agent-provider-contracts.md", "reason": "Verify closed capability shapes and readiness/history filter honesty"}
+{"file": ".trellis/spec/backend/codex-app-server-contracts.md", "reason": "Verify confirm rules, catalogs, checkpoint reconnect match contracts"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Verify error tables include CONFIRMATION_REQUIRED and HISTORY_FILTER_NOT_SUPPORTED"}
+{"file": ".trellis/spec/backend/task-runtime-contracts.md", "reason": "Verify Agent vs events channel guidance is not conflated"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify en/zh equivalence, no invented APIs, no stale contradictions"}
