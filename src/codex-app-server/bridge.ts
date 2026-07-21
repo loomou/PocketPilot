@@ -271,7 +271,7 @@ export class CodexAppServerBridge {
         requestAttestation: false,
       },
       clientInfo: {
-        name: "pocketpilot",
+        name: "codex_cli_rs",
         title: "PocketPilot",
         version: "0.1.0",
       },

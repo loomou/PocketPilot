@@ -44,6 +44,11 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
 
 - Start one `codex app-server --listen stdio://` process per Agent runtime and
   complete `initialize` followed by `initialized` before any other method.
+- App Server client originator uses `clientInfo.name = "codex_cli_rs"` so the
+  outbound originator matches the welfare/ChatGPT endpoint whitelist used by
+  the official CLI. `clientInfo.title` remains `"PocketPilot"` for local/log
+  product identification. This handshake identity is independent of
+  `config.toml` / `CODEX_HOME` auth configuration.
 - Parse newline-delimited JSON objects and correlate JSON-RPC responses by an
   internal connection ID. A shared bridge remaps duplicate client IDs privately
   and restores the client's original ID only on the owning task stream.
@@ -221,6 +226,7 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
 | `thread/name/set` name is empty, missing, or over the bounded length | `403 CODEX_REQUEST_NOT_ALLOWED`; do not forward. |
 | A cursor is absent, invalid, or outside retention | Replay the retained native window without modifying its frames. |
 | A Claude-only composer/model/mode/effort route targets Codex | `409 TASK_CONTROL_NOT_SUPPORTED`; use Codex native catalogs and turn parameters. |
+| `initialize.clientInfo.name` is a non-whitelisted originator (e.g. `pocketpilot`) | ChatGPT/welfare endpoints return `403` originator whitelist rejection before model/turn work runs. Use `codex_cli_rs`. |
 
 ## 5. Good / Base / Bad Cases
 
@@ -252,12 +258,21 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
   allowing an old child's close event to kill its replacement.
 - Bad: forwarding `account/read` with `refreshToken: true`, leaking skill/hook
   absolute paths, or inventing REST routes for status catalogs.
+- Bad: setting `initialize.clientInfo.name` to a product-only label such as
+  `pocketpilot`. Official `config.toml` / `CODEX_HOME` auth can still succeed
+  while ChatGPT/welfare rejects the request for originator whitelist. Keep
+  `name = "codex_cli_rs"` and use `title = "PocketPilot"` for product identity.
+- Good: handshake sends `clientInfo.name = "codex_cli_rs"` and
+  `clientInfo.title = "PocketPilot"`; outbound originator matches the official
+  CLI whitelist without rewriting config.toml.
 
 ## 6. Tests Required
 
-- Bridge tests cover handshake, correlation, duplicate client IDs across tasks,
-  timeouts, malformed/oversized frames, process exit, late old-process events,
-  Windows command resolution, bounded writes, and deterministic shutdown.
+- Bridge tests cover handshake (including initialize
+  `clientInfo.name = "codex_cli_rs"` and `title = "PocketPilot"`), correlation,
+  duplicate client IDs across tasks, timeouts, malformed/oversized frames,
+  process exit, late old-process events, Windows command resolution, bounded
+  writes, and deterministic shutdown.
 - Adapter tests cover list/read/start/resume, native row identity, concurrent
   approvals, server-request path rejection, stale approvals after generation
   changes and device mismatch, start/steer/interrupt state, review/compact

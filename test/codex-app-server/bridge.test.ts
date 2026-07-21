@@ -92,9 +92,17 @@ describe("CodexAppServerBridge", () => {
       frame: { id: "mobile-1", result: { accepted: true } },
       taskId: "task-1",
     });
-    expect(
-      process.writes.filter((frame) => frame.method === "initialize"),
-    ).toHaveLength(1);
+    const initializeWrites = process.writes.filter(
+      (frame) => frame.method === "initialize",
+    );
+    expect(initializeWrites).toHaveLength(1);
+    const initializeParams = initializeWrites[0]?.params as
+      | {
+          clientInfo?: { name?: string; title?: string };
+        }
+      | undefined;
+    expect(initializeParams?.clientInfo?.name).toBe("codex_cli_rs");
+    expect(initializeParams?.clientInfo?.title).toBe("PocketPilot");
     expect(
       process.writes.find((frame) => frame.method === "turn/start")?.id,
     ).not.toBe("mobile-1");
