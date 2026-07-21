@@ -18,5 +18,9 @@ __pycache__/
 data/
 logs/
 
-# Local Trellis workspace state
-.trellis/workspace/
+# Local Trellis workspace state (keep journals tracked)
+.trellis/workspace/*
+!.trellis/workspace/*/
+.trellis/workspace/*/*
+!.trellis/workspace/*/index.md
+!.trellis/workspace/*/journal-*.md

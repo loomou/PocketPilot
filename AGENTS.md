@@ -19,3 +19,9 @@ If you're using Codex or another agent-capable tool, additional project-scoped h
 Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
 
 <!-- TRELLIS:END -->
+
+# Git Workflow
+
+- Never commit directly on the `main` branch.
+- Create or switch to a non-`main` branch before making a commit.
+- The `main` branch accepts changes only through a branch merge.

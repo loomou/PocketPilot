@@ -5,7 +5,7 @@ import type { ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2",
+  "inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2",
   {
     defaultVariants: {
       size: "default",
@@ -19,6 +19,8 @@ const buttonVariants = cva(
       },
       variant: {
         default: "bg-slate-950 text-white hover:bg-slate-800",
+        destructive: "bg-red-600 text-white hover:bg-red-700",
+        ghost: "text-slate-700 hover:bg-slate-100 hover:text-slate-950",
         outline:
           "border border-slate-300 bg-white text-slate-950 hover:bg-slate-100",
       },
@@ -47,3 +49,5 @@ export function Button({
     />
   );
 }
+
+export { buttonVariants };

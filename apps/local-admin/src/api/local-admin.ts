@@ -12,6 +12,7 @@ const runtimeSettingsSchema = z.object({
 
 const taskSettingsSchema = z.object({
   concurrentTaskCapacity: z.number().int().min(1).max(1_024),
+  workspaceRoots: z.array(z.string().min(1).max(4_096)).max(1_024),
 });
 
 const authorizedDirectorySchema = z.object({
@@ -51,6 +52,28 @@ const removeAuthorizedDirectoryResponseSchema = z.object({
   stoppedTaskCount: z.number().int().min(0),
 });
 
+const directoryEntrySchema = z.object({
+  accessible: z.boolean(),
+  name: z.string(),
+  path: z.string(),
+  root: z.boolean(),
+});
+
+const directoryBrowseResultSchema = z.object({
+  currentPath: z.string().nullable(),
+  entries: z.array(directoryEntrySchema),
+  parentPath: z.string().nullable(),
+  truncated: z.boolean(),
+});
+
+const workspaceInspectionSchema = z.object({
+  canonicalPath: z.string().optional(),
+  configuredPath: z.string(),
+  coveredBy: z.string().optional(),
+  highRisk: z.boolean(),
+  status: z.enum(["available", "unavailable"]),
+});
+
 const configurationSchema = z.object({
   runtime: runtimeSettingsSchema,
   tasks: taskSettingsSchema,
@@ -77,6 +100,13 @@ const createdPairingSchema = z.object({
   expiresAt: z.number().int(),
   pairingId: z.uuid(),
   qrPayload: qrPayloadSchema,
+});
+
+const pendingPairingSchema = z.object({
+  deviceDisplayName: z.string().min(1),
+  expiresAt: z.number().int(),
+  pairingId: z.uuid(),
+  verificationCode: z.string().regex(/^\d{6}$/),
 });
 
 const deviceSchema = z.object({
@@ -111,15 +141,19 @@ export type AuditRecord = z.infer<typeof auditRecordSchema>;
 export type Configuration = z.infer<typeof configurationSchema>;
 export type CreatedPairing = z.infer<typeof createdPairingSchema>;
 export type Device = z.infer<typeof deviceSchema>;
+export type DirectoryBrowseResult = z.infer<typeof directoryBrowseResultSchema>;
+export type DirectoryEntry = z.infer<typeof directoryEntrySchema>;
+export type PendingPairing = z.infer<typeof pendingPairingSchema>;
 export type RuntimeSettings = z.infer<typeof runtimeSettingsSchema>;
 export type TaskSettings = z.infer<typeof taskSettingsSchema>;
+export type WorkspaceInspection = z.infer<typeof workspaceInspectionSchema>;
 
 export type LocalAdminSnapshot = {
   audits: AuditRecord[];
-  authorizedDirectories: AuthorizedDirectorySnapshot;
   configuration: Configuration;
   csrfToken: string;
   devices: Device[];
+  pendingPairings: PendingPairing[];
   status: AgentStatus;
 };
 
@@ -134,25 +168,22 @@ export class LocalAdminApiError extends Error {
 }
 
 export async function loadLocalAdminSnapshot(): Promise<LocalAdminSnapshot> {
-  const [csrf, configuration, status, devices, audits, authorizedDirectories] =
+  const [csrf, configuration, status, pendingPairings, devices, audits] =
     await Promise.all([
       getJson("/admin/csrf", csrfSchema),
       getJson("/admin/configuration", configurationSchema),
       getJson("/admin/status", agentStatusSchema),
+      getJson("/admin/pairings/pending", z.array(pendingPairingSchema)),
       getJson("/admin/devices", z.array(deviceSchema)),
       getJson("/admin/audits", z.array(auditRecordSchema)),
-      getJson(
-        "/admin/authorized-directories",
-        authorizedDirectorySnapshotSchema,
-      ),
     ]);
 
   return {
     audits,
-    authorizedDirectories,
     configuration,
     csrfToken: csrf.token,
     devices,
+    pendingPairings,
     status,
   };
 }
@@ -224,13 +255,40 @@ export function saveRuntimeSettings(
 export function saveTaskSettings(
   csrfToken: string,
   settings: TaskSettings,
+  confirmedHighRiskRoots: readonly string[] = [],
 ): Promise<TaskSettings> {
   return mutateJson(
     "/admin/configuration/tasks",
     "PUT",
     csrfToken,
-    settings,
+    { ...settings, confirmedHighRiskRoots: [...confirmedHighRiskRoots] },
     taskSettingsSchema,
+  );
+}
+
+export function browseDirectories(
+  csrfToken: string,
+  path?: string,
+): Promise<DirectoryBrowseResult> {
+  return mutateJson(
+    "/admin/directories/browse",
+    "POST",
+    csrfToken,
+    path === undefined ? {} : { path },
+    directoryBrowseResultSchema,
+  );
+}
+
+export function inspectDirectories(
+  csrfToken: string,
+  paths: readonly string[],
+): Promise<WorkspaceInspection[]> {
+  return mutateJson(
+    "/admin/directories/inspect",
+    "POST",
+    csrfToken,
+    { paths: [...paths] },
+    z.array(workspaceInspectionSchema),
   );
 }
 

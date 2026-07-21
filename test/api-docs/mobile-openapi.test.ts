@@ -64,6 +64,28 @@ describe("mobile OpenAPI generation", () => {
     expect(Object.keys(first.paths).sort()).toEqual(expectedPaths);
     expect(first.components?.securitySchemes).toHaveProperty("bearerAuth");
 
+    const workspacesOperation = first.paths["/v1/workspaces"]?.get;
+    expect(workspacesOperation?.description).toBe(
+      "Lists the currently available configured workspace roots authorized by the computer's local task policy.",
+    );
+    expect(workspacesOperation?.responses?.[200]).toMatchObject({
+      content: {
+        "application/json": {
+          schema: {
+            additionalProperties: false,
+            properties: {
+              workspaceRoots: {
+                items: { type: "string" },
+                type: "array",
+              },
+            },
+            required: ["workspaceRoots"],
+            type: "object",
+          },
+        },
+      },
+    });
+
     const operations = Object.entries(first.paths).flatMap(([path, pathItem]) =>
       (["get", "post"] as const).flatMap((method) => {
         const operation = pathItem?.[method];

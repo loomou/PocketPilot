@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 18
+- **Total Sessions**: 24
 - **Last Active**: 2026-07-21
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~607 | Active |
+| `journal-1.md` | ~828 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,9 +29,15 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
-| 18 | 2026-07-21 | Codex REST thread management | `80a8bda` | `audit/claude-code-parity` |
-| 17 | 2026-07-21 | Codex read-only status catalogs | `af11bb6` | `audit/claude-code-parity` |
-| 16 | 2026-07-21 | Codex native action capabilities | `effa056` | `audit/claude-code-parity` |
+| 24 | 2026-07-21 | Polish mobile integration docs | `27c182b`, `2ccb433` | `audit/claude-code-parity` |
+| 23 | 2026-07-21 | Codex replay checkpoint | `1b22c9a`, `fa3a1ab`, `ed4f025` | `audit/claude-code-parity` |
+| 22 | 2026-07-21 | Codex history options contracts | `a4c23b7`, `3ebb04f`, `5052816` | `audit/claude-code-parity` |
+| 21 | 2026-07-21 | Parity audit closeout | `74cd7c5`, `12eb51e`, `9cd4293` | `audit/claude-code-parity` |
+| 20 | 2026-07-21 | Provider readiness and live coverage | `8b21262`, `e590a18`, `785eea1` | `audit/claude-code-parity` |
+| 19 | 2026-07-21 | Codex REST thread management | `80a8bda` | `audit/claude-code-parity` |
+| 18 | 2026-07-21 | Codex read-only status catalogs | `af11bb6` | `audit/claude-code-parity` |
+| 17 | 2026-07-21 | Codex native action capabilities | `effa056` | `audit/claude-code-parity` |
+| 16 | 2026-07-20 | Record merge-only main policy | `c068c21` | `docs/main-merge-policy` |
 | 15 | 2026-07-20 | Codex provider runtime parity | `1ec6f87` | `main` |
 | 14 | 2026-07-20 | Complete provider-extensible Agent API and Claude migration | `5e3745c`, `8b11a42` | `feat/remote-cli-integration` |
 | 13 | 2026-07-19 | Simplify QR pairing approval | `540af86` | `fix/pairing-code-approval-flow` |

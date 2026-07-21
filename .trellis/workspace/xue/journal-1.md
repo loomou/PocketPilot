@@ -508,7 +508,39 @@ Aligned Codex App Server with the shared provider task runtime: P2 capacity and 
 - None - task complete
 
 
-## Session 16: Codex native action capabilities
+## Session 16: Record merge-only main policy
+
+**Date**: 2026-07-20
+**Task**: Record merge-only main policy
+**Branch**: `docs/main-merge-policy`
+
+### Summary
+
+Documented the hard project rule that commits must be created on non-main branches and main accepts changes only through branch merges; no automated enforcement was added.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c068c21` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+## Session 17: Codex native action capabilities
 
 **Date**: 2026-07-21
 **Task**: Codex native action capabilities
@@ -540,8 +572,7 @@ Implemented Codex nativeActions for review/rename/compact, set attachments false
 
 - None - task complete
 
-
-## Session 17: Codex read-only status catalogs
+## Session 18: Codex read-only status catalogs
 
 **Date**: 2026-07-21
 **Task**: Codex read-only status catalogs
@@ -573,8 +604,7 @@ Implemented Codex P3 status catalogs (account/quota/skills/hooks/MCP), closed st
 
 - None - task complete
 
-
-## Session 18: Codex REST thread management
+## Session 19: Codex REST thread management
 
 **Date**: 2026-07-21
 **Task**: Codex REST thread management
@@ -606,8 +636,7 @@ Implemented Codex conversation list filters plus REST fork/archive/unarchive/del
 
 - None - task complete
 
-
-## Session 19: Provider readiness and live coverage
+## Session 20: Provider readiness and live coverage
 
 **Date**: 2026-07-21
 **Task**: Provider readiness and live coverage
@@ -647,8 +676,7 @@ Implemented bounded provider readiness probes (30s TTL, single-flight, stable re
 - Parent audit `07-20-claude-code-parity-audit` is 4/4 children done; update findings/archive when ready.
 - Remaining planning tasks: `07-19-claude-session-id-timing`, `07-19-enable-sdk-streaming`.
 
-
-## Session 20: Parity audit closeout
+## Session 21: Parity audit closeout
 
 **Date**: 2026-07-21
 **Task**: Close parent parity audit and leftover 07-19 planning tasks
@@ -685,8 +713,7 @@ Updated the parent Claude/Codex parity audit findings to mark children 1–4 don
 - Optional next implementation: P2 history options contracts, or P3 Codex replay checkpoint.
 - Attachments remain deferred.
 
-
-## Session 21: Codex history options contracts
+## Session 22: Codex history options contracts
 
 **Date**: 2026-07-21
 **Task**: Codex history options contracts
@@ -724,8 +751,7 @@ Made the common includeSystemMessages history filter provider-honest: closed his
 - Optional: P3 Codex replay checkpoint.
 - Attachments remain deferred.
 
-
-## Session 22: Codex replay checkpoint
+## Session 23: Codex replay checkpoint
 
 **Date**: 2026-07-21
 **Task**: Codex replay checkpoint
@@ -763,8 +789,7 @@ Exposed a subscribe-time out-of-band agent.checkpoint on the Codex Agent WebSock
 - Attachments remain deferred.
 - Optional follow-up: per-publish checkpoints for long-turn weak-network efficiency.
 
-
-## Session 23: Polish mobile integration docs
+## Session 24: Polish mobile integration docs
 
 **Date**: 2026-07-21
 **Task**: Polish mobile integration docs for parity

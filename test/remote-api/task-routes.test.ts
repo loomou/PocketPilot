@@ -1,5 +1,5 @@
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -54,7 +54,7 @@ describe("versioned task routes", () => {
     });
     expect(workspaces.statusCode).toBe(200);
     expect(workspaces.json()).toEqual({
-      workspaceRoots: [fixture.workspace],
+      workspaceRoots: [realpathSync.native(fixture.workspace)],
     });
     const rejected = await app.inject({
       headers: fixture.headers,

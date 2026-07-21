@@ -9,7 +9,7 @@
   "package": null,
   "priority": "P1",
   "creator": "xue",
-  "assignee": "xue",
+  "assignee": "buzhidao10068",
   "createdAt": "2026-07-15",
   "completedAt": "2026-07-18",
   "branch": null,
@@ -24,6 +24,6 @@
     ".trellis/spec/backend/",
     ".trellis/spec/frontend/"
   ],
-  "notes": "First-time setup task created by trellis init (fullstack project)",
+  "notes": "First-time setup task created by trellis init (fullstack project) Taken over by buzhidao10068 on 2026-07-17 to verify and close the completed bootstrap specifications.",
   "meta": {}
 }
