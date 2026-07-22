@@ -288,7 +288,9 @@ GET /v1/tasks/{taskId}/agent?afterCursor={pocketpilotCursor}
   subscribers.
 - The caller-configured live suite must prove initialize, readiness probe
   semantics, `model/list`, all thread sources, `thread/start`, native streaming,
-  `thread/turns/list`, `thread/read`, `thread/resume`, active-turn interrupt,
+  multi-turn continuity (two `turn/start` turns completing on one `threadId`
+  with streaming on the second), `thread/turns/list`, `thread/read`,
+  `thread/resume` returning the same `threadId`, active-turn interrupt,
   non-destructive status-catalog reads when available, disposable
   fork/archive/unarchive cleanup, and process shutdown:
 

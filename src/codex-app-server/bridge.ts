@@ -441,10 +441,20 @@ export class CodexAppServerBridge {
       return;
     }
     if ("error" in frame) {
+      const detail =
+        typeof frame.error === "object" &&
+        frame.error !== null &&
+        "message" in frame.error &&
+        typeof frame.error.message === "string" &&
+        frame.error.message.length > 0
+          ? frame.error.message
+          : undefined;
       pending.reject?.(
         new CodexAppServerError(
           "CODEX_APP_SERVER_REQUEST_FAILED",
-          "The Codex App Server rejected a request.",
+          detail === undefined
+            ? "The Codex App Server rejected a request."
+            : `The Codex App Server rejected a request: ${detail}`,
         ),
       );
       return;
