@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 25
+- **Total Sessions**: 26
 - **Last Active**: 2026-07-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~861 | Active |
+| `journal-1.md` | ~895 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 26 | 2026-07-22 | Codex App Server originator 403 fix and live contract parity | `d66f022`, `985e9dd` | `fix/codex-app-server-originator-live-parity` |
 | 25 | 2026-07-22 | Fix Codex App Server originator 403 | `d66f022` | `main` |
 | 24 | 2026-07-21 | Polish mobile integration docs | `27c182b`, `2ccb433` | `audit/claude-code-parity` |
 | 23 | 2026-07-21 | Codex replay checkpoint | `1b22c9a`, `fa3a1ab`, `ed4f025` | `audit/claude-code-parity` |

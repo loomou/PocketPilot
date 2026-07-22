@@ -859,3 +859,37 @@ Changed initialize clientInfo.name from pocketpilot to codex_cli_rs (title kept 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 26: Codex App Server originator 403 fix and live contract parity
+
+**Date**: 2026-07-22
+**Task**: Codex App Server originator 403 fix and live contract parity
+**Branch**: `fix/codex-app-server-originator-live-parity`
+
+### Summary
+
+Fixed App Server 403 by setting initialize clientInfo.name to codex_cli_rs (independent of config.toml auth). Brought live contract tests to full parity: multi-turn continuity, cross-platform cwd, apiKey-safe secret assertions with rateLimits/unarchive soft-skips, and bridge RPC error detail passthrough. Archived originator-403 and live-test-parity tasks; moved unpushed commits off main onto feature branch fix/codex-app-server-originator-live-parity.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d66f022` | (see git log) |
+| `985e9dd` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
