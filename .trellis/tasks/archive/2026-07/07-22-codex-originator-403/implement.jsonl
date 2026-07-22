@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/codex-app-server-contracts.md", "reason": "Native bridge initialize / App Server client identity contract to update for originator decision"}
+{"file": ".trellis/tasks/07-22-codex-live-test-parity/live-403-originator-finding.md", "reason": "Evidence of 403 root cause: clientInfo.name=pocketpilot vs ChatGPT originator whitelist"}
+{"file": ".trellis/tasks/07-22-codex-originator-403/prd.md", "reason": "Accepted requirements: name=codex_cli_rs, title=PocketPilot"}
+{"file": ".trellis/tasks/07-22-codex-originator-403/implement.md", "reason": "Execution checklist and validation commands"}

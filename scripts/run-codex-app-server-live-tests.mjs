@@ -13,8 +13,7 @@ if (!workspace) {
       "then re-run: npm run test:codex:live",
       "",
       "These tests stay opt-in so default CI remains hermetic.",
-    ].join("
-"),
+    ].join("\n"),
   );
   process.exit(1);
 }
