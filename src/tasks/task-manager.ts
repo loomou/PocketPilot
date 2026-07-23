@@ -37,6 +37,7 @@ import {
 } from "../logging/logger.js";
 import type { StorageDatabase } from "../storage/database.js";
 import type { SettingsRepository } from "../storage/settings-repository.js";
+import { summarizeToolForAudit } from "./audit-tool-summary.js";
 import { TaskError } from "./errors.js";
 import type {
   ProviderApprovalRequest,
@@ -210,6 +211,7 @@ type LiveTask = {
 type OperationExecution = {
   action: Exclude<TaskOperationAction, "archived" | "unarchived" | "deleted">;
   auditResult: string;
+  auditToolName?: string;
   task: TaskSnapshot;
 };
 
@@ -1166,6 +1168,10 @@ export class TaskManager {
           );
         }
 
+        const auditToolName = summarizeToolForAudit(
+          pending.approval.toolName,
+          pending.approval.input,
+        );
         lease.assertCurrent();
         pending.approval.resolve(input.result);
         liveTask.pendingApproval = undefined;
@@ -1190,6 +1196,7 @@ export class TaskManager {
               ? "approval-approved"
               : "approval-denied",
           auditResult: input.result.behavior,
+          auditToolName,
           task: executing,
         };
       }),
@@ -1892,6 +1899,7 @@ export class TaskManager {
             result: { action: execution.action, task: execution.task },
             resultLabel: execution.auditResult,
             taskId: execution.task.id,
+            toolName: execution.auditToolName ?? null,
           }),
         )
         .catch((error: unknown) => {

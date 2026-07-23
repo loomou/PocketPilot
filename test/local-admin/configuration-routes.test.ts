@@ -256,13 +256,25 @@ describe("local administration configuration routes", () => {
     apps.push(remoteApp);
     storage.sqlite
       .prepare(
-        "INSERT INTO audit_records (id, occurred_at, operation, result) VALUES (?, ?, ?, ?)",
+        "INSERT INTO audit_records (id, occurred_at, operation, result, tool_name) VALUES (?, ?, ?, ?, ?)",
       )
       .run(
         "00000000-0000-4000-8000-000000000001",
         1_700_000_000_000,
         "task.created",
         "success",
+        null,
+      );
+    storage.sqlite
+      .prepare(
+        "INSERT INTO audit_records (id, occurred_at, operation, result, tool_name) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(
+        "00000000-0000-4000-8000-000000000002",
+        1_700_000_000_001,
+        "task.approval-approved",
+        "allow",
+        "Skill:claude-api",
       );
 
     const response = await app.inject({
@@ -275,20 +287,173 @@ describe("local administration configuration routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual([
-      {
-        deviceId: null,
-        id: "00000000-0000-4000-8000-000000000001",
-        occurredAt: 1_700_000_000_000,
-        operation: "task.created",
-        result: "success",
-        taskId: null,
-      },
-    ]);
+    expect(response.json()).toEqual({
+      items: [
+        {
+          deviceId: null,
+          id: "00000000-0000-4000-8000-000000000002",
+          occurredAt: 1_700_000_000_001,
+          operation: "task.approval-approved",
+          result: "allow",
+          taskId: null,
+          toolName: "Skill:claude-api",
+        },
+        {
+          deviceId: null,
+          id: "00000000-0000-4000-8000-000000000001",
+          occurredAt: 1_700_000_000_000,
+          operation: "task.created",
+          result: "success",
+          taskId: null,
+          toolName: null,
+        },
+      ],
+      limit: 50,
+      offset: 0,
+      total: 2,
+    });
     expect(response.body).not.toContain("prompt");
     expect(response.body).not.toContain("modelOutput");
     expect(response.body).not.toContain("toolInput");
+    expect(response.body).not.toContain("file_path");
+    expect(response.body).not.toContain("command");
     expect(remoteResponse.statusCode).toBe(404);
+  });
+
+  it("returns an empty page and total for a fresh audit table", async () => {
+    const { app } = await createLocalApp(apps, connections, directories);
+
+    const response = await app.inject({ method: "GET", url: "/admin/audits" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      items: [],
+      limit: 50,
+      offset: 0,
+      total: 0,
+    });
+  });
+
+  it("paginates, searches, and filters audits on the server", async () => {
+    const { app, storage } = await createLocalApp(
+      apps,
+      connections,
+      directories,
+    );
+    const insert = storage.sqlite.prepare(
+      "INSERT INTO audit_records (id, occurred_at, operation, result, device_id, task_id, tool_name) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    for (let index = 0; index < 5; index += 1) {
+      insert.run(
+        `00000000-0000-4000-8000-00000000010${index}`,
+        1_700_000_000_000 + index,
+        "task.created",
+        "success",
+        null,
+        null,
+        null,
+      );
+    }
+    insert.run(
+      "00000000-0000-4000-8000-000000000200",
+      1_700_000_000_100,
+      "task.approval-approved",
+      "allow",
+      null,
+      null,
+      "Skill:claude-api",
+    );
+    insert.run(
+      "00000000-0000-4000-8000-000000000201",
+      1_700_000_000_101,
+      "task.approval-denied",
+      "deny",
+      null,
+      null,
+      "Bash",
+    );
+
+    const firstPage = await app.inject({
+      method: "GET",
+      url: "/admin/audits?limit=3&offset=0",
+    });
+    const secondPage = await app.inject({
+      method: "GET",
+      url: "/admin/audits?limit=3&offset=3",
+    });
+    const searchToolName = await app.inject({
+      method: "GET",
+      url: "/admin/audits?q=claude-api",
+    });
+    const searchOperation = await app.inject({
+      method: "GET",
+      url: "/admin/audits?q=approval",
+    });
+    const filterResult = await app.inject({
+      method: "GET",
+      url: "/admin/audits?result=deny",
+    });
+    const clampedLimit = await app.inject({
+      method: "GET",
+      url: "/admin/audits?limit=9999",
+    });
+
+    expect(firstPage.json()).toMatchObject({ limit: 3, offset: 0, total: 7 });
+    expect(firstPage.json().items).toHaveLength(3);
+    expect(secondPage.json()).toMatchObject({ limit: 3, offset: 3, total: 7 });
+    expect(secondPage.json().items).toHaveLength(3);
+    expect(searchToolName.json()).toMatchObject({ total: 1 });
+    expect(searchToolName.json().items[0]).toMatchObject({
+      toolName: "Skill:claude-api",
+    });
+    expect(searchOperation.json()).toMatchObject({ total: 2 });
+    expect(filterResult.json()).toMatchObject({ total: 1 });
+    expect(filterResult.json().items[0]).toMatchObject({
+      operation: "task.approval-denied",
+      result: "deny",
+    });
+    expect(clampedLimit.statusCode).toBe(200);
+    expect(clampedLimit.json()).toMatchObject({ limit: 200, total: 7 });
+  });
+
+  it("clamps a negative offset and treats wildcards literally", async () => {
+    const { app, storage } = await createLocalApp(
+      apps,
+      connections,
+      directories,
+    );
+    const insert = storage.sqlite.prepare(
+      "INSERT INTO audit_records (id, occurred_at, operation, result, tool_name) VALUES (?, ?, ?, ?, ?)",
+    );
+    insert.run(
+      "00000000-0000-4000-8000-000000000300",
+      1_700_000_000_000,
+      "task.created",
+      "success",
+      null,
+    );
+    insert.run(
+      "00000000-0000-4000-8000-000000000301",
+      1_700_000_000_001,
+      "task.100%done",
+      "success",
+      null,
+    );
+
+    const literalWildcard = await app.inject({
+      method: "GET",
+      url: `/admin/audits?q=${encodeURIComponent("100%")}`,
+    });
+    const negativeOffset = await app.inject({
+      method: "GET",
+      url: "/admin/audits?offset=-5",
+    });
+
+    expect(literalWildcard.json()).toMatchObject({ total: 1 });
+    expect(literalWildcard.json().items[0]).toMatchObject({
+      operation: "task.100%done",
+    });
+    expect(negativeOffset.json()).toMatchObject({ offset: 0, total: 2 });
   });
 });
 

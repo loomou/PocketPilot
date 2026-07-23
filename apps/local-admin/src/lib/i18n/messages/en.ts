@@ -242,16 +242,26 @@ export const en = {
       "The local Agent has not returned any retained audit metadata.",
     noMatchesDescription:
       "Try another search term or reset the current result filter.",
+    loading: "Loading audit records",
+    loadingDescription: "Requesting the current audit page from the Agent.",
+    loadFailed: "Unable to load audit records",
+    loadFailedDescription:
+      "The audit request failed. Refresh or try again shortly.",
+    previousPage: "Previous",
+    nextPage: "Next",
     table: {
       time: "Time",
       operation: "Operation",
+      tool: "Tool",
       device: "Device",
       task: "Task",
       result: "Result",
     },
     local: "Local",
-    summary: (total: number, filtered: number) =>
-      `${filtered} of ${total} records shown.`,
+    summary: (total: number, pageStart: number, pageEnd: number) =>
+      total === 0
+        ? "No records match."
+        : `Showing ${pageStart}–${pageEnd} of ${total} records.`,
   },
   maintenance: {
     metadataTitle: "Security metadata",

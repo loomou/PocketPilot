@@ -1,7 +1,7 @@
 import { Search, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import type { AuditRecord } from "@/api/local-admin";
+import { type AuditRecord, getAudits } from "@/api/local-admin";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -19,29 +19,84 @@ import {
 import { useI18n } from "@/lib/i18n/i18n-context";
 import { cn } from "@/lib/utils";
 
-export function AuditView({ audits }: { audits: AuditRecord[] }) {
+const PAGE_SIZE = 50;
+const SEARCH_DEBOUNCE_MS = 300;
+
+/**
+ * Known audit result values used to populate the result filter. The dropdown
+ * no longer derives options from the current page, so filtering by a value that
+ * is absent from the visible rows still works.
+ */
+const KNOWN_AUDIT_RESULTS = [
+  "allow",
+  "deny",
+  "success",
+  "accepted",
+  "forwarded",
+  "resolved",
+  "changed",
+  "interrupted",
+  "resumed",
+  "created",
+  "closed",
+] as const;
+
+export function AuditView() {
   const { languageTag, messages } = useI18n();
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [resultFilter, setResultFilter] = useState("all");
-  const resultOptions = useMemo(
-    () => Array.from(new Set(audits.map((audit) => audit.result))).sort(),
-    [audits],
-  );
-  const filteredAudits = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return audits.filter((audit) => {
-      if (resultFilter !== "all" && audit.result !== resultFilter) return false;
-      if (normalizedQuery === "") return true;
-      return [
-        audit.operation,
-        audit.result,
-        formatResultLabel(audit.result, messages),
-        audit.deviceId ?? messages.audit.local,
-        audit.taskId ?? "",
-      ].some((value) => value.toLowerCase().includes(normalizedQuery));
-    });
-  }, [audits, messages, query, resultFilter]);
+  const [offset, setOffset] = useState(0);
+  const [items, setItems] = useState<AuditRecord[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const requestId = useRef(0);
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      // A changed search term always restarts from the first page.
+      setDebouncedQuery(query.trim());
+      setOffset(0);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(handle);
+  }, [query]);
+
+  useEffect(() => {
+    const currentRequest = ++requestId.current;
+    setLoading(true);
+    setFailed(false);
+    getAudits({
+      limit: PAGE_SIZE,
+      offset,
+      ...(debouncedQuery === "" ? {} : { q: debouncedQuery }),
+      ...(resultFilter === "all" ? {} : { result: resultFilter }),
+    })
+      .then((page) => {
+        if (currentRequest !== requestId.current) return;
+        setItems(page.items);
+        setTotal(page.total);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (currentRequest !== requestId.current) return;
+        setItems([]);
+        setTotal(0);
+        setFailed(true);
+        setLoading(false);
+      });
+  }, [debouncedQuery, offset, resultFilter]);
+
   const hasFilters = query !== "" || resultFilter !== "all";
+  const resetFilters = () => {
+    setQuery("");
+    setResultFilter("all");
+    setOffset(0);
+  };
+  const pageStart = total === 0 ? 0 : offset + 1;
+  const pageEnd = Math.min(offset + items.length, total);
+  const hasPrevious = offset > 0;
+  const hasNext = offset + PAGE_SIZE < total;
 
   return (
     <Card>
@@ -59,7 +114,10 @@ export function AuditView({ audits }: { audits: AuditRecord[] }) {
             <input
               aria-label={messages.audit.searchAria}
               className={cn(inputClassName, "pl-9")}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setOffset(0);
+              }}
               placeholder={messages.audit.searchPlaceholder}
               type="search"
               value={query}
@@ -71,11 +129,14 @@ export function AuditView({ audits }: { audits: AuditRecord[] }) {
           <select
             className={cn(inputClassName, "w-44")}
             id="audit-result-filter"
-            onChange={(event) => setResultFilter(event.target.value)}
+            onChange={(event) => {
+              setResultFilter(event.target.value);
+              setOffset(0);
+            }}
             value={resultFilter}
           >
             <option value="all">{messages.audit.allResults}</option>
-            {resultOptions.map((result) => (
+            {KNOWN_AUDIT_RESULTS.map((result) => (
               <option key={result} value={result}>
                 {formatResultLabel(result, messages)}
               </option>
@@ -83,10 +144,7 @@ export function AuditView({ audits }: { audits: AuditRecord[] }) {
           </select>
           {hasFilters ? (
             <Button
-              onClick={() => {
-                setQuery("");
-                setResultFilter("all");
-              }}
+              onClick={resetFilters}
               size="sm"
               type="button"
               variant="outline"
@@ -97,28 +155,33 @@ export function AuditView({ audits }: { audits: AuditRecord[] }) {
           ) : null}
         </div>
 
-        {filteredAudits.length === 0 ? (
+        {items.length === 0 ? (
           <div className="flex min-h-96 flex-col items-center justify-center px-8 text-center">
             <span className="flex size-11 items-center justify-center rounded-full bg-slate-100 text-slate-500">
               <Search aria-hidden="true" className="size-5" />
             </span>
             <h3 className="mt-4 text-sm font-semibold">
-              {audits.length === 0
-                ? messages.audit.empty
-                : messages.audit.noMatches}
+              {loading
+                ? messages.audit.loading
+                : failed
+                  ? messages.audit.loadFailed
+                  : hasFilters
+                    ? messages.audit.noMatches
+                    : messages.audit.empty}
             </h3>
             <p className="mt-1 max-w-md text-sm leading-6 text-slate-500">
-              {audits.length === 0
-                ? messages.audit.emptyDescription
-                : messages.audit.noMatchesDescription}
+              {loading
+                ? messages.audit.loadingDescription
+                : failed
+                  ? messages.audit.loadFailedDescription
+                  : hasFilters
+                    ? messages.audit.noMatchesDescription
+                    : messages.audit.emptyDescription}
             </p>
-            {hasFilters ? (
+            {hasFilters && !loading ? (
               <Button
                 className="mt-4"
-                onClick={() => {
-                  setQuery("");
-                  setResultFilter("all");
-                }}
+                onClick={resetFilters}
                 size="sm"
                 type="button"
                 variant="outline"
@@ -136,19 +199,23 @@ export function AuditView({ audits }: { audits: AuditRecord[] }) {
                   <th className="px-5 py-3">
                     {messages.audit.table.operation}
                   </th>
+                  <th className="px-5 py-3">{messages.audit.table.tool}</th>
                   <th className="px-5 py-3">{messages.audit.table.device}</th>
                   <th className="px-5 py-3">{messages.audit.table.task}</th>
                   <th className="px-5 py-3">{messages.audit.table.result}</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredAudits.map((audit) => (
+                {items.map((audit) => (
                   <tr className="border-t border-slate-100" key={audit.id}>
                     <td className="whitespace-nowrap px-5 py-3 text-xs text-slate-500">
                       {formatTimestamp(audit.occurredAt, languageTag)}
                     </td>
                     <td className="px-5 py-3 font-mono text-xs">
                       {audit.operation}
+                    </td>
+                    <td className="px-5 py-3 font-mono text-xs text-slate-500">
+                      {audit.toolName ?? "-"}
                     </td>
                     <td className="max-w-56 truncate px-5 py-3 font-mono text-xs text-slate-500">
                       {audit.deviceId ?? messages.audit.local}
@@ -165,8 +232,30 @@ export function AuditView({ audits }: { audits: AuditRecord[] }) {
             </table>
           </div>
         )}
-        <div className="border-t border-slate-100 px-5 py-3 text-xs text-slate-500">
-          {messages.audit.summary(audits.length, filteredAudits.length)}
+        <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-3 text-xs text-slate-500">
+          <span>{messages.audit.summary(total, pageStart, pageEnd)}</span>
+          <div className="flex items-center gap-2">
+            <Button
+              disabled={!hasPrevious || loading}
+              onClick={() =>
+                setOffset((current) => Math.max(0, current - PAGE_SIZE))
+              }
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              {messages.audit.previousPage}
+            </Button>
+            <Button
+              disabled={!hasNext || loading}
+              onClick={() => setOffset((current) => current + PAGE_SIZE)}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              {messages.audit.nextPage}
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>

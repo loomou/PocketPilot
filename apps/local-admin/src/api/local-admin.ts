@@ -123,6 +123,14 @@ const auditRecordSchema = z.object({
   operation: z.string().min(1),
   result: z.string().min(1),
   taskId: z.string().uuid().nullable(),
+  toolName: z.string().nullable(),
+});
+
+const auditPageSchema = z.object({
+  items: z.array(auditRecordSchema),
+  limit: z.number().int(),
+  offset: z.number().int(),
+  total: z.number().int(),
 });
 
 const errorResponseSchema = z.object({
@@ -138,6 +146,7 @@ export type AuthorizedDirectorySnapshot = z.infer<
   typeof authorizedDirectorySnapshotSchema
 >;
 export type AuditRecord = z.infer<typeof auditRecordSchema>;
+export type AuditPage = z.infer<typeof auditPageSchema>;
 export type Configuration = z.infer<typeof configurationSchema>;
 export type CreatedPairing = z.infer<typeof createdPairingSchema>;
 export type Device = z.infer<typeof deviceSchema>;
@@ -150,11 +159,19 @@ export type WorkspaceInspection = z.infer<typeof workspaceInspectionSchema>;
 
 export type LocalAdminSnapshot = {
   audits: AuditRecord[];
+  auditsTotal: number;
   configuration: Configuration;
   csrfToken: string;
   devices: Device[];
   pendingPairings: PendingPairing[];
   status: AgentStatus;
+};
+
+export type AuditQuery = {
+  limit?: number;
+  offset?: number;
+  q?: string;
+  result?: string;
 };
 
 export class LocalAdminApiError extends Error {
@@ -175,17 +192,35 @@ export async function loadLocalAdminSnapshot(): Promise<LocalAdminSnapshot> {
       getJson("/admin/status", agentStatusSchema),
       getJson("/admin/pairings/pending", z.array(pendingPairingSchema)),
       getJson("/admin/devices", z.array(deviceSchema)),
-      getJson("/admin/audits", z.array(auditRecordSchema)),
+      getAudits(),
     ]);
 
   return {
-    audits,
+    audits: audits.items,
+    auditsTotal: audits.total,
     configuration,
     csrfToken: csrf.token,
     devices,
     pendingPairings,
     status,
   };
+}
+
+export function getAudits(query: AuditQuery = {}): Promise<AuditPage> {
+  const parameters = new URLSearchParams();
+  if (query.limit !== undefined) parameters.set("limit", String(query.limit));
+  if (query.offset !== undefined)
+    parameters.set("offset", String(query.offset));
+  const trimmedQuery = query.q?.trim();
+  if (trimmedQuery !== undefined && trimmedQuery !== "")
+    parameters.set("q", trimmedQuery);
+  if (query.result !== undefined && query.result !== "")
+    parameters.set("result", query.result);
+  const search = parameters.toString();
+  return getJson(
+    search === "" ? "/admin/audits" : `/admin/audits?${search}`,
+    auditPageSchema,
+  );
 }
 
 export function loadAuthorizedDirectories(): Promise<AuthorizedDirectorySnapshot> {

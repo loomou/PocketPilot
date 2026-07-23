@@ -26,7 +26,44 @@ const auditRecordSchema = z.object({
   operation: z.string(),
   result: z.string(),
   taskId: z.string().uuid().nullable(),
+  toolName: z.string().nullable(),
 });
+
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(max, Math.max(min, value));
+
+const auditQuerySchema = z.object({
+  limit: z.coerce
+    .number()
+    .int()
+    .catch(50)
+    .transform((value) => clamp(value, 1, 200)),
+  offset: z.coerce
+    .number()
+    .int()
+    .catch(0)
+    .transform((value) => Math.max(0, value)),
+  q: z.string().trim().max(256).catch("").optional(),
+  result: z.string().trim().max(256).catch("").optional(),
+});
+
+const auditPageSchema = z.object({
+  items: z.array(auditRecordSchema),
+  limit: z.number().int(),
+  offset: z.number().int(),
+  total: z.number().int(),
+});
+
+const auditSelectColumns =
+  "device_id AS deviceId, id, occurred_at AS occurredAt, operation, result, task_id AS taskId, tool_name AS toolName";
+
+/**
+ * Escapes LIKE wildcards so a user-supplied search term only matches those
+ * characters literally. The backslash is used as the ESCAPE character.
+ */
+function escapeLikeTerm(term: string): string {
+  return term.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
 
 export function registerConfigurationRoutes(
   app: FastifyInstance,
@@ -138,12 +175,50 @@ export function registerConfigurationRoutes(
 
   typed.get(
     "/admin/audits",
-    { schema: { response: { 200: z.array(auditRecordSchema) } } },
-    async () =>
-      options.sqlite
-        .prepare<[], z.infer<typeof auditRecordSchema>>(
-          "SELECT device_id AS deviceId, id, occurred_at AS occurredAt, operation, result, task_id AS taskId FROM audit_records ORDER BY occurred_at DESC",
+    {
+      schema: {
+        querystring: auditQuerySchema,
+        response: { 200: auditPageSchema },
+      },
+    },
+    async (request) => {
+      const { limit, offset, q, result } = request.query;
+      const conditions: string[] = [];
+      const filterParameters: Array<number | string> = [];
+
+      const trimmedQuery = q?.trim();
+      if (trimmedQuery !== undefined && trimmedQuery !== "") {
+        const pattern = `%${escapeLikeTerm(trimmedQuery.toLowerCase())}%`;
+        conditions.push(
+          "(LOWER(operation) LIKE ? ESCAPE '\\' OR LOWER(result) LIKE ? ESCAPE '\\' OR LOWER(tool_name) LIKE ? ESCAPE '\\' OR LOWER(device_id) LIKE ? ESCAPE '\\' OR LOWER(task_id) LIKE ? ESCAPE '\\')",
+        );
+        filterParameters.push(pattern, pattern, pattern, pattern, pattern);
+      }
+
+      const trimmedResult = result?.trim();
+      if (trimmedResult !== undefined && trimmedResult !== "") {
+        conditions.push("result = ?");
+        filterParameters.push(trimmedResult);
+      }
+
+      const whereClause =
+        conditions.length === 0 ? "" : ` WHERE ${conditions.join(" AND ")}`;
+
+      const total = (
+        options.sqlite
+          .prepare<Array<number | string>, { total: number }>(
+            `SELECT COUNT(*) AS total FROM audit_records${whereClause}`,
+          )
+          .get(...filterParameters) ?? { total: 0 }
+      ).total;
+
+      const items = options.sqlite
+        .prepare<Array<number | string>, z.infer<typeof auditRecordSchema>>(
+          `SELECT ${auditSelectColumns} FROM audit_records${whereClause} ORDER BY occurred_at DESC LIMIT ? OFFSET ?`,
         )
-        .all(),
+        .all(...filterParameters, limit, offset);
+
+      return { items, limit, offset, total };
+    },
   );
 }

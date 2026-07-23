@@ -170,6 +170,7 @@ export const auditRecords = sqliteTable(
     taskId: text("task_id").references(() => tasks.id, {
       onDelete: "set null",
     }),
+    toolName: text("tool_name"),
   },
   (table) => [index("audit_records_occurred_at_index").on(table.occurredAt)],
 );
