@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/local-admin-contracts.md", "reason": "核对审计响应边界:允许受控工具元数据、仍禁止用户内容;分页/过滤契约是否落实并写入文档"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核对迁移是否 schema+SQL+meta 同批、既有行迁移安全、审计表仅元数据"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量检查基线"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量检查基线"}
+{"file": ".trellis/spec/frontend/i18n-guidelines.md", "reason": "核对 zh-cn/en 文案齐全、无硬编码"}

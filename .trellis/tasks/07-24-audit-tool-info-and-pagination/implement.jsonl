@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/local-admin-contracts.md", "reason": "审计路由/响应契约与安全边界;本任务要放开受控工具元数据并加分页,需先读懂并同步修订这份契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "audit_records 加列需按迁移契约:drizzle-kit generate + schema/SQL/meta 同批;审计表只存元数据"}
+{"file": ".trellis/spec/backend/task-runtime-contracts.md", "reason": "批准决议链路(applyApprovalResponse / persistOperation)在此;工具名从 pendingApproval 就地取"}
+{"file": ".trellis/spec/backend/claude-sdk-contracts.md", "reason": "approval 边界与 PermissionResult;确认工具输入不外泄用户内容"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "新路由参数校验与错误类型遵循既有约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端禁止模式与代码标准"}
+{"file": ".trellis/spec/backend/api-documentation-contracts.md", "reason": "改 /admin/audits 响应/参数 schema 时的 OpenAPI/Zod 约定"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "audit-view 改服务端驱动+分页控件+工具列的组件写法"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "分页/搜索/筛选状态改为服务端驱动的数据获取模式"}
+{"file": ".trellis/spec/frontend/i18n-guidelines.md", "reason": "新增工具列表头与分页文案(zh-cn + en)"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "AuditRecord 类型新增字段与分页响应类型的类型安全约定"}
