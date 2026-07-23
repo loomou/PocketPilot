@@ -50,9 +50,21 @@ Pairing and device administration retain their existing local routes:
   runtime count, and explicit stop acceptance. A mismatch stops nothing and
   requires the browser to refresh/reconfirm. Successful P0 cleanup completes
   before the route returns the next snapshot.
-- `GET /admin/audits` returns only `id`, `occurredAt`, `deviceId`, `taskId`,
-  `operation`, and `result`, ordered newest first. Prompts, model output, tool
-  parameters, credentials, and secrets have no response field.
+- `GET /admin/audits` returns a paginated, server-filtered projection of
+  `id`, `occurredAt`, `deviceId`, `taskId`, `operation`, `result`, and
+  `toolName`, ordered newest first. `toolName` is a controlled metadata field:
+  it holds only a tool identifier (for example `Bash`, `Edit`, or
+  `Skill:claude-api`) and is `null` for non-approval operations. Prompts, model
+  output, tool parameters, file paths, command strings, URLs, credentials, and
+  secrets still have no response field.
+- `GET /admin/audits` accepts optional `limit` (default 50, clamped to 1..200),
+  `offset` (default 0, clamped to `>= 0`), `q` (case-insensitive `LIKE` match
+  across `operation`, `result`, `toolName`, `deviceId`, and `taskId`, with
+  `%` and `_` escaped so they match literally), and `result` (exact match). It
+  responds with `{ items, total, limit, offset }`, where `total` is the
+  post-filter, pre-pagination row count. All filters and bounds are bound as
+  parameterized `better-sqlite3` statements; no user input is concatenated into
+  SQL. An empty or fully filtered table returns `{ items: [], total: 0, ... }`.
 - Every unsafe `/admin/*` request passes the local app's exact-origin and CSRF
   hook. The page receives the CSRF token from `GET /admin/csrf`; it never
   receives the runtime shutdown credential.
@@ -78,7 +90,8 @@ Pairing and device administration retain their existing local routes:
 | Removal revision/count is stale | HTTP 409 `AUTHORIZED_DIRECTORY_SNAPSHOT_STALE`; stop no runtime. |
 | Unexpected storage/runtime failure | HTTP 500 `LOCAL_ADMIN_OPERATION_FAILED`; expose no raw exception text. |
 | Mobile base URL is absent during pairing creation | Existing `MOBILE_BASE_URL_NOT_CONFIGURED` response; create no pairing. |
-| Audit table is empty | HTTP 200 with `[]`. |
+| Audit table is empty or fully filtered | HTTP 200 with `{ items: [], total: 0, limit, offset }`. |
+| Audit `limit`/`offset` is out of range or unparsable | Clamp to the allowed bound (or default) instead of rejecting. |
 | Static build directory is absent | Local APIs still start; no static route is registered. |
 | Remote request targets `/admin/*` or the local page | HTTP 404. |
 | Remote request targets `/documentation/*` | HTTP 404. |
@@ -93,15 +106,25 @@ Pairing and device administration retain their existing local routes:
   a covered child returns `already-covered`.
 - Base: a fresh database returns `127.0.0.1:43182`, capacity `3`, and no
   workspace roots or audit records.
+- Base: an audit search interpolated into `LIKE` treats `%` and `_` as literal
+  characters, and `limit`/`offset` outside their bounds clamp rather than error.
 - Bad: mounting `@fastify/static` or `registerConfigurationRoutes` on the
-  remote app, returning an audit payload field that can contain user content,
-  accepting an arbitrary add path, or applying listener changes to the live
-  socket.
+  remote app, returning an audit payload field that can contain user content
+  (tool parameters, prompts, file paths), fetching the whole audit table and
+  filtering in the browser, accepting an arbitrary add path, or applying
+  listener changes to the live socket.
 
 ## 6. Tests Required
 
 - Fastify injection proves fresh defaults, CSRF rejection, valid same-origin
-  persistence, and metadata-only audit projection.
+  persistence, and metadata-only audit projection including the `toolName`
+  column while asserting the payload carries no tool parameters, prompts, or
+  file paths.
+- Audit injection proves server-side pagination (`limit`/`offset`), keyword
+  search across `operation`/`result`/`toolName`/`deviceId`/`taskId`, exact
+  `result` filtering, an accurate filtered `total`, an empty table returning an
+  empty page with `total` 0, out-of-range `limit`/`offset` clamping, and
+  literal treatment of `%`/`_` in the search term.
 - Picker/route tests prove cancellation, single-use/expiry, directory
   revalidation, volume confirmation, safe process failures, stale removal,
   and capacity/root lost-update prevention.
@@ -124,13 +147,17 @@ Pairing and device administration retain their existing local routes:
 ```ts
 remoteApp.register(fastifyStatic, { root: adminBuild });
 remoteApp.get("/admin/audits", () => database.select().from(auditRecords));
+localApp.get("/admin/audits", () =>
+  sqlite.prepare(`SELECT * FROM audit_records WHERE operation LIKE '%${q}%'`).all(),
+);
 localApp.post("/admin/authorized-directories", ({ body }) =>
   saveRoot(body.path),
 );
 ```
 
-This exposes the computer administration surface through the user's tunnel
-and couples the response to every future database column.
+This exposes the computer administration surface through the user's tunnel,
+couples the response to every future database column, and interpolates the
+search term straight into SQL.
 
 ### Correct
 
@@ -141,10 +168,16 @@ registerAuthorizedDirectoryRoutes(localApp, {
   directorySelectionService,
   taskManager,
 });
+// audit route: parameterized filter + bounded pagination
+sqlite
+  .prepare(`SELECT ${auditColumns} FROM audit_records${whereClause}
+            ORDER BY occurred_at DESC LIMIT ? OFFSET ?`)
+  .all(...filterParameters, limit, offset);
 ```
 
-The audit route uses an explicit metadata projection and both registrations
-exist only in the loopback app factory.
+The audit route uses an explicit metadata projection, binds every search term
+through prepared-statement parameters with `LIKE ? ESCAPE`, and both
+registrations exist only in the loopback app factory.
 
 ## Workspace Authorization and Directory Browser Addendum
 
