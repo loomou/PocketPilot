@@ -1,0 +1,1 @@
+ALTER TABLE `audit_records` ADD `tool_name` text;

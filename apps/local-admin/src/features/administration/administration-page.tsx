@@ -267,7 +267,7 @@ function ActiveView({
         />
       );
     case "audit":
-      return <AuditView audits={snapshot.audits} />;
+      return <AuditView />;
     case "maintenance":
       return <MaintenanceView snapshot={snapshot} />;
   }

@@ -248,16 +248,27 @@ export const zhCN = {
       "\u672c\u5730 Agent \u5c1a\u672a\u8fd4\u56de\u4efb\u4f55\u4fdd\u7559\u7684\u5ba1\u8ba1\u5143\u6570\u636e\u3002",
     noMatchesDescription:
       "\u8bf7\u5c1d\u8bd5\u5176\u4ed6\u641c\u7d22\u8bcd\uff0c\u6216\u91cd\u7f6e\u5f53\u524d\u7ed3\u679c\u7b5b\u9009\u3002",
+    loading: "\u6b63\u5728\u52a0\u8f7d\u5ba1\u8ba1\u8bb0\u5f55",
+    loadingDescription:
+      "\u6b63\u5728\u5411 Agent \u8bf7\u6c42\u5f53\u524d\u5ba1\u8ba1\u9875\u3002",
+    loadFailed: "\u65e0\u6cd5\u52a0\u8f7d\u5ba1\u8ba1\u8bb0\u5f55",
+    loadFailedDescription:
+      "\u5ba1\u8ba1\u8bf7\u6c42\u5931\u8d25\u3002\u8bf7\u5237\u65b0\u6216\u7a0d\u540e\u91cd\u8bd5\u3002",
+    previousPage: "\u4e0a\u4e00\u9875",
+    nextPage: "\u4e0b\u4e00\u9875",
     table: {
       time: "\u65f6\u95f4",
       operation: "\u64cd\u4f5c",
+      tool: "\u5de5\u5177",
       device: "\u8bbe\u5907",
       task: "\u4efb\u52a1",
       result: "\u7ed3\u679c",
     },
     local: "\u672c\u5730",
-    summary: (total: number, filtered: number) =>
-      `\u5f53\u524d\u5feb\u7167\u5171 ${total} \u6761\u8bb0\u5f55\uff0c\u663e\u793a ${filtered} \u6761\u3002`,
+    summary: (total: number, pageStart: number, pageEnd: number) =>
+      total === 0
+        ? "\u6ca1\u6709\u5339\u914d\u7684\u8bb0\u5f55\u3002"
+        : `\u5171 ${total} \u6761\u8bb0\u5f55\uff0c\u663e\u793a\u7b2c ${pageStart}\u2013${pageEnd} \u6761\u3002`,
   },
   maintenance: {
     metadataTitle: "\u5b89\u5168\u5143\u6570\u636e",

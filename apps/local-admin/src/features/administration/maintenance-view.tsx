@@ -54,7 +54,7 @@ export function MaintenanceView({
             />
             <MetadataItem
               label={messages.maintenance.retainedAudits}
-              value={String(snapshot.audits.length)}
+              value={String(snapshot.auditsTotal)}
             />
           </CardContent>
         </Card>

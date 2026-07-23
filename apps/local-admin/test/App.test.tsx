@@ -44,7 +44,7 @@ describe("App", () => {
     expect(screen.getByText("My phone")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "审计记录" }));
-    expect(screen.getByText("task.created")).toBeInTheDocument();
+    expect(await screen.findByText("task.created")).toBeInTheDocument();
   });
 
   it("approves a generated pairing directly from the QR dialog", async () => {
@@ -430,7 +430,12 @@ describe("App", () => {
       new Map([
         [
           "/admin/audits",
-          [{ ...snapshot.audits[0], result: "successful-review" }],
+          {
+            items: [{ ...snapshot.audits[0], result: "successful-review" }],
+            limit: 50,
+            offset: 0,
+            total: 1,
+          },
         ],
       ]),
     );
@@ -438,8 +443,104 @@ describe("App", () => {
 
     await screen.findByText("127.0.0.1:43183");
     fireEvent.click(screen.getByRole("button", { name: "Audit records" }));
-    expect(screen.getAllByText("successful-review")).not.toHaveLength(0);
-    expect(screen.queryByText("Success")).not.toBeInTheDocument();
+    const row = (await screen.findByText("successful-review")).closest("tr");
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).queryByText("Success")).toBeNull();
+  });
+
+  it("drives audit search and pagination through the server", async () => {
+    const pageOne = Array.from({ length: 50 }, (_value, index) => ({
+      deviceId: null,
+      id: `00000000-0000-4000-8000-0000000${String(index).padStart(5, "0")}`,
+      occurredAt: 1_700_000_000_000 + index,
+      operation: `task.created-${index}`,
+      result: "success",
+      taskId: null,
+      toolName: null,
+    }));
+    const secondPageRow = {
+      deviceId: null,
+      id: "00000000-0000-4000-8000-000000008888",
+      occurredAt: 1_700_000_000_600,
+      operation: "task.created-second-page",
+      result: "success",
+      taskId: null,
+      toolName: null,
+    };
+    const searchHit = {
+      deviceId: null,
+      id: "00000000-0000-4000-8000-000000009999",
+      occurredAt: 1_700_000_000_500,
+      operation: "task.approval-approved",
+      result: "allow",
+      taskId: null,
+      toolName: "Skill:claude-api",
+    };
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), "http://127.0.0.1:43183");
+        if (url.pathname !== "/admin/audits") {
+          if (init?.method === "PUT") return jsonResponse({});
+          return jsonResponse(responses.get(url.pathname));
+        }
+        const q = url.searchParams.get("q");
+        const offset = Number(url.searchParams.get("offset") ?? "0");
+        if (q === "claude-api") {
+          return jsonResponse({
+            items: [searchHit],
+            limit: 50,
+            offset: 0,
+            total: 1,
+          });
+        }
+        if (offset >= 50) {
+          return jsonResponse({
+            items: [secondPageRow],
+            limit: 50,
+            offset: 50,
+            total: 51,
+          });
+        }
+        return jsonResponse({
+          items: pageOne,
+          limit: 50,
+          offset: 0,
+          total: 51,
+        });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp("en");
+    await screen.findByText("127.0.0.1:43183");
+    fireEvent.click(screen.getByRole("button", { name: "Audit records" }));
+    expect(await screen.findByText("task.created-0")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(
+      await screen.findByText("task.created-second-page"),
+    ).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]) =>
+          new URL(String(input), "http://127.0.0.1:43183").searchParams.get(
+            "offset",
+          ) === "50",
+      ),
+    ).toBe(true);
+
+    fireEvent.change(screen.getByRole("searchbox"), {
+      target: { value: "claude-api" },
+    });
+    expect(await screen.findByText("Skill:claude-api")).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]) =>
+          new URL(String(input), "http://127.0.0.1:43183").searchParams.get(
+            "q",
+          ) === "claude-api",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -564,6 +665,7 @@ const snapshot = {
       operation: "task.created",
       result: "success",
       taskId: null,
+      toolName: null,
     },
   ],
   configuration: {
@@ -604,7 +706,15 @@ const responses = new Map<string, unknown>([
   ["/admin/status", snapshot.status],
   ["/admin/pairings/pending", snapshot.pairings],
   ["/admin/devices", snapshot.devices],
-  ["/admin/audits", snapshot.audits],
+  [
+    "/admin/audits",
+    {
+      items: snapshot.audits,
+      limit: 50,
+      offset: 0,
+      total: snapshot.audits.length,
+    },
+  ],
   [
     "/admin/directories/inspect",
     [

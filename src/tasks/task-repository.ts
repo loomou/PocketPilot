@@ -48,6 +48,7 @@ type PersistOperationInput = {
   result: TaskOperationResult;
   resultLabel: string;
   taskId: string | null;
+  toolName?: string | null;
 };
 
 type PersistOperationErrorInput = {
@@ -235,6 +236,7 @@ export class TaskRepository {
           operation: input.operation,
           result: input.resultLabel,
           taskId: input.taskId,
+          toolName: input.toolName ?? null,
         })
         .run();
       return input.result;
@@ -315,6 +317,7 @@ export class TaskRepository {
     operation: string;
     result: string;
     taskId: string | null;
+    toolName?: string | null;
   }): void {
     this.database
       .insert(auditRecords)
@@ -325,6 +328,7 @@ export class TaskRepository {
         operation: input.operation,
         result: input.result,
         taskId: input.taskId,
+        toolName: input.toolName ?? null,
       })
       .run();
   }
